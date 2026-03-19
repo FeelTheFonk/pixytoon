@@ -1,0 +1,13 @@
+{
+  "name": "pixytoon",
+  "displayName": "PixyToon - AI Pixel Art Generator",
+  "description": "Generate SOTA pixel art using local Stable Diffusion from within Aseprite",
+  "version": "0.1.0",
+  "author": "PixyToon",
+  "categories": ["Scripts"],
+  "contributes": {
+    "scripts": [
+      { "path": "./scripts/pixytoon.lua" }
+    ]
+  }
+}

@@ -1,0 +1,39 @@
+# Aseprite binary (large, built from source)
+bin/
+
+# Models (large, downloaded at runtime)
+server/models/
+*.ckpt
+*.safetensors
+*.bin
+*.pt
+!server/models/.gitkeep
+
+# Built extension
+dist/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.eggs/
+*.egg-info/
+
+# UV
+.uv/
+uv.lock
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+*.tmp
+*.pdb
