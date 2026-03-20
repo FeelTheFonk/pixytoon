@@ -14,7 +14,6 @@ Delegates construction and lifecycle concerns to:
 
 from __future__ import annotations
 
-import copy
 import logging
 import threading
 import time
@@ -176,7 +175,7 @@ class DiffusionEngine:
             log.warning("Failed to load default pixel art LoRA '%s': %s", lora_name, e)
 
     def _warmup(self) -> None:
-        """Run a dummy generation to pre-compile the exact torch.compile graph.
+        """Run a dummy txt2img to pre-compile the torch.compile graph.
 
         CRITICAL: All parameters must match real generation defaults:
         - guidance_scale: Differs → CFG branch changes (single vs double UNet)
@@ -504,43 +503,62 @@ class DiffusionEngine:
         on_frame: Optional[Callable[[AnimationFrameResponse], None]],
         on_progress: Optional[Callable[[ProgressResponse], None]],
     ) -> list[AnimationFrameResponse]:
-        """Frame-by-frame chaining: each frame feeds into the next via img2img."""
-        # Swap compiled UNet → raw _orig_mod for chain mode.
-        # After Dynamo reset, frame 0 (txt2img) and frame 1 (img2img) would
-        # each trigger 30-60s full recompilation due to different control flow.
-        # Using the raw UNet avoids this entirely — the per-step penalty (~20%)
-        # is negligible compared to the recompilation cost.
-        compiled_unet = self._pipe.unet
+        """Frame-by-frame chaining: each frame feeds into the next via img2img.
+
+        Uses a temporary UNet swap + dynamo disable to bypass torch.compile + DeepCache:
+        1. Suspend DeepCache → unwrap_modules() restores raw UNet's original forwards
+        2. Swap pipe.unet and img2img_pipe.unet to raw UNet (_orig_mod)
+        3. Disable dynamo globally → prevents eval_frame hook from intercepting raw UNet
+        4. Run all frames in pure eager mode (no compile, no DeepCache, FreeU via attrs)
+        5. Restore compiled UNet and re-enable DeepCache on exit
+
+        CRITICAL: torch.compiler.disable() is REQUIRED. _orig_mod is the same Python object
+        that torch.compile() registered in dynamo's tracking tables. Without disabling dynamo,
+        its global eval_frame hook intercepts the raw UNet's forward() call, finds stale
+        guards (compiled graph was built with DeepCache active + different step counts),
+        and triggers recompilation that hangs indefinitely. AnimateDiff avoids this by using
+        a completely different pipeline class (AnimateDiffPipeline), whose __call__ was never
+        compiled — dynamo has no guards for it.
+        """
+        from .animatediff_manager import get_uncompiled_unet
         raw_unet = get_uncompiled_unet(self._pipe)
-        swapped = raw_unet is not compiled_unet
-        if swapped:
+        compiled_unet = self._pipe.unet
+
+        with deepcache_manager.suspended(self._deepcache_helper):
+            # After DeepCache.disable(), raw UNet's forwards are restored to original.
+            # Swap both pipelines to use the clean raw UNet directly.
             self._pipe.unet = raw_unet
             self._img2img_pipe.unet = raw_unet
-            if self._controlnet_pipe is not None:
-                self._controlnet_pipe.unet = raw_unet
-            log.info("Compiled UNet swapped for raw module (chain mode)")
-
-        try:
-            with deepcache_manager.suspended(self._deepcache_helper):
+            try:
+                # Purge dynamo code cache to prevent stale guard recompilation
+                # on the raw UNet. Without this, dynamo recognizes _orig_mod
+                # from prior compilation and may hang on recompilation.
+                torch._dynamo.reset()
                 return self._generate_chain_inner(req, on_frame, on_progress)
-        finally:
-            if swapped:
+            finally:
+                torch._dynamo.reset()
+                # Restore compiled UNet before DeepCache re-enables
                 self._pipe.unet = compiled_unet
                 self._img2img_pipe.unet = compiled_unet
-                if self._controlnet_pipe is not None:
-                    self._controlnet_pipe.unet = compiled_unet
-                log.info("Compiled UNet restored after chain animation")
 
+    @torch.compiler.disable
     def _generate_chain_inner(
         self,
         req: AnimationRequest,
         on_frame: Optional[Callable[[AnimationFrameResponse], None]],
         on_progress: Optional[Callable[[ProgressResponse], None]],
     ) -> list[AnimationFrameResponse]:
-        """Core chain animation logic."""
+        """Core chain animation logic — dynamo disabled via decorator.
+
+        This decorator prevents torch._dynamo's global eval_frame hook from
+        intercepting ANY function calls within this method. Without it, dynamo
+        recognizes _orig_mod (the raw UNet) as a compiled object and triggers
+        recompilation with stale guards, hanging indefinitely.
+        """
         frames: list[AnimationFrameResponse] = []
         base_seed = req.seed if req.seed >= 0 else int(torch.randint(0, 2**32, (1,)).item())
         prev_image: Optional[Image.Image] = None
+        chain_source: Optional[Image.Image] = None
 
         effective_neg = self._build_effective_negative(req.negative_prompt, req.negative_ti)
         target_w, target_h = round8(req.width), round8(req.height)
@@ -584,7 +602,7 @@ class DiffusionEngine:
                 # stale state accumulation (timesteps, _step_index).
                 # This is the root fix for the chain animation infinite loop.
                 if frame_idx > 0:
-                    self._img2img_pipe.scheduler = copy.deepcopy(self._pipe.scheduler)
+                    self._img2img_pipe.scheduler = pipeline_factory.fresh_scheduler(self._pipe)
                     log.debug("Chain frame %d: scheduler reset", frame_idx)
 
                 log.info("Chain frame %d/%d: seed=%d, mode=%s",
@@ -660,7 +678,7 @@ class DiffusionEngine:
                         raise ValueError(f"Unknown mode: {req.mode}")
                 else:
                     # Frame 1+: img2img from previous frame at denoise_strength
-                    source = resize_to_target(prev_image, target_w, target_h)
+                    source = resize_to_target(chain_source, target_w, target_h)
 
                     if req.mode.value.startswith("controlnet_") and req.control_image is not None:
                         self._ensure_controlnet(req.mode)
@@ -680,6 +698,10 @@ class DiffusionEngine:
                             output_type="pil",
                         ).images[0]
                     else:
+                        log.info("Chain frame %d: calling img2img pipe (source=%s, steps=%d, strength=%.2f, unet=%s, scheduler=%s)",
+                                 frame_idx, source.size, req.steps, req.denoise_strength,
+                                 type(self._img2img_pipe.unet).__name__,
+                                 type(self._img2img_pipe.scheduler).__name__)
                         image = self._img2img_pipe(
                             prompt=req.prompt,
                             negative_prompt=effective_neg,
@@ -692,6 +714,11 @@ class DiffusionEngine:
                             callback_on_step_end=step_callback,
                             output_type="pil",
                         ).images[0]
+                        log.info("Chain frame %d: img2img complete", frame_idx)
+
+                # Store pre-postprocess image for next frame's img2img source
+                # (full-resolution, RGB, no pixelation/quantization artifacts)
+                chain_source = image
 
                 # Post-process
                 image = postprocess_apply(image, req.post_process)

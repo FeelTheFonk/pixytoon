@@ -139,6 +139,7 @@ def create_img2img_pipeline(
     return img2img
 
 
+
 def fresh_scheduler(base_pipe):
     """Create a fresh scheduler from the base pipeline's config.
 

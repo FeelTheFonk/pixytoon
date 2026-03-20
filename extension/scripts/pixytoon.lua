@@ -463,7 +463,33 @@ local function capture_active_layer()
   return base64_encode(data)
 end
 
+-- ─── CAPTURE FLATTENED SPRITE ────────────────────────────────
+-- Renders ALL visible layers into a single composite image.
+-- Used as inpaint source so the model sees the full context.
+
+local function capture_flattened()
+  local spr = app.sprite
+  if spr == nil then return nil end
+
+  local flat_img = Image(spr.spec)
+  flat_img:drawSprite(spr, app.frame)
+
+  _file_counter = _file_counter + 1
+  local tmp_dir = app.fs.tempPath or os.getenv("TEMP") or os.getenv("TMP") or "."
+  local tmp = app.fs.joinPath(tmp_dir, "pixytoon_flat_" .. os.time() .. "_" .. _file_counter .. ".png")
+  flat_img:saveAs(tmp)
+
+  local f = io.open(tmp, "rb")
+  if not f then return nil end
+  local data = f:read("*a")
+  f:close()
+  os.remove(tmp)
+
+  return base64_encode(data)
+end
+
 -- ─── CAPTURE MASK ────────────────────────────────────────────
+-- Priority: Selection > "Mask" layer > Active layer alpha (auto)
 
 local function capture_mask()
   local spr = app.sprite
@@ -510,6 +536,38 @@ local function capture_mask()
         return base64_encode(data)
       end
     end
+  end
+
+  -- Strategy C: auto-derive mask from active layer's non-transparent pixels
+  -- User draws on a layer → non-transparent pixels become the repaint area
+  local cel = app.cel
+  if cel and cel.image then
+    local img = cel.image
+    local mask_img = Image(spr.width, spr.height, ColorMode.GRAY)
+    mask_img:clear(Color{ gray = 0 })
+    local ox, oy = cel.position.x, cel.position.y
+    for y = 0, img.height - 1 do
+      for x = 0, img.width - 1 do
+        local px = img:getPixel(x, y)
+        local a = app.pixelColor.rgbaA(px)
+        if a > 0 then
+          local sx, sy = ox + x, oy + y
+          if sx >= 0 and sx < spr.width and sy >= 0 and sy < spr.height then
+            mask_img:drawPixel(sx, sy, Color{ gray = 255 })
+          end
+        end
+      end
+    end
+    _file_counter = _file_counter + 1
+    local tmp_dir = app.fs.tempPath or os.getenv("TEMP") or os.getenv("TMP") or "."
+    local tmp = app.fs.joinPath(tmp_dir, "pixytoon_mask_" .. os.time() .. "_" .. _file_counter .. ".png")
+    mask_img:saveAs(tmp)
+    local f = io.open(tmp, "rb")
+    if not f then return nil end
+    local data = f:read("*a")
+    f:close()
+    os.remove(tmp)
+    return base64_encode(data)
   end
 
   return nil
@@ -824,25 +882,32 @@ local function build_dialog()
         end
       end
 
-      -- Source image for img2img / ControlNet / Inpaint
-      if req.mode == "img2img" or req.mode == "inpaint" or req.mode:find("controlnet_") then
+      -- Source image for img2img / ControlNet
+      if req.mode == "img2img" or req.mode:find("controlnet_") then
         local b64 = capture_active_layer()
         if b64 == nil then
           app.alert("No active layer to use as source.")
           return
         end
-        if req.mode == "img2img" or req.mode == "inpaint" then
+        if req.mode == "img2img" then
           req.source_image = b64
         else
           req.control_image = b64
         end
       end
 
-      -- Mask image for inpaint mode
+      -- Inpaint: source = flattened sprite (full context), mask = auto from active layer
       if req.mode == "inpaint" then
+        local b64_source = capture_flattened()
+        if b64_source == nil then
+          app.alert("Inpaint requires an open sprite with at least one layer.")
+          return
+        end
+        req.source_image = b64_source
+
         local b64_mask = capture_mask()
         if b64_mask == nil then
-          app.alert("Inpaint requires a mask.\nEither:\n- Make a selection (rectangle/lasso/wand)\n- Create a layer named 'Mask' with white=repaint areas")
+          app.alert("Inpaint requires a mask.\nEither:\n- Make a selection (rectangle/lasso/wand)\n- Create a layer named 'Mask' with white=repaint areas\n- Draw on the active layer (non-transparent pixels = repaint area)")
           return
         end
         req.mask_image = b64_mask
@@ -948,25 +1013,32 @@ local function build_dialog()
         end
       end
 
-      -- Source image for img2img / ControlNet / Inpaint modes
-      if req.mode == "img2img" or req.mode == "inpaint" or req.mode:find("controlnet_") then
+      -- Source image for img2img / ControlNet modes
+      if req.mode == "img2img" or req.mode:find("controlnet_") then
         local b64 = capture_active_layer()
         if b64 == nil then
           app.alert("No active layer to use as source.")
           return
         end
-        if req.mode == "img2img" or req.mode == "inpaint" then
+        if req.mode == "img2img" then
           req.source_image = b64
         else
           req.control_image = b64
         end
       end
 
-      -- Mask image for inpaint mode
+      -- Inpaint: source = flattened sprite, mask = auto from active layer
       if req.mode == "inpaint" then
+        local b64_source = capture_flattened()
+        if b64_source == nil then
+          app.alert("Inpaint requires an open sprite with at least one layer.")
+          return
+        end
+        req.source_image = b64_source
+
         local b64_mask = capture_mask()
         if b64_mask == nil then
-          app.alert("Inpaint requires a mask.\nEither:\n- Make a selection (rectangle/lasso/wand)\n- Create a layer named 'Mask' with white=repaint areas")
+          app.alert("Inpaint requires a mask.\nEither:\n- Make a selection (rectangle/lasso/wand)\n- Create a layer named 'Mask' with white=repaint areas\n- Draw on the active layer (non-transparent pixels = repaint area)")
           return
         end
         req.mask_image = b64_mask
