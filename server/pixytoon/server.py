@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 import uvicorn
 
 from .config import settings
-from .engine import DiffusionEngine
+from .engine import DiffusionEngine, GenerationCancelled
 from .protocol import (
     Action,
     ErrorResponse,
@@ -20,7 +20,8 @@ from .protocol import (
     ProgressResponse,
     Request,
 )
-from . import lora_manager, palette_manager
+from . import lora_manager, palette_manager, ti_manager
+from .postprocess import warmup_numba
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,14 +35,23 @@ log = logging.getLogger("pixytoon.server")
 # ─────────────────────────────────────────────────────────────
 
 engine = DiffusionEngine()
-_generate_lock = asyncio.Lock()
+_generate_lock: asyncio.Lock | None = None
 
 
 @asynccontextmanager
 async def _lifespan(application: FastAPI):
+    global _generate_lock
+    _generate_lock = asyncio.Lock()
+
     log.info("PixyToon server starting — loading diffusion engine...")
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, engine.load)
+
+    # Pre-trigger Numba JIT compilation for Floyd-Steinberg dithering
+    log.info("Pre-compiling Numba JIT kernels...")
+    await loop.run_in_executor(None, warmup_numba)
+    log.info("Numba JIT warmup complete")
+
     log.info("Engine loaded. WebSocket ready on ws://%s:%d/ws", settings.host, settings.port)
     yield
     engine.unload()
@@ -104,36 +114,63 @@ async def _handle(websocket: WebSocket, req: Request) -> None:
                 "controlnet_lineart",
             ]))
 
+        elif req.action == Action.LIST_EMBEDDINGS:
+            items = ti_manager.list_embeddings()
+            await _send(websocket, ListResponse(list_type="embeddings", items=items))
+
         elif req.action == Action.GENERATE:
             gen_req = req.to_generate_request()
             loop = asyncio.get_running_loop()
 
             def on_progress(p: ProgressResponse) -> None:
                 try:
+                    # Guard: skip if WebSocket is already closed
+                    if websocket.application_state.name != "CONNECTED":
+                        return
                     fut = asyncio.run_coroutine_threadsafe(
                         _send(websocket, p), loop
                     )
-                    fut.add_done_callback(
-                        lambda f: log.warning("Progress send failed: %s", f.exception())
-                        if f.exception() else None
-                    )
+                    def _on_done(f):
+                        exc = f.exception()
+                        if exc:
+                            log.warning("Progress send failed: %s", exc)
+                    fut.add_done_callback(_on_done)
                 except Exception:
                     pass
 
             # Serialize GPU access — pipeline is NOT thread-safe
+            if _generate_lock is None:
+                raise RuntimeError("Server not fully initialized")
             async with _generate_lock:
-                result = await loop.run_in_executor(
-                    None,
-                    lambda: engine.generate(gen_req, on_progress=on_progress),
-                )
+                try:
+                    result = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            None,
+                            lambda: engine.generate(gen_req, on_progress=on_progress),
+                        ),
+                        timeout=settings.generation_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    engine.cancel()
+                    raise RuntimeError(
+                        f"Generation timed out after {settings.generation_timeout:.0f}s"
+                    )
             await _send(websocket, result)
 
+    except GenerationCancelled:
+        log.info("Generation cancelled by client")
+        try:
+            await _send(websocket, ErrorResponse(code="CANCELLED", message="Generation cancelled"))
+        except Exception:
+            pass
     except Exception as e:
         log.exception("Handler error: %s", e)
         if "cancelled" in str(e).lower():
             code = "CANCELLED"
         elif "out of memory" in str(e).lower():
             code = "OOM"
+        elif "timed out" in str(e).lower():
+            code = "TIMEOUT"
         else:
             code = "ENGINE_ERROR"
         try:

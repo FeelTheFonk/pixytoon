@@ -49,18 +49,23 @@ end
 
 -- ─── STATE ───────────────────────────────────────────────────
 
-local SERVER_URL = "http://127.0.0.1:9876/ws"
+local SERVER_URL = "ws://127.0.0.1:9876/ws"
 local ws = nil
 local dlg = nil
 local connected = false
 local generating = false
 local available_loras = {}
 local available_palettes = {}
+local available_embeddings = {}
 local resources_requested = false
+local connect_timer = nil
+local gen_step_start = nil
+local _file_counter = 0
 
 -- Forward declarations
 local handle_response
 local import_result
+local request_resources
 
 -- ─── WEBSOCKET ───────────────────────────────────────────────
 
@@ -86,6 +91,13 @@ local function set_connected(state)
   end
 end
 
+local function stop_connect_timer()
+  if connect_timer and connect_timer.isRunning then
+    connect_timer:stop()
+  end
+  connect_timer = nil
+end
+
 local function connect()
   if ws then
     ws:close()
@@ -95,10 +107,12 @@ local function connect()
   ws = WebSocket{
     url = SERVER_URL,
     onreceive = function(msg_type, data)
-      -- Handle OPEN event (Aseprite >= 1.3.x with full WebSocket API)
+      -- Handle OPEN event
       if msg_type == WebSocketMessageType.OPEN then
+        stop_connect_timer()
         set_connected(true)
         update_status("Connected")
+        -- Send ping — pong handler will request resources
         pcall(function() ws:sendText(json.encode({ action = "ping" })) end)
         return
       end
@@ -116,6 +130,7 @@ local function connect()
       if msg_type == WebSocketMessageType.TEXT then
         -- If OPEN never fired, detect connection from first TEXT message
         if not connected then
+          stop_connect_timer()
           set_connected(true)
           update_status("Connected")
         end
@@ -126,11 +141,29 @@ local function connect()
     end,
     deflate = false,
   }
+
   -- Explicit connect required by Aseprite WebSocket API
   ws:connect()
+
+  -- Connection timeout — if not connected after 5s, inform user
+  connect_timer = Timer{
+    interval = 5.0,
+    ontick = function()
+      stop_connect_timer()
+      if not connected then
+        if ws then
+          ws:close()
+          ws = nil
+        end
+        update_status("Connection failed — is the server running?")
+      end
+    end,
+  }
+  connect_timer:start()
 end
 
 local function disconnect()
+  stop_connect_timer()
   if ws then
     ws:close()
     ws = nil
@@ -149,17 +182,40 @@ local function send(payload)
   return true
 end
 
+request_resources = function()
+  resources_requested = true
+  send({ action = "list_loras" })
+  send({ action = "list_palettes" })
+  send({ action = "list_embeddings" })
+end
+
 -- ─── RESPONSE HANDLER ────────────────────────────────────────
 
 handle_response = function(resp)
   if resp.type == "progress" then
     if dlg then
       local pct = math.floor((resp.step / resp.total) * 100)
-      update_status("Generating... " .. resp.step .. "/" .. resp.total .. " (" .. pct .. "%)")
+      local eta_str = ""
+
+      -- ETA calculation
+      local now = os.clock()
+      if gen_step_start and resp.step > 1 then
+        local elapsed = now - gen_step_start
+        local avg_per_step = elapsed / (resp.step - 1)
+        local remaining = avg_per_step * (resp.total - resp.step)
+        if remaining < 60 then
+          eta_str = string.format(" — ~%.0fs left", remaining)
+        else
+          eta_str = string.format(" — ~%.1fmin left", remaining / 60)
+        end
+      end
+
+      update_status("Generating... " .. resp.step .. "/" .. resp.total .. " (" .. pct .. "%)" .. eta_str)
     end
 
   elseif resp.type == "result" then
     generating = false
+    gen_step_start = nil
     if dlg then
       update_status("Done (" .. resp.time_ms .. "ms, seed=" .. resp.seed .. ")")
       dlg:modify{ id = "generate_btn", enabled = true }
@@ -169,6 +225,7 @@ handle_response = function(resp)
 
   elseif resp.type == "error" then
     generating = false
+    gen_step_start = nil
     if dlg then
       update_status("Error: " .. resp.message)
       dlg:modify{ id = "generate_btn", enabled = true }
@@ -179,14 +236,14 @@ handle_response = function(resp)
     local list_type = resp.list_type or ""
     if list_type == "loras" and resp.items then
       available_loras = resp.items
-      -- Update LoRA combobox if dialog exists
       if dlg and #available_loras > 0 then
+        -- Build options and auto-select first available LoRA
         local options = { "" }  -- empty = no LoRA
         for _, name in ipairs(available_loras) do
           options[#options + 1] = name
         end
-        dlg:modify{ id = "lora_name", options = options }
-        update_status("Loaded " .. #available_loras .. " LoRA(s)")
+        dlg:modify{ id = "lora_name", options = options, option = available_loras[1] }
+        update_status("Loaded " .. #available_loras .. " LoRA(s) — " .. available_loras[1] .. " selected")
       end
     elseif list_type == "palettes" and resp.items then
       available_palettes = resp.items
@@ -198,11 +255,25 @@ handle_response = function(resp)
         dlg:modify{ id = "palette_name", options = options }
         update_status("Loaded " .. #available_palettes .. " palette(s)")
       end
+    elseif list_type == "embeddings" and resp.items then
+      available_embeddings = resp.items
+      if dlg and #available_embeddings > 0 then
+        local options = { "" }  -- empty = no TI
+        for _, name in ipairs(available_embeddings) do
+          options[#options + 1] = name
+        end
+        dlg:modify{ id = "neg_ti", options = options, option = available_embeddings[1] }
+        update_status("Loaded " .. #available_embeddings .. " embedding(s)")
+      end
     end
 
   elseif resp.type == "pong" then
     if not connected then
       set_connected(true)
+    end
+    -- Request resource lists on first pong
+    if not resources_requested then
+      request_resources()
     end
     update_status("Connected")
   end
@@ -213,9 +284,9 @@ end
 import_result = function(resp)
   local img_data = base64_decode(resp.image)
 
-  -- Use Aseprite temp path if available, fall back to os.tmpname
+  _file_counter = _file_counter + 1
   local tmp_dir = app.fs.tempPath or os.getenv("TEMP") or os.getenv("TMP") or "."
-  local tmp = app.fs.joinPath(tmp_dir, "pixytoon_" .. os.clock() .. ".png")
+  local tmp = app.fs.joinPath(tmp_dir, "pixytoon_" .. os.time() .. "_" .. _file_counter .. ".png")
 
   -- Write to temp file
   local f = io.open(tmp, "wb")
@@ -255,8 +326,9 @@ local function capture_active_layer()
   local img = cel.image
   if img == nil then return nil end
 
+  _file_counter = _file_counter + 1
   local tmp_dir = app.fs.tempPath or os.getenv("TEMP") or os.getenv("TMP") or "."
-  local tmp = app.fs.joinPath(tmp_dir, "pixytoon_src_" .. os.clock() .. ".png")
+  local tmp = app.fs.joinPath(tmp_dir, "pixytoon_src_" .. os.time() .. "_" .. _file_counter .. ".png")
   img:saveAs(tmp)
 
   local f = io.open(tmp, "rb")
@@ -272,7 +344,7 @@ end
 
 local function build_dialog()
   dlg = Dialog{
-    title = "PixyToon -- AI Pixel Art Generator",
+    title = "PixyToon — AI Pixel Art Generator",
   }
 
   -- ── Connection ──
@@ -313,7 +385,7 @@ local function build_dialog()
   dlg:entry{
     id = "neg_prompt",
     label = "Neg. Prompt",
-    text = "blurry, antialiased, smooth gradient, photorealistic, 3d render, soft edges, bokeh, low quality, worst quality, deformed, bad anatomy, extra limbs, extra fingers, ugly, realistic, complex shading",
+    text = "blurry, antialiased, smooth gradient, photorealistic, 3d render, soft edges, anti-aliasing, bokeh, depth of field, low quality, worst quality, bad quality, jpeg artifacts, watermark, text, logo, deformed, disfigured, bad anatomy, bad proportions, extra limbs, missing limbs, extra fingers, fused fingers, poorly drawn hands, poorly drawn face, ugly, realistic, photo, high resolution, complex shading",
   }
 
   dlg:combobox{
@@ -331,15 +403,15 @@ local function build_dialog()
     label = "Steps",
     min = 2,
     max = 20,
-    value = 6,
+    value = 8,      -- Hyper-SD 8-step LoRA is optimized for 8 steps
   }
 
   dlg:slider{
     id = "cfg",
     label = "CFG (x10)",
-    min = 10,     -- 1.0
-    max = 50,     -- 5.0
-    value = 20,   -- 2.0
+    min = 10,        -- 1.0
+    max = 100,       -- 10.0 — wider range for flexibility
+    value = 50,      -- 5.0 — matches server default_cfg
   }
 
   dlg:entry{
@@ -353,7 +425,7 @@ local function build_dialog()
     label = "Denoise",
     min = 0,
     max = 100,
-    value = 70,
+    value = 75,      -- matches server default_denoise
   }
 
   -- ── LoRA ──
@@ -362,16 +434,26 @@ local function build_dialog()
   dlg:combobox{
     id = "lora_name",
     label = "LoRA",
-    options = { "" },  -- populated on connect
+    options = { "" },  -- populated on connect, auto-selects first
     option = "",
   }
 
   dlg:slider{
     id = "lora_weight",
-    label = "LoRA Weight",
-    min = 0,
+    label = "Weight (x100)",
+    min = -200,
     max = 200,
-    value = 100,
+    value = 100,     -- 1.0 — full LoRA strength default
+  }
+
+  -- ── Textual Inversion (Negative Embeddings) ──
+  dlg:separator{ text = "Neg. Embeddings" }
+
+  dlg:combobox{
+    id = "neg_ti",
+    label = "Embedding",
+    options = { "" },  -- populated on connect
+    option = "",
   }
 
   -- ── Post-Processing ──
@@ -388,7 +470,7 @@ local function build_dialog()
     label = "Target Size",
     min = 8,
     max = 256,
-    value = 64,
+    value = 128,
   }
 
   dlg:slider{
@@ -396,7 +478,7 @@ local function build_dialog()
     label = "Colors",
     min = 2,
     max = 256,
-    value = 16,
+    value = 32,
   }
 
   dlg:combobox{
@@ -427,13 +509,19 @@ local function build_dialog()
     option = "pico8",
   }
 
+  dlg:entry{
+    id = "palette_custom_colors",
+    label = "Custom Hex",
+    text = "",  -- comma-separated: #ff0000,#00ff00,#0000ff
+  }
+
   dlg:check{
     id = "remove_bg",
     label = "Remove BG",
     selected = false,
   }
 
-  -- ── Generate Button ──
+  -- ── Actions ──
   dlg:separator{ text = "" }
   dlg:button{
     id = "generate_btn",
@@ -474,6 +562,20 @@ local function build_dialog()
         },
       }
 
+      -- Custom palette colors
+      if dlg.data.palette_mode == "custom" then
+        local colors_str = dlg.data.palette_custom_colors or ""
+        if colors_str ~= "" then
+          local colors = {}
+          for hex in colors_str:gmatch("[^,%s]+") do
+            colors[#colors + 1] = hex
+          end
+          if #colors > 0 then
+            req.post_process.palette.colors = colors
+          end
+        end
+      end
+
       -- LoRA
       local lora_name = dlg.data.lora_name
       if lora_name and lora_name ~= "" then
@@ -483,7 +585,15 @@ local function build_dialog()
         }
       end
 
-      -- Source image for img2img
+      -- Negative TI embedding
+      local ti_name = dlg.data.neg_ti
+      if ti_name and ti_name ~= "" then
+        req.negative_ti = {
+          { name = ti_name, weight = 1.0 },
+        }
+      end
+
+      -- Source image for img2img / ControlNet
       if req.mode == "img2img" or req.mode:find("controlnet_") then
         local b64 = capture_active_layer()
         if b64 == nil then
@@ -499,30 +609,28 @@ local function build_dialog()
 
       -- Send
       generating = true
+      gen_step_start = os.clock()
       dlg:modify{ id = "generate_btn", enabled = false }
       update_status("Generating...")
       send(req)
     end
   }
 
+  dlg:button{
+    id = "refresh_btn",
+    text = "Refresh Lists",
+    onclick = function()
+      if connected then
+        resources_requested = false
+        request_resources()
+        update_status("Refreshing resource lists...")
+      else
+        update_status("Not connected")
+      end
+    end
+  }
+
   dlg:show{ wait = false }
-
-  -- Auto-request resource lists once pong confirms connection
-  -- (handled in response handler when connected transitions true)
-end
-
--- ─── PONG HOOK: REQUEST RESOURCES ───────────────────────────
-
-local original_handle = handle_response
-handle_response = function(resp)
-  original_handle(resp)
-
-  -- On first pong after connection, request resource lists
-  if resp.type == "pong" and connected and not resources_requested then
-    resources_requested = true
-    send({ action = "list_loras" })
-    send({ action = "list_palettes" })
-  end
 end
 
 -- ─── LAUNCH ──────────────────────────────────────────────────

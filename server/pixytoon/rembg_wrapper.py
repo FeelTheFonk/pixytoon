@@ -12,6 +12,16 @@ from .config import settings
 
 __all__ = ["remove_bg", "unload"]
 
+# Verify onnxruntime is available — rembg requires it at runtime
+try:
+    import onnxruntime  # noqa: F401
+except ImportError as _e:
+    import logging as _logging
+    _logging.getLogger("pixytoon.rembg").error(
+        "onnxruntime is not installed — rembg background removal will fail. "
+        "Install with: pip install onnxruntime"
+    )
+
 _session = None
 
 

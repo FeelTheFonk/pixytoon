@@ -137,7 +137,7 @@ def _quantize_kmeans(
     # Skip KMeans if image has fewer unique colors than requested
     n_unique = min(n_colors + 1, len(np.unique(pixels, axis=0)))
     if n_unique <= n_colors:
-        centers = [tuple(c) for c in np.unique(pixels, axis=0).astype(int)]
+        centers = [tuple(int(x) for x in c) for c in np.unique(pixels, axis=0).astype(int)]
         if has_alpha:
             return Image.fromarray(arr, "RGBA"), centers
         return Image.fromarray(rgb, "RGB"), centers
@@ -154,7 +154,7 @@ def _quantize_kmeans(
     quantized = centers_uint8[labels].reshape(h, w, 3)
 
     # Extract palette from centers for downstream use
-    palette = [tuple(np.round(c).astype(int)) for c in kmeans.cluster_centers_]
+    palette = [tuple(int(x) for x in np.round(c)) for c in kmeans.cluster_centers_]
 
     if has_alpha:
         result = np.dstack([quantized, alpha])
@@ -291,7 +291,7 @@ def _extract_palette(img: Image.Image, n_colors: int) -> list[tuple[int, int, in
         random_state=42,
     )
     kmeans.fit(pixels)
-    return [tuple(np.round(c).astype(int)) for c in kmeans.cluster_centers_]
+    return [tuple(int(x) for x in np.round(c)) for c in kmeans.cluster_centers_]
 
 
 def _floyd_steinberg(
@@ -415,6 +415,16 @@ def _bayer_dither(
     else:
         result_img = Image.fromarray(rgb, "RGB")
     return _enforce_palette(result_img, palette_rgb)
+
+
+# ─────────────────────────────────────────────────────────────
+# NUMBA JIT WARMUP
+# ─────────────────────────────────────────────────────────────
+
+def warmup_numba() -> None:
+    """Pre-compile Floyd-Steinberg JIT kernel with minimal data."""
+    tiny = Image.fromarray(np.zeros((2, 2, 3), dtype=np.uint8), "RGB")
+    _floyd_steinberg(tiny, [(0, 0, 0), (255, 255, 255)])
 
 
 # ─────────────────────────────────────────────────────────────

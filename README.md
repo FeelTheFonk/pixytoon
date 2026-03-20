@@ -49,6 +49,7 @@ pixytoon/
 │       ├── postprocess.py       # 6-stage pixel art pipeline
 │       ├── rembg_wrapper.py     # Background removal (CPU)
 │       ├── lora_manager.py      # LoRA discovery
+│       ├── ti_manager.py        # Textual Inversion discovery
 │       └── palette_manager.py   # Palette loading
 └── docs/                        # Research notes
 ```
@@ -56,24 +57,35 @@ pixytoon/
 ## Features
 
 - **txt2img / img2img / ControlNet** — OpenPose, Canny, Scribble, Lineart (v1.1)
-- **LoRA stacking** — Hyper-SD (speed) + pixel art LoRA (style)
-- **Sub-second generation** — Hyper-SD (8 steps) + DeepCache + FreeU v2 + torch.compile
+- **LoRA stacking** — Hyper-SD (speed) + pixel art LoRA (style, ±2.0 weight range)
+- **Textual Inversion** — EasyNegative / FastNegativeV2 for quality (auto-loaded from `server/models/embeddings/`)
+- **CLIP skip 2** — Skips last encoder layer for better stylized output
+- **Fast generation** — Hyper-SD (8 steps) + DeepCache + FreeU v2 + torch.compile (~2-5s on RTX 4060 after warmup)
 - **Post-processing** — Pixelate, K-Means/Octree/MedianCut quantize, CIELAB palette enforcement (KD-Tree), Floyd-Steinberg (Numba JIT) / Bayer dithering, bg removal (BiRefNet)
+- **Startup warmup** — Pre-compiles torch + Numba JIT on boot (first real generation is fast)
 - **Health check** — `GET /health` for readiness polling
 - **Concurrency safe** — GPU access serialized via asyncio lock
 - **Cancellation** — Generation stops cleanly on WebSocket disconnect
+- **Generation timeout** — Configurable max time per generation (default 5min)
 
 ## Performance Stack
 
 | Optimization | Role | Impact |
 |-------------|------|--------|
-| **Hyper-SD LoRA** (8-step CFG, fused at 0.5) | Fewer diffusion steps | ~2-3x faster generation |
+| **Hyper-SD LoRA** (8-step CFG, fused at 0.8) | Fewer diffusion steps | ~2-3x faster generation |
 | **DeepCache** (interval=3) | Feature caching between steps | ~2.3x additional speedup |
-| **FreeU v2** (s1=0.9 s2=0.2 b1=1.3 b2=1.4) | Free quality boost | No speed cost |
-| **torch.compile** (reduce-overhead) | UNet graph optimization via Triton | ~20-30% faster inference |
+| **FreeU v2** (s1=0.9 s2=0.2 b1=1.5 b2=1.6) | Free quality boost | No speed cost |
+| **CLIP skip 2** | Skip last CLIP layer | Better stylized output |
+| **torch.compile** (default) | UNet Triton codegen | ~20-30% faster inference |
 | **PyTorch SDP** (native, auto-active) | Fused attention kernels (FlashAttention2) | Memory + speed |
 | **VAE slicing + tiling** | Batched VAE decode | Lower VRAM peak |
 | **fp16 inference** | Half-precision throughout | ~50% VRAM reduction |
+
+> **torch.compile modes:** `default` mode is used by default — fast compilation with Triton codegen.
+> `max-autotune` benchmarks every kernel candidate for peak throughput but adds minutes to startup.
+> `reduce-overhead` uses CUDAGraphs which is **incompatible** with DeepCache's dynamic
+> control flow (skip/compute branches). If you set `PIXYTOON_COMPILE_MODE=reduce-overhead`,
+> you must disable DeepCache (`PIXYTOON_ENABLE_DEEPCACHE=False`).
 
 ### Attention Mechanism
 
@@ -107,6 +119,7 @@ Connect to `ws://127.0.0.1:9876/ws`. All messages are JSON.
 | `list_loras`       | List available LoRAs            |
 | `list_palettes`    | List available palettes         |
 | `list_controlnets` | List available ControlNet modes |
+| `list_embeddings`  | List available TI embeddings    |
 
 ### Generate Request
 
@@ -122,11 +135,13 @@ Connect to `ws://127.0.0.1:9876/ws`. All messages are JSON.
   "steps": 8,
   "cfg_scale": 5.0,
   "denoise_strength": 0.75,
-  "lora": { "name": "pixelart_redmond", "weight": 0.8 },
+  "clip_skip": 2,
+  "lora": { "name": "pixelart_redmond", "weight": 1.0 },
+  "negative_ti": [{ "name": "EasyNegative", "weight": 1.0 }],
   "post_process": {
-    "pixelate": { "enabled": true, "target_size": 64 },
+    "pixelate": { "enabled": true, "target_size": 128 },
     "quantize_method": "kmeans",
-    "quantize_colors": 16,
+    "quantize_colors": 32,
     "dither": "none",
     "palette": { "mode": "auto" },
     "remove_bg": false
@@ -140,8 +155,8 @@ Connect to `ws://127.0.0.1:9876/ws`. All messages are JSON.
 |------------|------------------------------------------------|
 | `progress` | `step`, `total`                                 |
 | `result`   | `image` (b64 PNG), `seed`, `time_ms`, `width`, `height` |
-| `error`    | `code` (`ENGINE_ERROR`, `OOM`, `CANCELLED`), `message` |
-| `list`     | `list_type` ("loras"/"palettes"/"controlnets"), `items` |
+| `error`    | `code` (`ENGINE_ERROR`, `OOM`, `CANCELLED`, `TIMEOUT`), `message` |
+| `list`     | `list_type` ("loras"/"palettes"/"controlnets"/"embeddings"), `items` |
 | `pong`     | (no fields)                                     |
 
 ### Input Validation
@@ -152,7 +167,9 @@ Connect to `ws://127.0.0.1:9876/ws`. All messages are JSON.
 | `height`    | 64 - 2048 (rounded to ×8) |
 | `steps`     | 1 - 100              |
 | `cfg_scale` | 0.0 - 30.0           |
+| `clip_skip` | 1 - 12               |
 | `denoise`   | 0.0 - 1.0            |
+| `lora.weight` | -2.0 - 2.0 (negative LoRA) |
 | `colors`    | 2 - 256              |
 
 ## Post-Processing Pipeline
@@ -177,14 +194,21 @@ All prefixed with `PIXYTOON_`. Example: `PIXYTOON_PORT=8080`.
 | `DEFAULT_CHECKPOINT`       | `Lykon/dreamshaper-8`                 | SD1.5 checkpoint                |
 | `HYPER_SD_REPO`            | `ByteDance/Hyper-SD`                  | Hyper-SD HuggingFace repo       |
 | `HYPER_SD_LORA_FILE`       | `Hyper-SD15-8steps-CFG-lora.safetensors` | Hyper-SD LoRA filename       |
-| `HYPER_SD_FUSE_SCALE`      | `0.5`                                 | Hyper-SD LoRA fusion scale      |
+| `HYPER_SD_FUSE_SCALE`      | `0.8`                                 | Hyper-SD LoRA fusion scale      |
 | `DEFAULT_STEPS`            | `8`                                   | Default inference steps         |
 | `DEFAULT_CFG`              | `5.0`                                 | Default CFG scale               |
+| `DEFAULT_CLIP_SKIP`        | `2`                                   | CLIP skip layers (2 = stylized) |
+| `DEFAULT_QUANTIZE_COLORS`  | `32`                                  | Default palette colors          |
+| `DEFAULT_PIXEL_LORA_WEIGHT`| `1.0`                                 | Default LoRA fuse weight        |
+| `DEFAULT_NEGATIVE_TI`      | `auto`                                | Auto-load TI embeddings         |
 | `ENABLE_TORCH_COMPILE`     | `True`                                | UNet compilation (requires Triton + MSVC) |
+| `COMPILE_MODE`             | `default`                             | torch.compile mode (`default` / `max-autotune` / `reduce-overhead`) |
 | `ENABLE_DEEPCACHE`         | `True`                                | DeepCache acceleration          |
 | `ENABLE_FREEU`             | `True`                                | FreeU v2 quality boost          |
 | `ENABLE_ATTENTION_SLICING` | `True`                                | Attention slicing (PyTorch < 2.0 fallback) |
 | `ENABLE_VAE_TILING`        | `True`                                | VAE tiling for large images     |
+| `ENABLE_WARMUP`            | `True`                                | Warmup generation at startup    |
+| `GENERATION_TIMEOUT`       | `300.0`                               | Max seconds per generation      |
 | `REMBG_MODEL`              | `birefnet-general`                    | Background removal model        |
 | `REMBG_ON_CPU`             | `True`                                | Run rembg on CPU                |
 
@@ -206,6 +230,9 @@ All prefixed with `PIXYTOON_`. Example: `PIXYTOON_PORT=8080`.
 | Slow first generation          | Normal: torch.compile + Numba JIT warm up on first run      |
 | torch.compile fails            | Install Visual Studio 2022 C++ workload; ensure Triton installed |
 | "Not enough SMs"               | Harmless Triton warning on consumer GPUs, can be ignored    |
+| CUDAGraphs tensor overwrite    | Fixed in v0.1.0: uses `max-autotune` mode. If using `reduce-overhead`, disable DeepCache |
+| Generation timed out           | Increase `PIXYTOON_GENERATION_TIMEOUT` or reduce steps/resolution |
+| LoRA change is slow            | Expected: LoRA weight change triggers recompilation (~30-60s once) |
 
 ## License
 

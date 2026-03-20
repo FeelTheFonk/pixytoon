@@ -58,6 +58,44 @@ def download_pixel_loras() -> None:
     print("  [OK] Pixel art LoRAs downloaded.")
 
 
+def download_embeddings() -> None:
+    from huggingface_hub import hf_hub_download
+    print("[3b/4] Downloading negative TI embeddings ...")
+    embeddings_dir = _PROJECT_ROOT / "server" / "models" / "embeddings"
+    embeddings_dir.mkdir(parents=True, exist_ok=True)
+
+    embeddings = [
+        {
+            "repo": "gsdf/EasyNegative",
+            "file": "EasyNegative.safetensors",
+            "local": "EasyNegative.safetensors",
+            "repo_type": "dataset",
+        },
+        {
+            "repo": "navmesh/Embeddings",
+            "file": "FastNegativeV2.pt",
+            "local": "FastNegativeV2.pt",
+            "repo_type": "model",
+        },
+    ]
+
+    for emb in embeddings:
+        dest = embeddings_dir / emb["local"]
+        if dest.exists():
+            print(f"  [SKIP] {emb['local']} already exists, skipping.")
+            continue
+        print(f"  [DL] {emb['repo']} -> {emb['local']}")
+        downloaded = hf_hub_download(
+            emb["repo"],
+            filename=emb["file"],
+            repo_type=emb["repo_type"],
+        )
+        shutil.copy2(downloaded, dest)
+        print(f"  [OK] {emb['local']}")
+
+    print("  [OK] TI embeddings downloaded.")
+
+
 def download_controlnets() -> None:
     from huggingface_hub import snapshot_download
     print("[4/4] Downloading ControlNet v1.1 models ...")
@@ -81,10 +119,11 @@ def main() -> None:
     parser.add_argument("--checkpoint", action="store_true", help="SD1.5 base checkpoint")
     parser.add_argument("--hyper-sd", action="store_true", dest="hyper_sd", help="Hyper-SD acceleration LoRA")
     parser.add_argument("--loras", action="store_true", help="Pixel art LoRAs")
+    parser.add_argument("--embeddings", action="store_true", help="Negative TI embeddings")
     parser.add_argument("--controlnets", action="store_true", help="ControlNet v1.1 models")
     args = parser.parse_args()
 
-    if not any([args.all, args.checkpoint, args.hyper_sd, args.loras, args.controlnets]):
+    if not any([args.all, args.checkpoint, args.hyper_sd, args.loras, args.embeddings, args.controlnets]):
         args.all = True
 
     if args.all or args.checkpoint:
@@ -93,6 +132,8 @@ def main() -> None:
         download_hyper_sd_lora()
     if args.all or args.loras:
         download_pixel_loras()
+    if args.all or args.embeddings:
+        download_embeddings()
     if args.all or args.controlnets:
         download_controlnets()
 

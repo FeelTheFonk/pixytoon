@@ -17,6 +17,7 @@ class Action(str, Enum):
     LIST_LORAS = "list_loras"
     LIST_PALETTES = "list_palettes"
     LIST_CONTROLNETS = "list_controlnets"
+    LIST_EMBEDDINGS = "list_embeddings"
     PING = "ping"
 
 
@@ -55,12 +56,17 @@ class PaletteMode(str, Enum):
 
 class LoRASpec(BaseModel):
     name: str
-    weight: float = Field(0.8, ge=0.0, le=2.0)
+    weight: float = Field(1.0, ge=-2.0, le=2.0)
+
+
+class EmbeddingSpec(BaseModel):
+    name: str
+    weight: float = Field(1.0, ge=0.0, le=2.0)
 
 
 class PixelateSpec(BaseModel):
     enabled: bool = True
-    target_size: int = Field(64, ge=8, le=512)
+    target_size: int = Field(128, ge=8, le=512)
 
 
 class PaletteSpec(BaseModel):
@@ -72,7 +78,7 @@ class PaletteSpec(BaseModel):
 class PostProcessSpec(BaseModel):
     pixelate: PixelateSpec = Field(default_factory=PixelateSpec)
     quantize_method: QuantizeMethod = QuantizeMethod.KMEANS
-    quantize_colors: int = Field(16, ge=2, le=256)
+    quantize_colors: int = Field(32, ge=2, le=256)
     dither: DitherMode = DitherMode.NONE
     palette: PaletteSpec = Field(default_factory=PaletteSpec)
     remove_bg: bool = False
@@ -98,7 +104,9 @@ class GenerateRequest(BaseModel):
     steps: int = Field(8, ge=1, le=100)
     cfg_scale: float = Field(5.0, ge=0.0, le=30.0)
     denoise_strength: float = Field(0.75, ge=0.0, le=1.0)
+    clip_skip: int = Field(2, ge=1, le=12)
     lora: Optional[LoRASpec] = None
+    negative_ti: Optional[list[EmbeddingSpec]] = None
     post_process: PostProcessSpec = Field(default_factory=PostProcessSpec)
 
 
@@ -116,7 +124,9 @@ class Request(BaseModel):
     steps: Optional[int] = None
     cfg_scale: Optional[float] = None
     denoise_strength: Optional[float] = None
+    clip_skip: Optional[int] = None
     lora: Optional[LoRASpec] = None
+    negative_ti: Optional[list[EmbeddingSpec]] = None
     post_process: Optional[PostProcessSpec] = None
 
     def to_generate_request(self) -> GenerateRequest:
@@ -151,7 +161,7 @@ class ErrorResponse(BaseModel):
 
 class ListResponse(BaseModel):
     type: str = "list"
-    list_type: str  # "loras" | "palettes" | "controlnets"
+    list_type: str  # "loras" | "palettes" | "controlnets" | "embeddings"
     items: list[str]
 
 
