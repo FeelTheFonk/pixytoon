@@ -1,6 +1,6 @@
 # PixyToon
 
-Local SOTA pixel art generation for Aseprite via Stable Diffusion 1.5.
+Local SOTA pixel art generation and animation for Aseprite via Stable Diffusion 1.5 + AnimateDiff.
 
 ## Quick Start
 
@@ -15,6 +15,8 @@ start.bat         <- One-click: launch server + Aseprite
 Aseprite (Lua WebSocket) <-> PixyToon Server (Python FastAPI)
                                   |
                             SD1.5 + Hyper-SD + DeepCache + FreeU v2 + torch.compile
+                                  |
+                            AnimateDiff (motion module) + Frame Chain
                                   |
                             Pixel Art Post-Processing Pipeline
 ```
@@ -56,6 +58,8 @@ pixytoon/
 ## Features
 
 - **txt2img / img2img / ControlNet** — OpenPose, Canny, Scribble, Lineart (v1.1)
+- **Animation** — Dual-method: Frame Chain (img2img chaining) + AnimateDiff (motion module temporal consistency)
+- **AnimateDiff** — Motion adapter v1-5-3, FreeInit support, auto DeepCache disable/re-enable, ControlNet compatible
 - **LoRA stacking** — Hyper-SD (speed) + pixel art LoRA (style, ±2.0 weight range)
 - **Textual Inversion** — EasyNegative / FastNegativeV2 for quality (auto-loaded from `server/models/embeddings/`)
 - **CLIP skip 2** — Skips last encoder layer for better stylized output
@@ -65,7 +69,7 @@ pixytoon/
 - **Health check** — `GET /health` for readiness polling
 - **Concurrency safe** — GPU access serialized via asyncio lock
 - **Cancellation** — Generation stops cleanly on WebSocket disconnect
-- **Generation timeout** — Configurable max time per generation (default 5min)
+- **Generation timeout** — Configurable max time per generation (default 5min, auto-scaled for animation)
 
 ## Performance Stack
 
@@ -76,6 +80,8 @@ pixytoon/
 | **FreeU v2** (s1=0.9 s2=0.2 b1=1.5 b2=1.6) | Free quality boost | No speed cost |
 | **CLIP skip 2** | Skip last CLIP layer | Better stylized output |
 | **torch.compile** (default) | UNet Triton codegen | ~20-30% faster inference |
+| **AnimateDiff** (motion adapter v1-5-3) | Temporally consistent animation | Motion module ~97MB |
+| **FreeInit** (optional, 2 iters) | Improved AnimateDiff temporal consistency | ~2x AnimateDiff time |
 | **PyTorch SDP** (native, auto-active) | Fused attention kernels (FlashAttention2) | Memory + speed |
 | **VAE slicing + tiling** | Batched VAE decode | Lower VRAM peak |
 | **fp16 inference** | Half-precision throughout | ~50% VRAM reduction |
@@ -99,7 +105,7 @@ SageAttention (thu-ml) targets long-sequence attention and offers minimal gains 
 
 ## Requirements
 
-- **GPU**: NVIDIA >= 8GB VRAM (tested RTX 4060)
+- **GPU**: NVIDIA >= 8GB VRAM (10GB for AnimateDiff + ControlNet; tested RTX 4060)
 - **CUDA**: 12.8
 - **Python**: 3.11-3.13
 - **uv**: Package manager
@@ -111,14 +117,15 @@ Connect to `ws://127.0.0.1:9876/ws`. All messages are JSON.
 
 ### Actions
 
-| Action             | Description                     |
-|--------------------|---------------------------------|
-| `ping`             | Health check, returns `pong`    |
-| `generate`         | Run generation pipeline         |
-| `list_loras`       | List available LoRAs            |
-| `list_palettes`    | List available palettes         |
-| `list_controlnets` | List available ControlNet modes |
-| `list_embeddings`  | List available TI embeddings    |
+| Action               | Description                        |
+|----------------------|------------------------------------|
+| `ping`               | Health check, returns `pong`       |
+| `generate`           | Run single-frame generation        |
+| `generate_animation` | Run multi-frame animation          |
+| `list_loras`         | List available LoRAs               |
+| `list_palettes`      | List available palettes            |
+| `list_controlnets`   | List available ControlNet modes    |
+| `list_embeddings`    | List available TI embeddings       |
 
 ### Generate Request
 
@@ -133,7 +140,7 @@ Connect to `ws://127.0.0.1:9876/ws`. All messages are JSON.
   "seed": -1,
   "steps": 8,
   "cfg_scale": 5.0,
-  "denoise_strength": 0.75,
+  "denoise_strength": 1.0,
   "clip_skip": 2,
   "lora": { "name": "pixelart_redmond", "weight": 1.0 },
   "negative_ti": [{ "name": "EasyNegative", "weight": 1.0 }],
@@ -148,15 +155,52 @@ Connect to `ws://127.0.0.1:9876/ws`. All messages are JSON.
 }
 ```
 
+### Animation Request
+
+```json
+{
+  "action": "generate_animation",
+  "method": "chain",
+  "prompt": "pixel art walk cycle, PixArFK",
+  "mode": "controlnet_scribble",
+  "width": 512,
+  "height": 512,
+  "seed": -1,
+  "steps": 8,
+  "cfg_scale": 5.0,
+  "denoise_strength": 0.30,
+  "control_image": "<base64 PNG>",
+  "frame_count": 8,
+  "frame_duration_ms": 100,
+  "seed_strategy": "increment",
+  "tag_name": "walk",
+  "enable_freeinit": false,
+  "freeinit_iterations": 2,
+  "post_process": { "..." }
+}
+```
+
+| Field               | Values                               | Default       |
+|---------------------|--------------------------------------|---------------|
+| `method`            | `chain`, `animatediff`               | `chain`       |
+| `frame_count`       | 2 - 120                              | `8`           |
+| `frame_duration_ms` | 50 - 2000                            | `100`         |
+| `seed_strategy`     | `fixed`, `increment`, `random`       | `increment`   |
+| `tag_name`          | string or null                       | `null`        |
+| `enable_freeinit`   | boolean                              | `false`       |
+| `freeinit_iterations` | 1 - 3                              | `2`           |
+
 ### Response Types
 
-| Type       | Fields                                          |
-|------------|------------------------------------------------|
-| `progress` | `step`, `total`                                 |
-| `result`   | `image` (b64 PNG), `seed`, `time_ms`, `width`, `height` |
-| `error`    | `code` (`ENGINE_ERROR`, `OOM`, `CANCELLED`, `TIMEOUT`), `message` |
-| `list`     | `list_type` ("loras"/"palettes"/"controlnets"/"embeddings"), `items` |
-| `pong`     | (no fields)                                     |
+| Type                 | Fields                                                              |
+|----------------------|---------------------------------------------------------------------|
+| `progress`           | `step`, `total`, `frame_index` (opt), `total_frames` (opt)         |
+| `result`             | `image` (b64 PNG), `seed`, `time_ms`, `width`, `height`            |
+| `animation_frame`    | `frame_index`, `total_frames`, `image` (b64 PNG), `seed`, `time_ms`, `width`, `height` |
+| `animation_complete` | `total_frames`, `total_time_ms`, `tag_name` (opt)                  |
+| `error`              | `code` (`ENGINE_ERROR`, `OOM`, `CANCELLED`, `TIMEOUT`), `message`  |
+| `list`               | `list_type`, `items`                                                |
+| `pong`               | (no fields)                                                         |
 
 ### Input Validation
 
@@ -216,6 +260,13 @@ All prefixed with `PIXYTOON_`. Example: `PIXYTOON_PORT=8080`.
 | `GENERATION_TIMEOUT`       | `300.0`                               | Max seconds per generation      |
 | `REMBG_MODEL`              | `birefnet-general`                    | Background removal model        |
 | `REMBG_ON_CPU`             | `True`                                | Run rembg on CPU                |
+| `DEFAULT_ANIM_FRAMES`      | `8`                                   | Default animation frame count   |
+| `DEFAULT_ANIM_DURATION_MS` | `100`                                 | Default frame duration (ms)     |
+| `DEFAULT_ANIM_DENOISE`     | `0.30`                                | Default animation denoise       |
+| `MAX_ANIMATION_FRAMES`     | `120`                                 | Max frames per animation        |
+| `ANIMATEDIFF_MODEL`        | `guoyww/animatediff-motion-adapter-v1-5-3` | AnimateDiff motion adapter |
+| `ENABLE_FREEINIT`          | `False`                               | FreeInit for AnimateDiff        |
+| `FREEINIT_ITERATIONS`      | `2`                                   | FreeInit iteration count        |
 
 ## HTTP Endpoints
 
@@ -238,6 +289,9 @@ All prefixed with `PIXYTOON_`. Example: `PIXYTOON_PORT=8080`.
 | CUDAGraphs tensor overwrite    | Uses `default` compile mode. If using `reduce-overhead`, disable DeepCache |
 | Generation timed out           | Increase `PIXYTOON_GENERATION_TIMEOUT` or reduce steps/resolution |
 | LoRA change is slow            | Expected: LoRA weight change triggers recompilation (~30-60s once) |
+| AnimateDiff OOM                | AnimateDiff needs ~8-10GB VRAM; reduce `frame_count` or resolution |
+| AnimateDiff slow first run     | Motion adapter downloads on first use (~97MB); subsequent runs use cache |
+| Chain animation hangs          | Ensure DeepCache interval < step count × denoise_strength        |
 
 ## License
 

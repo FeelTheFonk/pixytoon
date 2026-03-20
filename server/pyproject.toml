@@ -1,7 +1,7 @@
 [project]
 name = "pixytoon-server"
-version = "0.1.0"
-description = "Local SOTA pixel art generation server for Aseprite via Stable Diffusion"
+version = "0.1.1"
+description = "Local SOTA pixel art generation and animation server for Aseprite via Stable Diffusion"
 requires-python = ">=3.11,<3.14"
 license = "MIT"
 dependencies = [

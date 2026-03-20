@@ -15,6 +15,8 @@ from .config import settings
 from .engine import DiffusionEngine, GenerationCancelled
 from .protocol import (
     Action,
+    AnimationCompleteResponse,
+    AnimationFrameResponse,
     ErrorResponse,
     ListResponse,
     PongResponse,
@@ -102,6 +104,14 @@ async def _handle(websocket: WebSocket, req: Request) -> None:
         if req.action == Action.PING:
             await _send(websocket, PongResponse())
 
+        elif req.action == Action.CANCEL:
+            if _generating.is_set():
+                engine.cancel()
+                # Don't send response here — the GenerationCancelled exception
+                # handler will send CANCELLED when the generation actually stops.
+            else:
+                await _send(websocket, PongResponse())  # No-op — nothing to cancel
+
         elif req.action == Action.LIST_LORAS:
             items = lora_manager.list_loras()
             await _send(websocket, ListResponse(list_type="loras", items=items))
@@ -167,6 +177,82 @@ async def _handle(websocket: WebSocket, req: Request) -> None:
                 finally:
                     _generating.clear()
             await _send(websocket, result)
+
+        elif req.action == Action.GENERATE_ANIMATION:
+            anim_req = req.to_animation_request()
+            loop = asyncio.get_running_loop()
+
+            def on_anim_progress(p: ProgressResponse) -> None:
+                try:
+                    try:
+                        if websocket.application_state.name != "CONNECTED":
+                            return
+                    except AttributeError:
+                        return
+                    fut = asyncio.run_coroutine_threadsafe(
+                        _send(websocket, p), loop
+                    )
+                    try:
+                        fut.result(timeout=1.0)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+
+            def on_anim_frame(f: AnimationFrameResponse) -> None:
+                try:
+                    try:
+                        if websocket.application_state.name != "CONNECTED":
+                            return
+                    except AttributeError:
+                        return
+                    fut = asyncio.run_coroutine_threadsafe(
+                        _send(websocket, f), loop
+                    )
+                    try:
+                        fut.result(timeout=2.0)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+
+            if _generate_lock is None:
+                raise RuntimeError("Server not fully initialized")
+            # Auto-scale timeout for animation (30s per frame minimum)
+            anim_timeout = max(
+                settings.generation_timeout,
+                anim_req.frame_count * 30,
+            )
+            async with _generate_lock:
+                _generating.set()
+                try:
+                    import time as _time
+                    t0 = _time.perf_counter()
+                    frames = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            None,
+                            lambda: engine.generate_animation(
+                                anim_req,
+                                on_frame=on_anim_frame,
+                                on_progress=on_anim_progress,
+                            ),
+                        ),
+                        timeout=anim_timeout,
+                    )
+                    total_ms = int((_time.perf_counter() - t0) * 1000)
+                except asyncio.TimeoutError:
+                    engine.cancel()
+                    raise RuntimeError(
+                        f"Animation timed out after {anim_timeout:.0f}s"
+                    )
+                finally:
+                    _generating.clear()
+
+            await _send(websocket, AnimationCompleteResponse(
+                total_frames=len(frames),
+                total_time_ms=total_ms,
+                tag_name=anim_req.tag_name,
+            ))
 
     except GenerationCancelled:
         log.info("Generation cancelled by client")

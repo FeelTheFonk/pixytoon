@@ -1,7 +1,7 @@
-"""SOTA Diffusion Engine — SD1.5 + Hyper-SD (fused) + DeepCache + FreeU v2.
+"""SOTA Diffusion Engine — SD1.5 + Hyper-SD (fused) + DeepCache + FreeU v2 + AnimateDiff.
 
 Manages pipeline lifecycle, LoRA fusing, ControlNet lazy-loading,
-and progress callbacks for the WebSocket server.
+AnimateDiff motion module, and progress callbacks for the WebSocket server.
 """
 
 from __future__ import annotations
@@ -28,22 +28,31 @@ warnings.filterwarnings("ignore", message=".*Torchinductor does not support code
 warnings.filterwarnings("ignore", message=".*Not enough SMs to use max_autotune_gemm.*")
 
 from diffusers import (
+    AnimateDiffPipeline,
+    AnimateDiffControlNetPipeline,
     ControlNetModel,
     DDIMScheduler,
+    MotionAdapter,
     StableDiffusionControlNetPipeline,
     StableDiffusionImg2ImgPipeline,
     StableDiffusionPipeline,
 )
+
+from diffusers.utils.peft_utils import recurse_remove_peft_layers
 
 from .config import settings
 from .lora_manager import list_loras, resolve_lora_path
 from .ti_manager import list_embeddings, resolve_embedding_path
 from .postprocess import apply as postprocess_apply
 from .protocol import (
+    AnimationFrameResponse,
+    AnimationMethod,
+    AnimationRequest,
     GenerateRequest,
     GenerationMode,
     ProgressResponse,
     ResultResponse,
+    SeedStrategy,
 )
 from . import rembg_wrapper
 
@@ -87,6 +96,11 @@ class DiffusionEngine:
         self._loaded_ti_tokens: set[str] = set()
         self._loaded = False
         self._cancel_event = threading.Event()
+        # AnimateDiff
+        self._motion_adapter: Optional[MotionAdapter] = None
+        self._animatediff_pipe: Optional[AnimateDiffPipeline] = None
+        self._animatediff_controlnet_pipe: Optional[AnimateDiffControlNetPipeline] = None
+        self._animatediff_controlnet_mode: Optional[GenerationMode] = None
 
     @property
     def is_loaded(self) -> bool:
@@ -331,6 +345,11 @@ class DiffusionEngine:
         self._current_pixel_lora_weight = 0.0
         self._loaded_ti_tokens.clear()
         self._loaded = False
+        # AnimateDiff
+        self._motion_adapter = None
+        self._animatediff_pipe = None
+        self._animatediff_controlnet_pipe = None
+        self._animatediff_controlnet_mode = None
         rembg_wrapper.unload()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -430,6 +449,25 @@ class DiffusionEngine:
 
     # ─── GENERATION ──────────────────────────────────────────
 
+    def _build_effective_negative(self, neg: str, ti_specs: list | None) -> str:
+        """Build final negative prompt with TI embedding tokens."""
+        effective = neg or ""
+        if not ti_specs:
+            return effective
+        ti_parts = []
+        for ti_spec in ti_specs:
+            if ti_spec.name in self._loaded_ti_tokens:
+                if abs(ti_spec.weight - 1.0) < 0.01:
+                    ti_parts.append(ti_spec.name)
+                else:
+                    ti_parts.append(f"({ti_spec.name}:{ti_spec.weight:.2f})")
+            else:
+                log.warning("TI token '%s' not loaded — skipping", ti_spec.name)
+        if ti_parts:
+            ti_str = ", ".join(ti_parts)
+            effective = f"{effective}, {ti_str}" if effective else ti_str
+        return effective
+
     def generate(
         self,
         req: GenerateRequest,
@@ -458,21 +496,7 @@ class DiffusionEngine:
                     if lora_name != self._current_pixel_lora or lora_weight != self._current_pixel_lora_weight:
                         self.set_pixel_lora(lora_name, lora_weight)
 
-                # Build effective negative prompt with TI tokens
-                effective_neg = req.negative_prompt or ""
-                if req.negative_ti:
-                    ti_parts = []
-                    for ti_spec in req.negative_ti:
-                        if ti_spec.name in self._loaded_ti_tokens:
-                            if abs(ti_spec.weight - 1.0) < 0.01:
-                                ti_parts.append(ti_spec.name)
-                            else:
-                                ti_parts.append(f"({ti_spec.name}:{ti_spec.weight:.2f})")
-                        else:
-                            log.warning("TI token '%s' not loaded — skipping", ti_spec.name)
-                    if ti_parts:
-                        ti_str = ", ".join(ti_parts)
-                        effective_neg = f"{effective_neg}, {ti_str}" if effective_neg else ti_str
+                effective_neg = self._build_effective_negative(req.negative_prompt, req.negative_ti)
 
                 # Progress callback adapter with cancellation support
                 def step_callback(pipe, step_idx, timestep, callback_kwargs):
@@ -517,9 +541,10 @@ class DiffusionEngine:
 
         except torch.cuda.OutOfMemoryError:
             log.error("CUDA OOM — clearing VRAM cache")
-            self._cancel_event.clear()  # Reset so next generation isn't immediately cancelled
             torch.cuda.empty_cache()
             raise
+        finally:
+            self._cancel_event.clear()
 
     # ─── PRIVATE GENERATION METHODS ──────────────────────────
 
@@ -589,6 +614,483 @@ class DiffusionEngine:
             output_type="pil",
         ).images[0]
 
+    # ─── ANIMATEDIFF ─────────────────────────────────────────
+
+    def _get_uncompiled_unet(self):
+        """Return the raw UNet module, unwrapping torch.compile if present.
+
+        AnimateDiff reshapes latents to 5D [batch, channels, frames, H, W].
+        A torch.compile'd UNet has guards specialized for 4D warmup shapes
+        and will fail with 'Expected 3D or 4D input to conv2d'.
+        """
+        unet = self._pipe.unet
+        if hasattr(unet, "_orig_mod"):
+            return unet._orig_mod
+        return unet
+
+    def _strip_peft_from_unet(self, unet) -> None:
+        """Strip any remaining PEFT/LoRA wrappers directly from the UNet.
+
+        After fuse_lora() + unload_lora_weights(), PEFT wrappers should be
+        removed.  But when the UNet is wrapped by torch.compile, the pipeline
+        API may traverse the compiled wrapper instead of the raw module,
+        leaving base_layer / lora_A / lora_B artefacts in the state dict.
+
+        This method operates on the raw uncompiled UNet to guarantee a clean
+        state dict for UNetMotionModel.from_unet2d().
+        """
+        try:
+            from peft.tuners.tuners_utils import BaseTunerLayer
+            has_peft = any(isinstance(m, BaseTunerLayer) for m in unet.modules())
+        except ImportError:
+            has_peft = False
+
+        if has_peft:
+            log.info("Stripping residual PEFT wrappers from UNet for AnimateDiff")
+            recurse_remove_peft_layers(unet)
+
+        # Clean up PEFT metadata that blocks future adapter injection
+        if hasattr(unet, "peft_config"):
+            del unet.peft_config
+        if hasattr(unet, "_hf_peft_config_loaded"):
+            unet._hf_peft_config_loaded = None
+
+    def _ensure_animatediff(self) -> None:
+        """Lazy-load AnimateDiff motion adapter and pipeline."""
+        if self._motion_adapter is not None:
+            return
+
+        log.info("Loading AnimateDiff motion adapter: %s", settings.animatediff_model)
+        self._motion_adapter = MotionAdapter.from_pretrained(
+            settings.animatediff_model,
+            torch_dtype=torch.float16,
+        ).to("cuda")
+
+        # AnimateDiff requires the uncompiled UNet — compiled graphs
+        # have 4D shape guards that reject the 5D video tensor.
+        unet = self._get_uncompiled_unet()
+
+        # Guarantee UNet has no PEFT wrappers before from_unet2d().
+        # The fuse/unload pipeline API may miss wrappers when UNet is
+        # behind torch.compile; call the low-level stripper directly.
+        # NOTE: UNet weights already contain fused Hyper-SD + pixel_art LoRA
+        # from set_pixel_lora() — stripping just removes the wrapper, weights
+        # stay intact.  No re-fuse needed.
+        self._strip_peft_from_unet(unet)
+
+        # Build AnimateDiff pipeline from base components
+        self._animatediff_pipe = AnimateDiffPipeline(
+            vae=self._pipe.vae,
+            text_encoder=self._pipe.text_encoder,
+            tokenizer=self._pipe.tokenizer,
+            unet=unet,
+            motion_adapter=self._motion_adapter,
+            scheduler=self._pipe.scheduler,
+            feature_extractor=None,
+        )
+        self._animatediff_pipe.to("cuda")
+
+        # Apply FreeU to AnimateDiff pipeline
+        if settings.enable_freeu:
+            self._animatediff_pipe.enable_freeu(
+                s1=settings.freeu_s1, s2=settings.freeu_s2,
+                b1=settings.freeu_b1, b2=settings.freeu_b2,
+            )
+
+        log.info("AnimateDiff pipeline ready")
+
+    def _ensure_animatediff_controlnet(self, mode: GenerationMode) -> None:
+        """Lazy-load AnimateDiff + ControlNet combined pipeline."""
+        if self._animatediff_controlnet_mode == mode and self._animatediff_controlnet_pipe is not None:
+            return
+
+        self._ensure_animatediff()
+
+        model_id = _CONTROLNET_IDS.get(mode)
+        if model_id is None:
+            raise ValueError(f"No ControlNet for mode: {mode}")
+
+        # Reuse existing ControlNet model if same mode already loaded for single-frame
+        if self._controlnet_mode == mode and self._controlnet_pipe is not None:
+            controlnet = self._controlnet_pipe.controlnet
+        else:
+            log.info("Loading ControlNet for AnimateDiff: %s", model_id)
+            controlnet = ControlNetModel.from_pretrained(
+                model_id, torch_dtype=torch.float16,
+            ).to("cuda")
+
+        # Use uncompiled UNet — same reason as _ensure_animatediff
+        unet = self._get_uncompiled_unet()
+
+        # Strip PEFT wrappers directly (same as _ensure_animatediff).
+        # UNet already has fused weights — no re-fuse needed.
+        self._strip_peft_from_unet(unet)
+
+        self._animatediff_controlnet_pipe = AnimateDiffControlNetPipeline(
+            vae=self._pipe.vae,
+            text_encoder=self._pipe.text_encoder,
+            tokenizer=self._pipe.tokenizer,
+            unet=unet,
+            motion_adapter=self._motion_adapter,
+            controlnet=controlnet,
+            scheduler=self._pipe.scheduler,
+            feature_extractor=None,
+        )
+        self._animatediff_controlnet_pipe.to("cuda")
+
+        if settings.enable_freeu:
+            self._animatediff_controlnet_pipe.enable_freeu(
+                s1=settings.freeu_s1, s2=settings.freeu_s2,
+                b1=settings.freeu_b1, b2=settings.freeu_b2,
+            )
+
+        self._animatediff_controlnet_mode = mode
+        log.info("AnimateDiff + ControlNet pipeline ready (mode=%s)", mode.value)
+
+    # ─── ANIMATION GENERATION ────────────────────────────────
+
+    def generate_animation(
+        self,
+        req: AnimationRequest,
+        on_frame: Optional[Callable[[AnimationFrameResponse], None]] = None,
+        on_progress: Optional[Callable[[ProgressResponse], None]] = None,
+    ) -> list[AnimationFrameResponse]:
+        """Generate multi-frame animation — dispatches to chain or animatediff method."""
+        if not self._loaded:
+            self.load()
+
+        self._cancel_event.clear()
+
+        try:
+            # Handle LoRA same as single generation
+            if req.lora is not None:
+                if req.lora.name != self._current_pixel_lora or req.lora.weight != self._current_pixel_lora_weight:
+                    self.set_pixel_lora(req.lora.name, req.lora.weight)
+
+            if req.method == AnimationMethod.CHAIN:
+                return self._generate_chain(req, on_frame, on_progress)
+            elif req.method == AnimationMethod.ANIMATEDIFF:
+                return self._generate_animatediff(req, on_frame, on_progress)
+            else:
+                raise ValueError(f"Unknown animation method: {req.method}")
+
+        except torch.cuda.OutOfMemoryError:
+            log.error("CUDA OOM during animation — clearing VRAM cache")
+            torch.cuda.empty_cache()
+            raise
+        finally:
+            self._cancel_event.clear()
+
+    def _generate_chain(
+        self,
+        req: AnimationRequest,
+        on_frame: Optional[Callable[[AnimationFrameResponse], None]],
+        on_progress: Optional[Callable[[ProgressResponse], None]],
+    ) -> list[AnimationFrameResponse]:
+        """Frame-by-frame chaining: each frame feeds into the next via img2img."""
+        # Disable DeepCache — its cur_timestep guard causes torch.compile
+        # recompilation storm across multiple sequential generations
+        deepcache_was_enabled = self._deepcache_helper is not None
+        if deepcache_was_enabled:
+            try:
+                self._deepcache_helper.disable()
+                log.info("DeepCache disabled for chain animation")
+            except Exception as e:
+                log.warning("Failed to disable DeepCache: %s", e)
+
+        # Swap compiled UNet → raw _orig_mod for chain mode.
+        # After Dynamo reset, frame 0 (txt2img) and frame 1 (img2img) would
+        # each trigger 30-60s full recompilation due to different control flow.
+        # Using the raw UNet avoids this entirely — the per-step penalty (~20%)
+        # is negligible compared to the recompilation cost.
+        compiled_unet = self._pipe.unet
+        raw_unet = self._get_uncompiled_unet()
+        swapped = raw_unet is not compiled_unet
+        if swapped:
+            self._pipe.unet = raw_unet
+            self._img2img_pipe.unet = raw_unet
+            if self._controlnet_pipe is not None:
+                self._controlnet_pipe.unet = raw_unet
+            log.info("Compiled UNet swapped for raw module (chain mode)")
+
+        try:
+            return self._generate_chain_inner(req, on_frame, on_progress)
+        finally:
+            # Restore compiled UNet for single-frame generation
+            if swapped:
+                self._pipe.unet = compiled_unet
+                self._img2img_pipe.unet = compiled_unet
+                if self._controlnet_pipe is not None:
+                    self._controlnet_pipe.unet = compiled_unet
+                log.info("Compiled UNet restored after chain animation")
+            if deepcache_was_enabled and self._deepcache_helper is not None:
+                try:
+                    self._deepcache_helper.enable()
+                    log.info("DeepCache re-enabled after chain animation")
+                except Exception as e:
+                    log.warning("Failed to re-enable DeepCache: %s", e)
+
+    def _generate_chain_inner(
+        self,
+        req: AnimationRequest,
+        on_frame: Optional[Callable[[AnimationFrameResponse], None]],
+        on_progress: Optional[Callable[[ProgressResponse], None]],
+    ) -> list[AnimationFrameResponse]:
+        """Core chain animation logic."""
+        frames: list[AnimationFrameResponse] = []
+        base_seed = req.seed if req.seed >= 0 else int(torch.randint(0, 2**32, (1,)).item())
+        prev_image: Optional[Image.Image] = None
+        t0_total = time.perf_counter()
+
+        effective_neg = self._build_effective_negative(req.negative_prompt, req.negative_ti)
+
+        with torch.inference_mode():
+            for frame_idx in range(req.frame_count):
+                if self._cancel_event.is_set():
+                    raise GenerationCancelled("Animation cancelled by client")
+
+                t0_frame = time.perf_counter()
+
+                # Resolve seed per strategy
+                if req.seed_strategy == SeedStrategy.FIXED:
+                    frame_seed = base_seed
+                elif req.seed_strategy == SeedStrategy.INCREMENT:
+                    frame_seed = base_seed + frame_idx
+                else:  # RANDOM
+                    frame_seed = int(torch.randint(0, 2**32, (1,)).item())
+
+                generator = torch.Generator("cuda").manual_seed(frame_seed)
+
+                # Progress callback with frame context
+                def step_callback(pipe, step_idx, timestep, callback_kwargs):
+                    if self._cancel_event.is_set():
+                        raise GenerationCancelled("Animation cancelled by client")
+                    if on_progress:
+                        on_progress(ProgressResponse(
+                            step=step_idx + 1, total=req.steps,
+                            frame_index=frame_idx, total_frames=req.frame_count,
+                        ))
+                    return callback_kwargs
+
+                # Frame 0: use source or generate from scratch
+                if frame_idx == 0:
+                    if req.mode == GenerationMode.TXT2IMG:
+                        image = self._txt2img(
+                            _to_gen_req(req, frame_seed), generator, step_callback, effective_neg,
+                        )
+                    elif req.mode == GenerationMode.IMG2IMG:
+                        image = self._img2img(
+                            _to_gen_req(req, frame_seed), generator, step_callback, effective_neg,
+                        )
+                    elif req.mode.value.startswith("controlnet_"):
+                        image = self._controlnet_generate(
+                            _to_gen_req(req, frame_seed), generator, step_callback, effective_neg,
+                        )
+                    else:
+                        raise ValueError(f"Unknown mode: {req.mode}")
+                else:
+                    # Frame 1+: img2img from previous frame at denoise_strength
+                    source = prev_image
+                    target_w, target_h = _round8(req.width), _round8(req.height)
+                    if source.size != (target_w, target_h):
+                        source = source.resize((target_w, target_h), Image.LANCZOS)
+
+                    if req.mode.value.startswith("controlnet_") and req.control_image is not None:
+                        # ControlNet chain: use original control_image as anchor,
+                        # previous frame as conditioning via img2img-like denoise
+                        self._ensure_controlnet(req.mode)
+                        control = _decode_b64_image(req.control_image)
+                        if control.size != (target_w, target_h):
+                            control = control.resize((target_w, target_h), Image.LANCZOS)
+                        torch.compiler.cudagraph_mark_step_begin()
+                        image = self._controlnet_pipe(
+                            prompt=req.prompt,
+                            negative_prompt=effective_neg,
+                            image=control,
+                            num_inference_steps=req.steps,
+                            guidance_scale=req.cfg_scale,
+                            width=target_w,
+                            height=target_h,
+                            generator=generator,
+                            clip_skip=req.clip_skip,
+                            callback_on_step_end=step_callback,
+                            output_type="pil",
+                        ).images[0]
+                    else:
+                        # Standard img2img chain
+                        torch.compiler.cudagraph_mark_step_begin()
+                        image = self._img2img_pipe(
+                            prompt=req.prompt,
+                            negative_prompt=effective_neg,
+                            image=source,
+                            num_inference_steps=req.steps,
+                            guidance_scale=req.cfg_scale,
+                            strength=req.denoise_strength,
+                            generator=generator,
+                            clip_skip=req.clip_skip,
+                            callback_on_step_end=step_callback,
+                            output_type="pil",
+                        ).images[0]
+
+                # Post-process
+                image = postprocess_apply(image, req.post_process)
+                prev_image = image
+
+                # Encode
+                buf = BytesIO()
+                image.save(buf, format="PNG")
+                b64_image = b64encode(buf.getvalue()).decode("ascii")
+                w, h = image.size
+                elapsed_ms = int((time.perf_counter() - t0_frame) * 1000)
+
+                frame_resp = AnimationFrameResponse(
+                    frame_index=frame_idx,
+                    total_frames=req.frame_count,
+                    image=b64_image,
+                    seed=frame_seed,
+                    time_ms=elapsed_ms,
+                    width=w,
+                    height=h,
+                )
+                frames.append(frame_resp)
+                if on_frame:
+                    on_frame(frame_resp)
+
+        return frames
+
+    def _generate_animatediff(
+        self,
+        req: AnimationRequest,
+        on_frame: Optional[Callable[[AnimationFrameResponse], None]],
+        on_progress: Optional[Callable[[ProgressResponse], None]],
+    ) -> list[AnimationFrameResponse]:
+        """AnimateDiff motion module generation for temporal consistency."""
+        # Disable DeepCache (conflicts with motion module UNet wrapping)
+        deepcache_was_enabled = self._deepcache_helper is not None
+        if deepcache_was_enabled:
+            try:
+                self._deepcache_helper.disable()
+                log.info("DeepCache disabled for AnimateDiff generation")
+            except Exception as e:
+                log.warning("Failed to disable DeepCache: %s", e)
+
+        try:
+            return self._generate_animatediff_inner(req, on_frame, on_progress)
+        finally:
+            # Re-enable DeepCache
+            if deepcache_was_enabled and self._deepcache_helper is not None:
+                try:
+                    self._deepcache_helper.enable()
+                    log.info("DeepCache re-enabled after AnimateDiff generation")
+                except Exception as e:
+                    log.warning("Failed to re-enable DeepCache: %s", e)
+
+    def _generate_animatediff_inner(
+        self,
+        req: AnimationRequest,
+        on_frame: Optional[Callable[[AnimationFrameResponse], None]],
+        on_progress: Optional[Callable[[ProgressResponse], None]],
+    ) -> list[AnimationFrameResponse]:
+        """Core AnimateDiff generation logic."""
+        is_controlnet = req.mode.value.startswith("controlnet_")
+
+        if is_controlnet:
+            self._ensure_animatediff_controlnet(req.mode)
+            pipe = self._animatediff_controlnet_pipe
+        else:
+            self._ensure_animatediff()
+            pipe = self._animatediff_pipe
+
+        # FreeInit
+        if req.enable_freeinit:
+            try:
+                pipe.enable_free_init(
+                    num_iters=req.freeinit_iterations,
+                    use_fast_sampling=True,
+                )
+                log.info("FreeInit enabled (%d iterations)", req.freeinit_iterations)
+            except Exception as e:
+                log.warning("FreeInit unavailable: %s", e)
+
+        seed = req.seed if req.seed >= 0 else int(torch.randint(0, 2**32, (1,)).item())
+        generator = torch.Generator("cuda").manual_seed(seed)
+
+        effective_neg = self._build_effective_negative(req.negative_prompt, req.negative_ti)
+
+        # Progress callback
+        def step_callback(pipe_ref, step_idx, timestep, callback_kwargs):
+            if self._cancel_event.is_set():
+                raise GenerationCancelled("Animation cancelled by client")
+            if on_progress:
+                on_progress(ProgressResponse(
+                    step=step_idx + 1, total=req.steps,
+                    frame_index=0, total_frames=req.frame_count,
+                ))
+            return callback_kwargs
+
+        t0 = time.perf_counter()
+
+        with torch.inference_mode():
+            kwargs = dict(
+                prompt=req.prompt,
+                negative_prompt=effective_neg,
+                num_frames=req.frame_count,
+                num_inference_steps=req.steps,
+                guidance_scale=req.cfg_scale,
+                width=_round8(req.width),
+                height=_round8(req.height),
+                generator=generator,
+                clip_skip=req.clip_skip,
+                callback_on_step_end=step_callback,
+                output_type="pil",
+            )
+
+            if is_controlnet and req.control_image is not None:
+                control = _decode_b64_image(req.control_image)
+                target_w, target_h = _round8(req.width), _round8(req.height)
+                if control.size != (target_w, target_h):
+                    control = control.resize((target_w, target_h), Image.LANCZOS)
+                # Repeat control image for all frames
+                kwargs["conditioning_frames"] = [control] * req.frame_count
+
+            output = pipe(**kwargs)
+
+        # Extract frames from output
+        pil_frames = output.frames[0] if isinstance(output.frames[0], list) else output.frames
+
+        # Disable FreeInit for next normal generation
+        if req.enable_freeinit:
+            try:
+                pipe.disable_free_init()
+            except Exception:
+                pass
+
+        # Post-process and encode each frame
+        frames: list[AnimationFrameResponse] = []
+        for frame_idx, pil_img in enumerate(pil_frames):
+            image = postprocess_apply(pil_img, req.post_process)
+
+            buf = BytesIO()
+            image.save(buf, format="PNG")
+            b64_image = b64encode(buf.getvalue()).decode("ascii")
+            w, h = image.size
+            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+
+            frame_resp = AnimationFrameResponse(
+                frame_index=frame_idx,
+                total_frames=len(pil_frames),
+                image=b64_image,
+                seed=seed,
+                time_ms=elapsed_ms,
+                width=w,
+                height=h,
+            )
+            frames.append(frame_resp)
+            if on_frame:
+                on_frame(frame_resp)
+
+        return frames
+
 
 # ─────────────────────────────────────────────────────────────
 # UTILITIES
@@ -600,3 +1102,24 @@ def _decode_b64_image(data: str) -> Image.Image:
         return Image.open(BytesIO(raw)).convert("RGB")
     except Exception as e:
         raise ValueError(f"Invalid base64 image data: {e}") from e
+
+
+def _to_gen_req(anim_req: AnimationRequest, seed: int) -> GenerateRequest:
+    """Convert AnimationRequest to GenerateRequest for single-frame dispatch."""
+    return GenerateRequest(
+        prompt=anim_req.prompt,
+        negative_prompt=anim_req.negative_prompt,
+        mode=anim_req.mode,
+        width=anim_req.width,
+        height=anim_req.height,
+        source_image=anim_req.source_image,
+        control_image=anim_req.control_image,
+        seed=seed,
+        steps=anim_req.steps,
+        cfg_scale=anim_req.cfg_scale,
+        denoise_strength=anim_req.denoise_strength,
+        clip_skip=anim_req.clip_skip,
+        lora=anim_req.lora,
+        negative_ti=anim_req.negative_ti,
+        post_process=anim_req.post_process,
+    )

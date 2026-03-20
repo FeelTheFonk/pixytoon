@@ -64,11 +64,22 @@ class Settings(BaseSettings):
     freeu_b2: float = 1.6
 
     # ── Timeouts ─────────────────────────────────────────────
-    generation_timeout: float = 300.0  # 5 minutes max per generation
+    generation_timeout: float = 600.0  # 10 minutes max per generation
 
     # ── rembg ────────────────────────────────────────────────
     rembg_model: str = "birefnet-general"
     rembg_on_cpu: bool = True  # Keep GPU free for diffusion
+
+    # ── Animation ────────────────────────────────────────────
+    default_anim_frames: int = 8
+    default_anim_duration_ms: int = 100
+    default_anim_denoise: float = 0.30
+    max_animation_frames: int = 120
+
+    # ── AnimateDiff ──────────────────────────────────────────
+    animatediff_model: str = "guoyww/animatediff-motion-adapter-v1-5-3"
+    enable_freeinit: bool = False
+    freeinit_iterations: int = 2
 
     model_config = {"env_prefix": "PIXYTOON_"}
 

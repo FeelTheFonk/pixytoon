@@ -1,7 +1,7 @@
-"""Download all required models: SD1.5 checkpoint, Hyper-SD LoRA, pixel art LoRAs, ControlNets.
+"""Download all required models: SD1.5 checkpoint, Hyper-SD LoRA, pixel art LoRAs, ControlNets, AnimateDiff.
 
 Usage:
-    python scripts/download_models.py [--all] [--checkpoint] [--hyper-sd] [--loras] [--controlnets]
+    python scripts/download_models.py [--all] [--checkpoint] [--hyper-sd] [--loras] [--controlnets] [--animatediff]
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 def download_checkpoint() -> None:
     from huggingface_hub import snapshot_download
-    print("[1/4] Downloading SD1.5 checkpoint: Lykon/dreamshaper-8 ...")
+    print("[1/5] Downloading SD1.5 checkpoint: Lykon/dreamshaper-8 ...")
     # Pre-cache in HF cache — engine loads by repo ID at startup
     snapshot_download(
         "Lykon/dreamshaper-8",
@@ -26,14 +26,14 @@ def download_checkpoint() -> None:
 
 def download_hyper_sd_lora() -> None:
     from huggingface_hub import hf_hub_download
-    print("[2/4] Downloading Hyper-SD LoRA: ByteDance/Hyper-SD ...")
+    print("[2/5] Downloading Hyper-SD LoRA: ByteDance/Hyper-SD ...")
     hf_hub_download("ByteDance/Hyper-SD", filename="Hyper-SD15-8steps-CFG-lora.safetensors")
     print("  [OK] Hyper-SD LoRA cached.")
 
 
 def download_pixel_loras() -> None:
     from huggingface_hub import hf_hub_download
-    print("[3/4] Downloading pixel art LoRAs ...")
+    print("[3/5] Downloading pixel art LoRAs ...")
     loras_dir = _PROJECT_ROOT / "server" / "models" / "loras"
     loras_dir.mkdir(parents=True, exist_ok=True)
 
@@ -60,7 +60,7 @@ def download_pixel_loras() -> None:
 
 def download_embeddings() -> None:
     from huggingface_hub import hf_hub_download
-    print("[3b/4] Downloading negative TI embeddings ...")
+    print("[3b/5] Downloading negative TI embeddings ...")
     embeddings_dir = _PROJECT_ROOT / "server" / "models" / "embeddings"
     embeddings_dir.mkdir(parents=True, exist_ok=True)
 
@@ -98,7 +98,7 @@ def download_embeddings() -> None:
 
 def download_controlnets() -> None:
     from huggingface_hub import snapshot_download
-    print("[4/4] Downloading ControlNet v1.1 models ...")
+    print("[4/5] Downloading ControlNet v1.1 models ...")
     models = {
         "openpose": "lllyasviel/control_v11p_sd15_openpose",
         "canny": "lllyasviel/control_v11p_sd15_canny",
@@ -113,6 +113,16 @@ def download_controlnets() -> None:
     print("  [OK] ControlNet models cached.")
 
 
+def download_animatediff() -> None:
+    from huggingface_hub import snapshot_download
+    print("[5/5] Downloading AnimateDiff motion adapter ...")
+    snapshot_download(
+        "guoyww/animatediff-motion-adapter-v1-5-3",
+        ignore_patterns=["*.bin"],
+    )
+    print("  [OK] AnimateDiff motion adapter cached.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Download PixyToon models")
     parser.add_argument("--all", action="store_true", help="Download everything")
@@ -121,9 +131,10 @@ def main() -> None:
     parser.add_argument("--loras", action="store_true", help="Pixel art LoRAs")
     parser.add_argument("--embeddings", action="store_true", help="Negative TI embeddings")
     parser.add_argument("--controlnets", action="store_true", help="ControlNet v1.1 models")
+    parser.add_argument("--animatediff", action="store_true", help="AnimateDiff motion adapter")
     args = parser.parse_args()
 
-    if not any([args.all, args.checkpoint, args.hyper_sd, args.loras, args.embeddings, args.controlnets]):
+    if not any([args.all, args.checkpoint, args.hyper_sd, args.loras, args.embeddings, args.controlnets, args.animatediff]):
         args.all = True
 
     if args.all or args.checkpoint:
@@ -136,6 +147,8 @@ def main() -> None:
         download_embeddings()
     if args.all or args.controlnets:
         download_controlnets()
+    if args.all or args.animatediff:
+        download_animatediff()
 
     print("\n[OK] All downloads complete.")
 

@@ -310,6 +310,53 @@ def _extract_palette(img: Image.Image, n_colors: int) -> list[tuple[int, int, in
     return [tuple(int(x) for x in np.round(c)) for c in kmeans.cluster_centers_]
 
 
+@numba.jit(nopython=True, cache=True)
+def _fs_core(rgb, pal):
+    """Floyd-Steinberg error-diffusion kernel (Numba-accelerated)."""
+    h, w, _ = rgb.shape
+    n_pal = len(pal)
+    for y in range(h):
+        for x in range(w):
+            old_r = rgb[y, x, 0]
+            old_g = rgb[y, x, 1]
+            old_b = rgb[y, x, 2]
+            # Find nearest palette color
+            min_dist = 1e18
+            best = 0
+            for i in range(n_pal):
+                dr = pal[i, 0] - old_r
+                dg = pal[i, 1] - old_g
+                db = pal[i, 2] - old_b
+                d = dr * dr + dg * dg + db * db
+                if d < min_dist:
+                    min_dist = d
+                    best = i
+            rgb[y, x, 0] = pal[best, 0]
+            rgb[y, x, 1] = pal[best, 1]
+            rgb[y, x, 2] = pal[best, 2]
+            err_r = old_r - pal[best, 0]
+            err_g = old_g - pal[best, 1]
+            err_b = old_b - pal[best, 2]
+            # Distribute error to neighbors (Floyd-Steinberg weights)
+            if x + 1 < w:
+                rgb[y, x + 1, 0] += err_r * 0.4375
+                rgb[y, x + 1, 1] += err_g * 0.4375
+                rgb[y, x + 1, 2] += err_b * 0.4375
+            if y + 1 < h:
+                if x - 1 >= 0:
+                    rgb[y + 1, x - 1, 0] += err_r * 0.1875
+                    rgb[y + 1, x - 1, 1] += err_g * 0.1875
+                    rgb[y + 1, x - 1, 2] += err_b * 0.1875
+                rgb[y + 1, x, 0] += err_r * 0.3125
+                rgb[y + 1, x, 1] += err_g * 0.3125
+                rgb[y + 1, x, 2] += err_b * 0.3125
+                if x + 1 < w:
+                    rgb[y + 1, x + 1, 0] += err_r * 0.0625
+                    rgb[y + 1, x + 1, 1] += err_g * 0.0625
+                    rgb[y + 1, x + 1, 2] += err_b * 0.0625
+    return rgb
+
+
 def _floyd_steinberg(
     img: Image.Image,
     palette_rgb: list[tuple[int, int, int]],
@@ -325,51 +372,6 @@ def _floyd_steinberg(
         rgb = arr.copy()
 
     pal = np.array(palette_rgb, dtype=np.float64)
-
-    @numba.jit(nopython=True, cache=True)
-    def _fs_core(rgb, pal):
-        h, w, _ = rgb.shape
-        n_pal = len(pal)
-        for y in range(h):
-            for x in range(w):
-                old_r = rgb[y, x, 0]
-                old_g = rgb[y, x, 1]
-                old_b = rgb[y, x, 2]
-                # Find nearest palette color
-                min_dist = 1e18
-                best = 0
-                for i in range(n_pal):
-                    dr = pal[i, 0] - old_r
-                    dg = pal[i, 1] - old_g
-                    db = pal[i, 2] - old_b
-                    d = dr * dr + dg * dg + db * db
-                    if d < min_dist:
-                        min_dist = d
-                        best = i
-                rgb[y, x, 0] = pal[best, 0]
-                rgb[y, x, 1] = pal[best, 1]
-                rgb[y, x, 2] = pal[best, 2]
-                err_r = old_r - pal[best, 0]
-                err_g = old_g - pal[best, 1]
-                err_b = old_b - pal[best, 2]
-                # Distribute error to neighbors (Floyd-Steinberg weights)
-                if x + 1 < w:
-                    rgb[y, x + 1, 0] += err_r * 0.4375
-                    rgb[y, x + 1, 1] += err_g * 0.4375
-                    rgb[y, x + 1, 2] += err_b * 0.4375
-                if y + 1 < h:
-                    if x - 1 >= 0:
-                        rgb[y + 1, x - 1, 0] += err_r * 0.1875
-                        rgb[y + 1, x - 1, 1] += err_g * 0.1875
-                        rgb[y + 1, x - 1, 2] += err_b * 0.1875
-                    rgb[y + 1, x, 0] += err_r * 0.3125
-                    rgb[y + 1, x, 1] += err_g * 0.3125
-                    rgb[y + 1, x, 2] += err_b * 0.3125
-                    if x + 1 < w:
-                        rgb[y + 1, x + 1, 0] += err_r * 0.0625
-                        rgb[y + 1, x + 1, 1] += err_g * 0.0625
-                        rgb[y + 1, x + 1, 2] += err_b * 0.0625
-        return rgb
 
     rgb = _fs_core(rgb, pal)
     rgb = np.clip(rgb, 0, 255).astype(np.uint8)

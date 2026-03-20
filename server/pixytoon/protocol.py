@@ -14,6 +14,8 @@ from pydantic import BaseModel, Field
 
 class Action(str, Enum):
     GENERATE = "generate"
+    GENERATE_ANIMATION = "generate_animation"
+    CANCEL = "cancel"
     LIST_LORAS = "list_loras"
     LIST_PALETTES = "list_palettes"
     LIST_CONTROLNETS = "list_controlnets"
@@ -50,6 +52,17 @@ class PaletteMode(str, Enum):
     PRESET = "preset"
 
 
+class AnimationMethod(str, Enum):
+    CHAIN = "chain"
+    ANIMATEDIFF = "animatediff"
+
+
+class SeedStrategy(str, Enum):
+    FIXED = "fixed"
+    INCREMENT = "increment"
+    RANDOM = "random"
+
+
 # ─────────────────────────────────────────────────────────────
 # REQUEST MODELS
 # ─────────────────────────────────────────────────────────────
@@ -84,17 +97,20 @@ class PostProcessSpec(BaseModel):
     remove_bg: bool = False
 
 
+_DEFAULT_NEGATIVE = (
+    "blurry, antialiased, smooth gradient, photorealistic, 3d render, "
+    "soft edges, anti-aliasing, bokeh, depth of field, "
+    "low quality, worst quality, bad quality, jpeg artifacts, watermark, text, logo, "
+    "deformed, disfigured, bad anatomy, bad proportions, extra limbs, missing limbs, "
+    "extra fingers, fused fingers, poorly drawn hands, poorly drawn face, ugly, "
+    "realistic, photo, high resolution, complex shading"
+)
+
+
 class GenerateRequest(BaseModel):
     action: Action = Action.GENERATE
     prompt: str = ""
-    negative_prompt: str = (
-        "blurry, antialiased, smooth gradient, photorealistic, 3d render, "
-        "soft edges, anti-aliasing, bokeh, depth of field, "
-        "low quality, worst quality, bad quality, jpeg artifacts, watermark, text, logo, "
-        "deformed, disfigured, bad anatomy, bad proportions, extra limbs, missing limbs, "
-        "extra fingers, fused fingers, poorly drawn hands, poorly drawn face, ugly, "
-        "realistic, photo, high resolution, complex shading"
-    )
+    negative_prompt: str = _DEFAULT_NEGATIVE
     mode: GenerationMode = GenerationMode.TXT2IMG
     width: int = Field(512, ge=64, le=2048)
     height: int = Field(512, ge=64, le=2048)
@@ -103,16 +119,44 @@ class GenerateRequest(BaseModel):
     seed: int = -1
     steps: int = Field(8, ge=1, le=100)
     cfg_scale: float = Field(5.0, ge=0.0, le=30.0)
-    denoise_strength: float = Field(0.75, ge=0.0, le=1.0)
+    denoise_strength: float = Field(1.0, ge=0.0, le=1.0)
     clip_skip: int = Field(2, ge=1, le=12)
     lora: Optional[LoRASpec] = None
     negative_ti: Optional[list[EmbeddingSpec]] = None
     post_process: PostProcessSpec = Field(default_factory=PostProcessSpec)
 
 
+class AnimationRequest(BaseModel):
+    action: Action = Action.GENERATE_ANIMATION
+    method: AnimationMethod = AnimationMethod.CHAIN
+    prompt: str = ""
+    negative_prompt: str = _DEFAULT_NEGATIVE
+    mode: GenerationMode = GenerationMode.TXT2IMG
+    width: int = Field(512, ge=64, le=2048)
+    height: int = Field(512, ge=64, le=2048)
+    source_image: Optional[str] = None
+    control_image: Optional[str] = None
+    seed: int = -1
+    steps: int = Field(8, ge=1, le=100)
+    cfg_scale: float = Field(5.0, ge=0.0, le=30.0)
+    denoise_strength: float = Field(0.30, ge=0.0, le=1.0)
+    clip_skip: int = Field(2, ge=1, le=12)
+    lora: Optional[LoRASpec] = None
+    negative_ti: Optional[list[EmbeddingSpec]] = None
+    post_process: PostProcessSpec = Field(default_factory=PostProcessSpec)
+    # Animation-specific
+    frame_count: int = Field(8, ge=2, le=120)
+    frame_duration_ms: int = Field(100, ge=50, le=2000)
+    seed_strategy: SeedStrategy = SeedStrategy.INCREMENT
+    tag_name: Optional[str] = None
+    # AnimateDiff-specific
+    enable_freeinit: bool = False
+    freeinit_iterations: int = Field(2, ge=1, le=3)
+
+
 class Request(BaseModel):
     action: Action
-    # GenerateRequest fields are optional — only required for "generate"
+    # Shared generation fields (optional — only required for generate/generate_animation)
     prompt: Optional[str] = None
     negative_prompt: Optional[str] = None
     mode: Optional[GenerationMode] = None
@@ -128,10 +172,26 @@ class Request(BaseModel):
     lora: Optional[LoRASpec] = None
     negative_ti: Optional[list[EmbeddingSpec]] = None
     post_process: Optional[PostProcessSpec] = None
+    # Animation fields
+    method: Optional[AnimationMethod] = None
+    frame_count: Optional[int] = None
+    frame_duration_ms: Optional[int] = None
+    seed_strategy: Optional[SeedStrategy] = None
+    tag_name: Optional[str] = None
+    enable_freeinit: Optional[bool] = None
+    freeinit_iterations: Optional[int] = None
 
     def to_generate_request(self) -> GenerateRequest:
-        data = self.model_dump(exclude_none=True, exclude={"action"})
+        _anim_fields = {
+            "action", "method", "frame_count", "frame_duration_ms",
+            "seed_strategy", "tag_name", "enable_freeinit", "freeinit_iterations",
+        }
+        data = self.model_dump(exclude_none=True, exclude=_anim_fields)
         return GenerateRequest(**data)
+
+    def to_animation_request(self) -> AnimationRequest:
+        data = self.model_dump(exclude_none=True, exclude={"action"})
+        return AnimationRequest(**data)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -142,6 +202,8 @@ class ProgressResponse(BaseModel):
     type: str = "progress"
     step: int
     total: int
+    frame_index: Optional[int] = None
+    total_frames: Optional[int] = None
 
 
 class ResultResponse(BaseModel):
@@ -151,6 +213,24 @@ class ResultResponse(BaseModel):
     time_ms: int
     width: int
     height: int
+
+
+class AnimationFrameResponse(BaseModel):
+    type: str = "animation_frame"
+    frame_index: int
+    total_frames: int
+    image: str          # base64 PNG
+    seed: int
+    time_ms: int
+    width: int
+    height: int
+
+
+class AnimationCompleteResponse(BaseModel):
+    type: str = "animation_complete"
+    total_frames: int
+    total_time_ms: int
+    tag_name: Optional[str] = None
 
 
 class ErrorResponse(BaseModel):
