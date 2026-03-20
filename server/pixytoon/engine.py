@@ -14,7 +14,9 @@ Delegates construction and lifecycle concerns to:
 
 from __future__ import annotations
 
+import gc
 import logging
+import random
 import threading
 import time
 import warnings
@@ -203,6 +205,9 @@ class DiffusionEngine:
             log.info("Warmup complete in %.1fs", elapsed)
         except Exception as e:
             log.warning("Warmup generation failed (non-critical): %s", e)
+        finally:
+            gc.collect()
+            torch.cuda.empty_cache()
 
     def _load_embeddings(self) -> None:
         """Load all textual inversion embeddings from embeddings_dir."""
@@ -308,7 +313,7 @@ class DiffusionEngine:
                 t0 = time.perf_counter()
 
                 # Resolve seed
-                seed = req.seed if req.seed >= 0 else int(torch.randint(0, 2**32, (1,)).item())
+                seed = req.seed if req.seed >= 0 else random.randint(0, 2**32 - 1)
                 generator = torch.Generator("cuda").manual_seed(seed)
 
                 # Set pixel art LoRA — only if client explicitly specifies one.
@@ -390,6 +395,7 @@ class DiffusionEngine:
         if req.source_image is None:
             raise ValueError("img2img requires source_image")
         source = decode_b64_image(req.source_image)
+        source = source.convert("RGB")
         target_w, target_h = round8(req.width), round8(req.height)
         source = resize_to_target(source, target_w, target_h)
         torch.compiler.cudagraph_mark_step_begin()
@@ -414,6 +420,7 @@ class DiffusionEngine:
             raise ValueError("inpaint requires mask_image")
 
         source = decode_b64_image(req.source_image)
+        source = source.convert("RGB")
         mask = decode_b64_mask(req.mask_image)
         target_w, target_h = round8(req.width), round8(req.height)
         source = resize_to_target(source, target_w, target_h)
@@ -443,6 +450,7 @@ class DiffusionEngine:
 
         self._ensure_controlnet(req.mode)
         control = decode_b64_image(req.control_image)
+        control = control.convert("RGB")
         width = round8(req.width)
         height = round8(req.height)
         control = resize_to_target(control, width, height)
@@ -520,7 +528,6 @@ class DiffusionEngine:
         a completely different pipeline class (AnimateDiffPipeline), whose __call__ was never
         compiled — dynamo has no guards for it.
         """
-        from .animatediff_manager import get_uncompiled_unet
         raw_unet = get_uncompiled_unet(self._pipe)
         compiled_unet = self._pipe.unet
 
@@ -536,7 +543,10 @@ class DiffusionEngine:
                 torch._dynamo.reset()
                 return self._generate_chain_inner(req, on_frame, on_progress)
             finally:
-                torch._dynamo.reset()
+                try:
+                    torch._dynamo.reset()
+                except Exception:
+                    log.warning("torch._dynamo.reset() failed in chain cleanup")
                 # Restore compiled UNet before DeepCache re-enables
                 self._pipe.unet = compiled_unet
                 self._img2img_pipe.unet = compiled_unet
@@ -556,12 +566,25 @@ class DiffusionEngine:
         recompilation with stale guards, hanging indefinitely.
         """
         frames: list[AnimationFrameResponse] = []
-        base_seed = req.seed if req.seed >= 0 else int(torch.randint(0, 2**32, (1,)).item())
-        prev_image: Optional[Image.Image] = None
+        base_seed = req.seed if req.seed >= 0 else random.randint(0, 2**32 - 1)
         chain_source: Optional[Image.Image] = None
 
         effective_neg = self._build_effective_negative(req.negative_prompt, req.negative_ti)
         target_w, target_h = round8(req.width), round8(req.height)
+
+        # Pre-decode base64 images once (avoid re-decoding per frame)
+        _source_img = None
+        if req.source_image is not None:
+            _source_img = decode_b64_image(req.source_image).convert("RGB")
+            _source_img = resize_to_target(_source_img, target_w, target_h)
+        _mask_img = None
+        if req.mask_image is not None:
+            _mask_img = decode_b64_mask(req.mask_image)
+            _mask_img = resize_to_target(_mask_img, target_w, target_h)
+        _control_img = None
+        if req.control_image is not None:
+            _control_img = decode_b64_image(req.control_image).convert("RGB")
+            _control_img = resize_to_target(_control_img, target_w, target_h)
 
         log.info("Chain animation: %d frames, mode=%s, steps=%d, denoise=%.2f, seed_base=%d",
                  req.frame_count, req.mode.value, req.steps, req.denoise_strength, base_seed)
@@ -579,7 +602,7 @@ class DiffusionEngine:
                 elif req.seed_strategy == SeedStrategy.INCREMENT:
                     frame_seed = base_seed + frame_idx
                 else:  # RANDOM
-                    frame_seed = int(torch.randint(0, 2**32, (1,)).item())
+                    frame_seed = random.randint(0, 2**32 - 1)
 
                 generator = torch.Generator("cuda").manual_seed(frame_seed)
 
@@ -623,12 +646,12 @@ class DiffusionEngine:
                             output_type="pil",
                         ).images[0]
                     elif req.mode == GenerationMode.IMG2IMG:
-                        source = decode_b64_image(req.source_image)
-                        source = resize_to_target(source, target_w, target_h)
+                        if _source_img is None:
+                            raise ValueError("img2img requires source_image")
                         image = self._img2img_pipe(
                             prompt=req.prompt,
                             negative_prompt=effective_neg,
-                            image=source,
+                            image=_source_img,
                             num_inference_steps=req.steps,
                             guidance_scale=req.cfg_scale,
                             strength=req.denoise_strength,
@@ -638,16 +661,12 @@ class DiffusionEngine:
                             output_type="pil",
                         ).images[0]
                     elif req.mode == GenerationMode.INPAINT:
-                        if req.source_image is None or req.mask_image is None:
+                        if _source_img is None or _mask_img is None:
                             raise ValueError("inpaint requires source_image and mask_image")
-                        source = decode_b64_image(req.source_image)
-                        mask = decode_b64_mask(req.mask_image)
-                        source = resize_to_target(source, target_w, target_h)
-                        mask = resize_to_target(mask, target_w, target_h)
                         inpainted = self._img2img_pipe(
                             prompt=req.prompt,
                             negative_prompt=effective_neg,
-                            image=source,
+                            image=_source_img,
                             num_inference_steps=req.steps,
                             guidance_scale=req.cfg_scale,
                             strength=req.denoise_strength,
@@ -656,15 +675,15 @@ class DiffusionEngine:
                             callback_on_step_end=step_callback,
                             output_type="pil",
                         ).images[0]
-                        image = composite_with_mask(source, inpainted, mask)
+                        image = composite_with_mask(_source_img, inpainted, _mask_img)
                     elif req.mode.value.startswith("controlnet_"):
+                        if _control_img is None:
+                            raise ValueError("controlnet requires control_image")
                         self._ensure_controlnet(req.mode)
-                        control = decode_b64_image(req.control_image)
-                        control = resize_to_target(control, target_w, target_h)
                         image = self._controlnet_pipe(
                             prompt=req.prompt,
                             negative_prompt=effective_neg,
-                            image=control,
+                            image=_control_img,
                             num_inference_steps=req.steps,
                             guidance_scale=req.cfg_scale,
                             width=target_w,
@@ -680,14 +699,12 @@ class DiffusionEngine:
                     # Frame 1+: img2img from previous frame at denoise_strength
                     source = resize_to_target(chain_source, target_w, target_h)
 
-                    if req.mode.value.startswith("controlnet_") and req.control_image is not None:
+                    if req.mode.value.startswith("controlnet_") and _control_img is not None:
                         self._ensure_controlnet(req.mode)
-                        control = decode_b64_image(req.control_image)
-                        control = resize_to_target(control, target_w, target_h)
                         image = self._controlnet_pipe(
                             prompt=req.prompt,
                             negative_prompt=effective_neg,
-                            image=control,
+                            image=_control_img,
                             num_inference_steps=req.steps,
                             guidance_scale=req.cfg_scale,
                             width=target_w,
@@ -722,7 +739,6 @@ class DiffusionEngine:
 
                 # Post-process
                 image = postprocess_apply(image, req.post_process)
-                prev_image = image
 
                 # Encode
                 b64_image = encode_image_b64(image)
@@ -785,7 +801,7 @@ class DiffusionEngine:
             except Exception as e:
                 log.warning("FreeInit unavailable: %s", e)
 
-        seed = req.seed if req.seed >= 0 else int(torch.randint(0, 2**32, (1,)).item())
+        seed = req.seed if req.seed >= 0 else random.randint(0, 2**32 - 1)
         generator = torch.Generator("cuda").manual_seed(seed)
 
         effective_neg = self._build_effective_negative(req.negative_prompt, req.negative_ti)
@@ -819,7 +835,7 @@ class DiffusionEngine:
             )
 
             if is_controlnet and req.control_image is not None:
-                control = decode_b64_image(req.control_image)
+                control = decode_b64_image(req.control_image).convert("RGB")
                 target_w, target_h = round8(req.width), round8(req.height)
                 control = resize_to_target(control, target_w, target_h)
                 kwargs["conditioning_frames"] = [control] * req.frame_count

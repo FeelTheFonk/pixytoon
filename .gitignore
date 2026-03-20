@@ -36,3 +36,8 @@ Thumbs.db
 # Temp
 *.tmp
 *.pdb
+
+# Test output
+test_output/
+
+.claude/

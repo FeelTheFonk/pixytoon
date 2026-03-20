@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 from typing import Optional
 
@@ -19,7 +20,7 @@ from .freeu_applicator import apply_freeu
 from .pipeline_factory import CONTROLNET_IDS
 from .protocol import GenerationMode
 
-log = logging.getLogger("pixytoon.animatediff")
+log = logging.getLogger("pixytoon.animatediff_manager")
 
 
 def get_uncompiled_unet(pipe):
@@ -77,25 +78,30 @@ class AnimateDiffManager:
             return self.pipe
 
         log.info("Loading AnimateDiff motion adapter: %s", settings.animatediff_model)
-        self.motion_adapter = MotionAdapter.from_pretrained(
-            settings.animatediff_model,
-            torch_dtype=torch.float16,
-        ).to("cuda")
+        try:
+            self.motion_adapter = MotionAdapter.from_pretrained(
+                settings.animatediff_model,
+                torch_dtype=torch.float16,
+            ).to("cuda")
 
-        unet = get_uncompiled_unet(base_pipe)
-        strip_peft_from_unet(unet)
+            unet = get_uncompiled_unet(base_pipe)
+            strip_peft_from_unet(unet)
 
-        self.pipe = AnimateDiffPipeline(
-            vae=base_pipe.vae,
-            text_encoder=base_pipe.text_encoder,
-            tokenizer=base_pipe.tokenizer,
-            unet=unet,
-            motion_adapter=self.motion_adapter,
-            scheduler=base_pipe.scheduler,
-            feature_extractor=None,
-        )
-        self.pipe.to("cuda")
-        apply_freeu(self.pipe)
+            self.pipe = AnimateDiffPipeline(
+                vae=base_pipe.vae,
+                text_encoder=base_pipe.text_encoder,
+                tokenizer=base_pipe.tokenizer,
+                unet=unet,
+                motion_adapter=self.motion_adapter,
+                scheduler=copy.deepcopy(base_pipe.scheduler),
+                feature_extractor=None,
+            )
+            apply_freeu(self.pipe)
+        except Exception:
+            # Prevent VRAM leak: release adapter if pipeline creation failed
+            self.motion_adapter = None
+            self.pipe = None
+            raise
 
         log.info("AnimateDiff pipeline ready")
         return self.pipe
@@ -134,7 +140,7 @@ class AnimateDiffManager:
             unet=unet,
             motion_adapter=self.motion_adapter,
             controlnet=controlnet,
-            scheduler=base_pipe.scheduler,
+            scheduler=copy.deepcopy(base_pipe.scheduler),
             feature_extractor=None,
         )
         self.controlnet_pipe.to("cuda")

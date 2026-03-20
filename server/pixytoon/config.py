@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -50,7 +53,7 @@ class Settings(BaseSettings):
 
     # ── Performance ──────────────────────────────────────────
     enable_torch_compile: bool = True
-    compile_mode: str = "default"  # "default" | "max-autotune" | "reduce-overhead"
+    compile_mode: Literal["default", "max-autotune", "reduce-overhead"] = "default"
     enable_deepcache: bool = True
     enable_attention_slicing: bool = True
     enable_vae_tiling: bool = True
@@ -82,6 +85,16 @@ class Settings(BaseSettings):
     freeinit_iterations: int = 2
 
     model_config = {"env_prefix": "PIXYTOON_"}
+
+    @model_validator(mode='after')
+    def _warn_missing_dirs(self):
+        import logging
+        _log = logging.getLogger("pixytoon.config")
+        for name in ("models_dir", "loras_dir", "embeddings_dir", "palettes_dir"):
+            d = getattr(self, name)
+            if not d.is_dir():
+                _log.warning("Directory does not exist: %s=%s", name, d)
+        return self
 
 
 settings = Settings()

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ─────────────────────────────────────────────────────────────
@@ -127,6 +127,17 @@ class GenerateRequest(BaseModel):
     negative_ti: Optional[list[EmbeddingSpec]] = None
     post_process: PostProcessSpec = Field(default_factory=PostProcessSpec)
 
+    @model_validator(mode='after')
+    def _check_mode_images(self):
+        if self.mode == GenerationMode.IMG2IMG and self.source_image is None:
+            raise ValueError("img2img mode requires source_image")
+        if self.mode == GenerationMode.INPAINT:
+            if self.source_image is None or self.mask_image is None:
+                raise ValueError("inpaint mode requires source_image and mask_image")
+        if self.mode.value.startswith("controlnet_") and self.control_image is None:
+            raise ValueError(f"{self.mode.value} requires control_image")
+        return self
+
 
 class AnimationRequest(BaseModel):
     action: Action = Action.GENERATE_ANIMATION
@@ -203,7 +214,7 @@ class Request(BaseModel):
 # ─────────────────────────────────────────────────────────────
 
 class ProgressResponse(BaseModel):
-    type: str = "progress"
+    type: Literal["progress"] = "progress"
     step: int
     total: int
     frame_index: Optional[int] = None
@@ -211,7 +222,7 @@ class ProgressResponse(BaseModel):
 
 
 class ResultResponse(BaseModel):
-    type: str = "result"
+    type: Literal["result"] = "result"
     image: str          # base64 PNG RGBA
     seed: int
     time_ms: int
@@ -220,7 +231,7 @@ class ResultResponse(BaseModel):
 
 
 class AnimationFrameResponse(BaseModel):
-    type: str = "animation_frame"
+    type: Literal["animation_frame"] = "animation_frame"
     frame_index: int
     total_frames: int
     image: str          # base64 PNG
@@ -231,23 +242,23 @@ class AnimationFrameResponse(BaseModel):
 
 
 class AnimationCompleteResponse(BaseModel):
-    type: str = "animation_complete"
+    type: Literal["animation_complete"] = "animation_complete"
     total_frames: int
     total_time_ms: int
     tag_name: Optional[str] = None
 
 
 class ErrorResponse(BaseModel):
-    type: str = "error"
+    type: Literal["error"] = "error"
     code: str = "UNKNOWN"
     message: str
 
 
 class ListResponse(BaseModel):
-    type: str = "list"
+    type: Literal["list"] = "list"
     list_type: str  # "loras" | "palettes" | "controlnets" | "embeddings"
     items: list[str]
 
 
 class PongResponse(BaseModel):
-    type: str = "pong"
+    type: Literal["pong"] = "pong"

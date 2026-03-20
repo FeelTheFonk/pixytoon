@@ -29,31 +29,45 @@ class LoRAFuser:
             try:
                 pipe.unfuse_lora()
                 pipe.unload_lora_weights()
+                self.current_name = None
+                self.current_weight = 0.0
             except Exception as e:
-                log.warning("Failed to unfuse pixel art LoRA '%s': %s",
+                log.warning("Failed to unfuse pixel art LoRA '%s': %s — state may be corrupted",
                             self.current_name, e)
-            self.current_name = None
-            self.current_weight = 0.0
+                # Do NOT reset current_name/weight — they reflect the actual model state
+                raise
 
         if name is None:
-            if not had_lora:
-                return
-            if settings.enable_torch_compile:
-                torch._dynamo.reset()
+            if had_lora and settings.enable_torch_compile:
+                try:
+                    torch._dynamo.reset()
+                except Exception:
+                    pass
                 log.info("Dynamo cache reset after LoRA removal")
             return
 
         path = resolve_lora_path(name)
         log.info("Loading pixel art LoRA: %s (weight=%.2f)", name, weight)
-        pipe.load_lora_weights(
-            str(path),
-            adapter_name="pixel_art",
-        )
-        pipe.fuse_lora(lora_scale=weight)
+        try:
+            pipe.load_lora_weights(
+                str(path),
+                adapter_name="pixel_art",
+            )
+            pipe.fuse_lora(lora_scale=weight)
+        except Exception:
+            # Cleanup loaded but unfused weights
+            try:
+                pipe.unload_lora_weights()
+            except Exception:
+                pass
+            raise
         pipe.unload_lora_weights()
         self.current_name = name
         self.current_weight = weight
 
         if settings.enable_torch_compile:
-            torch._dynamo.reset()
+            try:
+                torch._dynamo.reset()
+            except Exception:
+                pass
             log.info("Dynamo cache reset after LoRA weight change (will recompile on next generation)")

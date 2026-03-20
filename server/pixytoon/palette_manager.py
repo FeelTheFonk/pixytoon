@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from .config import settings
+
+_SAFE_NAME = re.compile(r'^[\w\-. ]+$')
+
+
+def _validate_name(name: str, kind: str) -> None:
+    """Reject names with path traversal characters."""
+    if not name or not _SAFE_NAME.match(name) or '..' in name:
+        raise ValueError(f"Invalid {kind} name: {name!r}")
 
 
 def _hex_to_rgb(h: str) -> tuple[int, int, int]:
@@ -27,6 +36,7 @@ def list_palettes() -> list[str]:
 
 
 def load_palette(name: str) -> list[tuple[int, int, int]]:
+    _validate_name(name, "palette")
     path = settings.palettes_dir / f"{name}.json"
     if not path.is_file():
         raise FileNotFoundError(f"Palette not found: {name}")
@@ -34,7 +44,10 @@ def load_palette(name: str) -> list[tuple[int, int, int]]:
         data = json.load(f)
     if "colors" not in data or not isinstance(data["colors"], list):
         raise ValueError(f"Palette '{name}' missing 'colors' array")
-    return [_hex_to_rgb(c) for c in data["colors"]]
+    colors = [_hex_to_rgb(c) for c in data["colors"]]
+    if not colors:
+        raise ValueError(f"Palette '{name}' has no colors")
+    return colors
 
 
 def hex_list_to_rgb(colors: list[str]) -> list[tuple[int, int, int]]:

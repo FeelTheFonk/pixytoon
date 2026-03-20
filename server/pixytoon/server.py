@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time as _time
 from contextlib import asynccontextmanager
 
+import torch
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 import uvicorn
@@ -23,6 +25,7 @@ from .protocol import (
     ProgressResponse,
     Request,
 )
+from . import __version__
 from . import lora_manager, palette_manager, ti_manager
 from .postprocess import warmup_numba
 
@@ -39,7 +42,9 @@ log = logging.getLogger("pixytoon.server")
 
 engine = DiffusionEngine()
 _generate_lock: asyncio.Lock | None = None
-_generating = threading.Event()  # Track if a generation is in progress
+_generating: dict[int, threading.Event] = {}  # websocket id -> event
+_active_connections: set[WebSocket] = set()
+_MAX_CONNECTIONS = 5
 
 
 @asynccontextmanager
@@ -49,12 +54,17 @@ async def _lifespan(application: FastAPI):
 
     log.info("PixyToon server starting — loading diffusion engine...")
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, engine.load)
 
-    # Pre-trigger Numba JIT compilation for Floyd-Steinberg dithering
-    log.info("Pre-compiling Numba JIT kernels...")
-    await loop.run_in_executor(None, warmup_numba)
-    log.info("Numba JIT warmup complete")
+    # Run engine load and Numba JIT warmup in parallel (independent tasks)
+    async def _load_engine():
+        await loop.run_in_executor(None, engine.load)
+
+    async def _warmup_numba():
+        log.info("Pre-compiling Numba JIT kernels...")
+        await loop.run_in_executor(None, warmup_numba)
+        log.info("Numba JIT warmup complete")
+
+    await asyncio.gather(_load_engine(), _warmup_numba())
 
     log.info("Engine loaded. WebSocket ready on ws://%s:%d/ws", settings.host, settings.port)
     yield
@@ -62,7 +72,7 @@ async def _lifespan(application: FastAPI):
     log.info("Engine unloaded.")
 
 
-app = FastAPI(title="PixyToon Server", version="0.1.0", lifespan=_lifespan)
+app = FastAPI(title="PixyToon Server", version=__version__, lifespan=_lifespan)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -72,6 +82,17 @@ app = FastAPI(title="PixyToon Server", version="0.1.0", lifespan=_lifespan)
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket) -> None:
     await websocket.accept()
+
+    if len(_active_connections) >= _MAX_CONNECTIONS:
+        await websocket.send_text(ErrorResponse(
+            code="MAX_CONNECTIONS", message="Too many connections"
+        ).model_dump_json())
+        await websocket.close()
+        return
+    _active_connections.add(websocket)
+
+    ws_id = id(websocket)
+    _generating[ws_id] = threading.Event()
     log.info("Client connected: %s", websocket.client)
 
     try:
@@ -90,12 +111,15 @@ async def ws_endpoint(websocket: WebSocket) -> None:
 
     except WebSocketDisconnect:
         log.info("Client disconnected: %s", websocket.client)
-        if _generating.is_set():
+        if _generating.get(ws_id, threading.Event()).is_set():
             engine.cancel()
     except Exception as e:
         log.exception("WebSocket error: %s", e)
-        if _generating.is_set():
+        if _generating.get(ws_id, threading.Event()).is_set():
             engine.cancel()
+    finally:
+        _active_connections.discard(websocket)
+        _generating.pop(ws_id, None)
 
 
 async def _handle(websocket: WebSocket, req: Request) -> None:
@@ -105,7 +129,8 @@ async def _handle(websocket: WebSocket, req: Request) -> None:
             await _send(websocket, PongResponse())
 
         elif req.action == Action.CANCEL:
-            if _generating.is_set():
+            ws_id = id(websocket)
+            if _generating.get(ws_id, threading.Event()).is_set():
                 engine.cancel()
                 # Don't send response here — the GenerationCancelled exception
                 # handler will send CANCELLED when the generation actually stops.
@@ -121,12 +146,11 @@ async def _handle(websocket: WebSocket, req: Request) -> None:
             await _send(websocket, ListResponse(list_type="palettes", items=items))
 
         elif req.action == Action.LIST_CONTROLNETS:
-            await _send(websocket, ListResponse(list_type="controlnets", items=[
-                "controlnet_openpose",
-                "controlnet_canny",
-                "controlnet_scribble",
-                "controlnet_lineart",
-            ]))
+            from . import pipeline_factory
+            await _send(websocket, ListResponse(
+                list_type="controlnets",
+                items=[m.value for m in pipeline_factory.CONTROLNET_IDS],
+            ))
 
         elif req.action == Action.LIST_EMBEDDINGS:
             items = ti_manager.list_embeddings()
@@ -159,8 +183,9 @@ async def _handle(websocket: WebSocket, req: Request) -> None:
             # Serialize GPU access — pipeline is NOT thread-safe
             if _generate_lock is None:
                 raise RuntimeError("Server not fully initialized")
+            ws_id = id(websocket)
             async with _generate_lock:
-                _generating.set()
+                _generating[ws_id].set()
                 try:
                     result = await asyncio.wait_for(
                         loop.run_in_executor(
@@ -175,7 +200,7 @@ async def _handle(websocket: WebSocket, req: Request) -> None:
                         f"Generation timed out after {settings.generation_timeout:.0f}s"
                     )
                 finally:
-                    _generating.clear()
+                    _generating[ws_id].clear()
             await _send(websocket, result)
 
         elif req.action == Action.GENERATE_ANIMATION:
@@ -232,10 +257,10 @@ async def _handle(websocket: WebSocket, req: Request) -> None:
                 settings.generation_timeout,
                 anim_req.frame_count * 30,
             )
+            ws_id = id(websocket)
             async with _generate_lock:
-                _generating.set()
+                _generating[ws_id].set()
                 try:
-                    import time as _time
                     t0 = _time.perf_counter()
                     frames = await asyncio.wait_for(
                         loop.run_in_executor(
@@ -255,12 +280,18 @@ async def _handle(websocket: WebSocket, req: Request) -> None:
                         f"Animation timed out after {anim_timeout:.0f}s"
                     )
                 finally:
-                    _generating.clear()
+                    _generating[ws_id].clear()
 
             await _send(websocket, AnimationCompleteResponse(
                 total_frames=len(frames),
                 total_time_ms=total_ms,
                 tag_name=anim_req.tag_name,
+            ))
+
+        else:
+            await _send(websocket, ErrorResponse(
+                code="UNKNOWN_ACTION",
+                message=f"Unknown action: {req.action}",
             ))
 
     except GenerationCancelled:
@@ -269,24 +300,29 @@ async def _handle(websocket: WebSocket, req: Request) -> None:
             await _send(websocket, ErrorResponse(code="CANCELLED", message="Generation cancelled"))
         except Exception:
             pass
+    except torch.cuda.OutOfMemoryError as e:
+        log.exception("CUDA OOM: %s", e)
+        try:
+            await _send(websocket, ErrorResponse(code="OOM", message=str(e)))
+        except Exception:
+            pass
     except Exception as e:
         log.exception("Handler error: %s", e)
-        if "cancelled" in str(e).lower():
-            code = "CANCELLED"
-        elif "out of memory" in str(e).lower():
-            code = "OOM"
-        elif "timed out" in str(e).lower():
+        if "timed out" in str(e).lower():
             code = "TIMEOUT"
         else:
             code = "ENGINE_ERROR"
         try:
             await _send(websocket, ErrorResponse(code=code, message=str(e)))
         except Exception:
-            pass  # WebSocket already closed
+            pass
 
 
 async def _send(websocket: WebSocket, response) -> None:
-    await websocket.send_text(response.model_dump_json())
+    try:
+        await websocket.send_text(response.model_dump_json())
+    except (WebSocketDisconnect, RuntimeError):
+        pass  # Client already disconnected
 
 
 # ─────────────────────────────────────────────────────────────
@@ -295,7 +331,6 @@ async def _send(websocket: WebSocket, response) -> None:
 
 @app.get("/health")
 async def health_check() -> JSONResponse:
-    from . import __version__
     return JSONResponse({
         "status": "ok",
         "version": __version__,
@@ -313,6 +348,7 @@ def main() -> None:
         host=settings.host,
         port=settings.port,
         log_level="info",
+        ws_max_size=16 * 1024 * 1024,  # 16MB max WebSocket message
     )
 
 

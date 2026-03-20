@@ -139,7 +139,6 @@ def create_img2img_pipeline(
     return img2img
 
 
-
 def fresh_scheduler(base_pipe):
     """Create a fresh scheduler from the base pipeline's config.
 
@@ -147,7 +146,7 @@ def fresh_scheduler(base_pipe):
     The scheduler's internal state (timesteps, _step_index, num_inference_steps)
     mutates during each inference call and can accumulate stale state.
     """
-    return DDIMScheduler.from_config(base_pipe.scheduler.config)
+    return type(base_pipe.scheduler).from_config(base_pipe.scheduler.config)
 
 
 def create_controlnet_pipeline(
@@ -171,7 +170,7 @@ def create_controlnet_pipeline(
         tokenizer=pipe.tokenizer,
         unet=pipe.unet,
         controlnet=controlnet,
-        scheduler=pipe.scheduler,
+        scheduler=copy.deepcopy(pipe.scheduler),
         safety_checker=None,
         feature_extractor=None,
     )

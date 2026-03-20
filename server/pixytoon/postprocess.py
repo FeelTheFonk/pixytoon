@@ -133,6 +133,7 @@ def _quantize_kmeans(
     h, w, _ = rgb.shape
     pixels = rgb.reshape(-1, 3).astype(np.float32)
     n_pixels = len(pixels)
+    n_colors = min(n_colors, n_pixels)
 
     # Fast approximate unique color count (sample-based to avoid full sort)
     sample_size = min(4096, n_pixels)

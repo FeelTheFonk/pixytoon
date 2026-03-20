@@ -47,15 +47,22 @@ pixytoon/
 │   ├── run.py                   # Entry point
 │   ├── palettes/                # 7 preset palettes (JSON)
 │   └── pixytoon/                # Python package
+│       ├── __init__.py          # Package version (0.2.0)
 │       ├── config.py            # Pydantic Settings (env vars)
-│       ├── protocol.py          # WebSocket schemas (Pydantic)
-│       ├── engine.py            # SD1.5 SOTA pipeline
+│       ├── protocol.py          # WebSocket schemas (Pydantic v2)
+│       ├── engine.py            # SD1.5 SOTA pipeline orchestrator
 │       ├── server.py            # FastAPI WebSocket + HTTP server
+│       ├── pipeline_factory.py  # Pipeline construction, compile, scheduler
+│       ├── animatediff_manager.py # AnimateDiff lifecycle (load/inject/eject)
+│       ├── deepcache_manager.py # DeepCache toggle + suspend/resume
+│       ├── lora_fuser.py        # LoRA fuse/unfuse with dynamo reset
+│       ├── freeu_applicator.py  # FreeU v2 application
 │       ├── postprocess.py       # 6-stage pixel art pipeline
-│       ├── rembg_wrapper.py     # Background removal (CPU)
-│       ├── lora_manager.py      # LoRA discovery
+│       ├── image_codec.py       # Base64 encode/decode, resize, composite
+│       ├── rembg_wrapper.py     # Background removal (CPU, lazy-load)
+│       ├── lora_manager.py      # LoRA discovery (path-validated)
 │       ├── ti_manager.py        # Textual Inversion discovery
-│       └── palette_manager.py   # Palette loading
+│       └── palette_manager.py   # Palette loading (path-validated)
 ```
 
 ## Features
@@ -123,6 +130,7 @@ Connect to `ws://127.0.0.1:9876/ws`. All messages are JSON.
 | Action               | Description                        |
 |----------------------|------------------------------------|
 | `ping`               | Health check, returns `pong`       |
+| `cancel`             | Cancel in-progress generation      |
 | `generate`           | Run single-frame generation        |
 | `generate_animation` | Run multi-frame animation          |
 | `list_loras`         | List available LoRAs               |
@@ -222,7 +230,7 @@ For inpainting, set `mode` to `"inpaint"` and include `source_image` (base64 PNG
 | `result`             | `image` (b64 PNG), `seed`, `time_ms`, `width`, `height`            |
 | `animation_frame`    | `frame_index`, `total_frames`, `image` (b64 PNG), `seed`, `time_ms`, `width`, `height` |
 | `animation_complete` | `total_frames`, `total_time_ms`, `tag_name` (opt)                  |
-| `error`              | `code` (`ENGINE_ERROR`, `OOM`, `CANCELLED`, `TIMEOUT`), `message`  |
+| `error`              | `code` (`ENGINE_ERROR`, `OOM`, `CANCELLED`, `TIMEOUT`, `INVALID_REQUEST`, `MAX_CONNECTIONS`, `UNKNOWN_ACTION`), `message` |
 | `list`               | `list_type`, `items`                                                |
 | `pong`               | (no fields)                                                         |
 
@@ -265,9 +273,7 @@ All prefixed with `PIXYTOON_`. Example: `PIXYTOON_PORT=8080`.
 | `DEFAULT_STEPS`            | `8`                                   | Default inference steps         |
 | `DEFAULT_CFG`              | `5.0`                                 | Default CFG scale               |
 | `DEFAULT_CLIP_SKIP`        | `2`                                   | CLIP skip layers (2 = stylized) |
-| `DEFAULT_QUANTIZE_COLORS`  | `32`                                  | Default palette colors          |
 | `DEFAULT_PIXEL_LORA_WEIGHT`| `1.0`                                 | Default LoRA fuse weight        |
-| `DEFAULT_NEGATIVE_TI`      | `auto`                                | Auto-load TI embeddings         |
 | `ENABLE_TORCH_COMPILE`     | `True`                                | UNet compilation (requires Triton + MSVC) |
 | `COMPILE_MODE`             | `default`                             | torch.compile mode (`default` / `max-autotune` / `reduce-overhead`) |
 | `ENABLE_DEEPCACHE`         | `True`                                | DeepCache acceleration          |
@@ -315,7 +321,7 @@ All prefixed with `PIXYTOON_`. Example: `PIXYTOON_PORT=8080`.
 | LoRA change is slow            | Expected: LoRA weight change triggers recompilation (~30-60s once) |
 | AnimateDiff OOM                | AnimateDiff needs ~8-10GB VRAM; reduce `frame_count` or resolution |
 | AnimateDiff slow first run     | Motion adapter downloads on first use (~97MB); subsequent runs use cache |
-| Chain animation hangs          | Fixed in v0.1.4: scheduler state now reset between frames          |
+| Chain animation hangs          | Fixed in v0.1.5: dynamo.reset + scheduler reset + RGBA→RGB fix     |
 
 ## License
 

@@ -57,6 +57,7 @@ local generating = false
 local available_palettes = {}
 local resources_requested = false
 local connect_timer = nil
+local heartbeat_timer = nil
 local gen_step_start = nil
 local _file_counter = 0
 
@@ -74,6 +75,56 @@ local handle_response
 local import_result
 local import_animation_frame
 local request_resources
+local start_heartbeat
+local stop_heartbeat
+
+-- ─── DRY HELPERS ─────────────────────────────────────────────
+
+local function get_tmp_dir()
+  return app.fs.tempPath or os.getenv("TEMP") or os.getenv("TMP") or "."
+end
+
+local function image_to_base64(img)
+  local tmp_dir = get_tmp_dir()
+  _file_counter = _file_counter + 1
+  local tmp = tmp_dir .. "/pixytoon_b64_" .. os.time() .. "_" .. _file_counter .. ".png"
+  img:saveAs(tmp)
+  local f = io.open(tmp, "rb")
+  if not f then return nil end
+  local data = f:read("*a")
+  f:close()
+  os.remove(tmp)
+  return base64_encode(data)
+end
+
+local function build_post_process()
+  local pp = {
+    pixelate = {
+      enabled = dlg.data.pixelate,
+      target_size = dlg.data.pixel_size
+    },
+    quantize_method = dlg.data.quantize_method,
+    quantize_colors = dlg.data.colors,
+    dither = dlg.data.dither,
+    palette = {
+      mode = dlg.data.palette_mode,
+    },
+    remove_bg = dlg.data.remove_bg
+  }
+  if dlg.data.palette_mode == "preset" then
+    pp.palette.name = dlg.data.palette_name
+  elseif dlg.data.palette_mode == "custom" then
+    local hex_str = dlg.data.palette_custom_colors or ""
+    local colors = {}
+    for hex in hex_str:gmatch("#?(%x%x%x%x%x%x)") do
+      table.insert(colors, "#" .. hex)
+    end
+    if #colors > 0 then
+      pp.palette.colors = colors
+    end
+  end
+  return pp
+end
 
 -- ─── WEBSOCKET ───────────────────────────────────────────────
 
@@ -85,19 +136,27 @@ end
 
 local function set_connected(state)
   connected = state
+  if state then
+    start_heartbeat()
+  else
+    stop_heartbeat()
+  end
   if dlg then
     if state then
       dlg:modify{ id = "connect_btn", text = "Disconnect" }
+      dlg:modify{ id = "generate_btn", enabled = true }
+      dlg:modify{ id = "animate_btn", enabled = true }
     else
       dlg:modify{ id = "connect_btn", text = "Connect" }
+      dlg:modify{ id = "generate_btn", enabled = false }
+      dlg:modify{ id = "cancel_btn", enabled = false }
+      dlg:modify{ id = "animate_btn", enabled = false }
       -- Re-enable buttons if stuck
       if generating then
         generating = false
-        dlg:modify{ id = "generate_btn", enabled = true }
       end
       if animating then
         animating = false
-        dlg:modify{ id = "animate_btn", enabled = true }
       end
     end
   end
@@ -108,6 +167,26 @@ local function stop_connect_timer()
     connect_timer:stop()
   end
   connect_timer = nil
+end
+
+stop_heartbeat = function()
+  if heartbeat_timer and heartbeat_timer.isRunning then
+    heartbeat_timer:stop()
+  end
+  heartbeat_timer = nil
+end
+
+start_heartbeat = function()
+  stop_heartbeat()
+  heartbeat_timer = Timer{
+    interval = 30.0,
+    ontick = function()
+      if connected and ws and not generating and not animating then
+        pcall(function() ws:sendText('{"action":"ping"}') end)
+      end
+    end,
+  }
+  heartbeat_timer:start()
 end
 
 local function connect()
@@ -148,7 +227,10 @@ local function connect()
         end
         local ok, response = pcall(json.decode, data)
         if not ok then return end
-        handle_response(response)
+        local hok, herr = pcall(handle_response, response)
+        if not hok then
+          update_status("Error: " .. tostring(herr))
+        end
       end
     end,
     deflate = false,
@@ -193,11 +275,17 @@ local function disconnect()
 end
 
 local function send(payload)
-  if not ws or not connected then
-    app.alert("Not connected to PixyToon server.\nStart the server and click Connect.")
+  if not connected or ws == nil then
+    app.alert("Not connected to PixyToon server.")
     return false
   end
-  ws:sendText(json.encode(payload))
+  local ok, err = pcall(function()
+    ws:sendText(json.encode(payload))
+  end)
+  if not ok then
+    update_status("Send failed: " .. tostring(err))
+    return false
+  end
   return true
 end
 
@@ -212,6 +300,7 @@ end
 
 handle_response = function(resp)
   if resp.type == "progress" then
+    if resp.total == nil or resp.total <= 0 then return end
     if dlg then
       local pct = math.floor((resp.step / resp.total) * 100)
       local eta_str = ""
@@ -245,6 +334,7 @@ handle_response = function(resp)
     if dlg then
       update_status("Done (" .. resp.time_ms .. "ms, seed=" .. resp.seed .. ")")
       dlg:modify{ id = "generate_btn", enabled = true }
+      dlg:modify{ id = "cancel_btn", enabled = false }
     end
     import_result(resp)
 
@@ -261,6 +351,7 @@ handle_response = function(resp)
       end
       update_status("Animation done (" .. resp.total_frames .. " frames, " .. resp.total_time_ms .. "ms" .. tag_str .. ")")
       dlg:modify{ id = "animate_btn", enabled = true }
+      dlg:modify{ id = "cancel_btn", enabled = false }
     end
 
     -- Set frame durations and create tag
@@ -292,13 +383,34 @@ handle_response = function(resp)
     anim_base_seed = 0
 
   elseif resp.type == "error" then
+    local was_animating = animating
     generating = false
     animating = false
     gen_step_start = nil
+
+    -- Finalize partial animation: set frame durations + tag for already-received frames
+    if was_animating and anim_frame_count > 0 then
+      local spr = app.sprite
+      if spr then
+        local dur = (dlg and dlg.data.anim_duration or 100) / 1000.0
+        for i = 0, anim_frame_count - 1 do
+          local fn = anim_start_frame + i
+          if spr.frames[fn] then
+            spr.frames[fn].duration = dur
+          end
+        end
+      end
+      anim_layer = nil
+      anim_start_frame = 0
+      anim_frame_count = 0
+      anim_base_seed = 0
+    end
+
     if dlg then
       update_status("Error: " .. resp.message)
       dlg:modify{ id = "generate_btn", enabled = true }
       dlg:modify{ id = "animate_btn", enabled = true }
+      dlg:modify{ id = "cancel_btn", enabled = false }
     end
     -- Don't show popup for user-initiated cancellation
     if resp.code ~= "CANCELLED" then
@@ -347,120 +459,127 @@ import_result = function(resp)
   local img_data = base64_decode(resp.image)
 
   _file_counter = _file_counter + 1
-  local tmp_dir = app.fs.tempPath or os.getenv("TEMP") or os.getenv("TMP") or "."
+  local tmp_dir = get_tmp_dir()
   local tmp = app.fs.joinPath(tmp_dir, "pixytoon_" .. os.time() .. "_" .. _file_counter .. ".png")
 
-  -- Write to temp file
-  local f = io.open(tmp, "wb")
-  if not f then
-    app.alert("Failed to create temp file")
-    return
+  local ok, err = pcall(function()
+    -- Write to temp file
+    local f = io.open(tmp, "wb")
+    if not f then
+      error("Failed to create temp file")
+    end
+    f:write(img_data)
+    f:close()
+
+    local spr = app.sprite
+    if spr == nil then
+      spr = Sprite(resp.width, resp.height, ColorMode.RGB)
+    end
+
+    -- Create new layer
+    local layer = spr:newLayer()
+    layer.name = "PixyToon #" .. (resp.seed or "?")
+
+    -- Load image and create cel
+    local img = Image{ fromFile = tmp }
+    if img then
+      spr:newCel(layer, app.frame, img, Point(0, 0))
+    end
+
+    -- Cleanup temp
+    os.remove(tmp)
+    app.refresh()
+  end)
+  if not ok then
+    pcall(os.remove, tmp)  -- cleanup temp file even on error
+    update_status("Import error: " .. tostring(err))
   end
-  f:write(img_data)
-  f:close()
-
-  local spr = app.sprite
-  if spr == nil then
-    spr = Sprite(resp.width, resp.height, ColorMode.RGB)
-  end
-
-  -- Create new layer
-  local layer = spr:newLayer()
-  layer.name = "PixyToon #" .. (resp.seed or "?")
-
-  -- Load image and create cel
-  local img = Image{ fromFile = tmp }
-  if img then
-    spr:newCel(layer, app.frame, img, Point(0, 0))
-  end
-
-  -- Cleanup temp
-  os.remove(tmp)
-  app.refresh()
 end
 
 -- ─── IMPORT ANIMATION FRAME ─────────────────────────────────
 
 import_animation_frame = function(resp)
+  if not animating then return end  -- Ignore frames after animation_complete
+
+  -- Guard: frame 0 must arrive first (it creates anim_layer)
+  if resp.frame_index ~= 0 and anim_layer == nil then return end
+
   local img_data = base64_decode(resp.image)
 
   _file_counter = _file_counter + 1
-  local tmp_dir = app.fs.tempPath or os.getenv("TEMP") or os.getenv("TMP") or "."
+  local tmp_dir = get_tmp_dir()
   local tmp = app.fs.joinPath(tmp_dir, "pixytoon_anim_" .. os.time() .. "_" .. _file_counter .. ".png")
 
-  local f = io.open(tmp, "wb")
-  if not f then return end
-  f:write(img_data)
-  f:close()
+  local ok, err = pcall(function()
+    local f = io.open(tmp, "wb")
+    if not f then return end
+    f:write(img_data)
+    f:close()
 
-  local spr = app.sprite
-  if spr == nil then
-    spr = Sprite(resp.width, resp.height, ColorMode.RGB)
-  end
-
-  -- Create dedicated animation layer on first frame
-  if resp.frame_index == 0 then
-    anim_layer = spr:newLayer()
-    anim_layer.name = "PixyToon Anim #" .. (resp.seed or "?")
-    anim_base_seed = resp.seed or 0
-    anim_frame_count = 0
-    -- Anchor: use last existing frame number as the start position
-    anim_start_frame = #spr.frames
-  end
-
-  -- Create frame at deterministic position
-  local frame_num
-  if resp.frame_index == 0 then
-    -- Reuse the last existing frame for frame 0
-    frame_num = anim_start_frame
-  else
-    -- Add new empty frame at the exact position after start
-    local target_pos = anim_start_frame + resp.frame_index
-    -- Ensure we don't exceed the frame array + 1
-    if target_pos > #spr.frames then
-      target_pos = #spr.frames + 1
+    local spr = app.sprite
+    if spr == nil then
+      spr = Sprite(resp.width, resp.height, ColorMode.RGB)
     end
-    local new_frame = spr:newEmptyFrame(target_pos)
-    frame_num = new_frame.frameNumber
-  end
 
-  -- Load image and create cel on animation layer at the exact frame
-  local img = Image{ fromFile = tmp }
-  if img and anim_layer and spr.frames[frame_num] then
-    spr:newCel(anim_layer, spr.frames[frame_num], img, Point(0, 0))
-  end
+    -- Create dedicated animation layer on first frame
+    if resp.frame_index == 0 then
+      anim_layer = spr:newLayer()
+      anim_layer.name = "PixyToon Anim #" .. (resp.seed or "?")
+      anim_base_seed = resp.seed or 0
+      anim_frame_count = 0
+      -- Anchor: use last existing frame number as the start position
+      anim_start_frame = #spr.frames
+    end
 
-  anim_frame_count = anim_frame_count + 1
+    -- Create frame at deterministic position
+    local frame_num
+    if resp.frame_index == 0 then
+      -- Reuse the last existing frame for frame 0
+      frame_num = anim_start_frame
+    else
+      -- Add new empty frame at the exact position after start
+      local target_pos = anim_start_frame + resp.frame_index
+      -- Ensure we don't exceed the frame array + 1
+      if target_pos > #spr.frames then
+        target_pos = #spr.frames + 1
+      end
+      local new_frame = spr:newEmptyFrame(target_pos)
+      frame_num = new_frame.frameNumber
+    end
 
-  os.remove(tmp)
-  app.refresh()
+    -- Load image and create cel on animation layer at the exact frame
+    local img = Image{ fromFile = tmp }
+    if img and anim_layer and spr.frames[frame_num] then
+      spr:newCel(anim_layer, spr.frames[frame_num], img, Point(0, 0))
+    end
 
-  if dlg then
-    update_status("Frame " .. (resp.frame_index + 1) .. "/" .. resp.total_frames .. " (" .. resp.time_ms .. "ms)")
+    anim_frame_count = anim_frame_count + 1
+
+    os.remove(tmp)
+    app.refresh()
+
+    if dlg then
+      update_status("Frame " .. (resp.frame_index + 1) .. "/" .. resp.total_frames .. " (" .. resp.time_ms .. "ms)")
+    end
+  end)
+  if not ok then
+    pcall(os.remove, tmp)  -- cleanup temp file even on error
+    update_status("Import error: " .. tostring(err))
   end
 end
 
 -- ─── CAPTURE ACTIVE LAYER ────────────────────────────────────
 
 local function capture_active_layer()
+  local spr = app.sprite
+  if spr == nil then return nil end
   local cel = app.cel
-  if cel == nil then return nil end
-
-  local img = cel.image
-  if img == nil then return nil end
-
-  _file_counter = _file_counter + 1
-  local tmp_dir = app.fs.tempPath or os.getenv("TEMP") or os.getenv("TMP") or "."
-  local tmp = app.fs.joinPath(tmp_dir, "pixytoon_src_" .. os.time() .. "_" .. _file_counter .. ".png")
-  img:saveAs(tmp)
-
-  local f = io.open(tmp, "rb")
-  if not f then return nil end
-  local data = f:read("*a")
-  f:close()
-  os.remove(tmp)
-
-  return base64_encode(data)
+  if cel == nil or cel.image == nil then return nil end
+  -- Draw cel onto a full-size canvas to preserve correct positioning
+  local full = Image(spr.spec)
+  full:clear()
+  full:drawImage(cel.image, cel.position)
+  return image_to_base64(full)
 end
 
 -- ─── CAPTURE FLATTENED SPRITE ────────────────────────────────
@@ -474,18 +593,7 @@ local function capture_flattened()
   local flat_img = Image(spr.spec)
   flat_img:drawSprite(spr, app.frame)
 
-  _file_counter = _file_counter + 1
-  local tmp_dir = app.fs.tempPath or os.getenv("TEMP") or os.getenv("TMP") or "."
-  local tmp = app.fs.joinPath(tmp_dir, "pixytoon_flat_" .. os.time() .. "_" .. _file_counter .. ".png")
-  flat_img:saveAs(tmp)
-
-  local f = io.open(tmp, "rb")
-  if not f then return nil end
-  local data = f:read("*a")
-  f:close()
-  os.remove(tmp)
-
-  return base64_encode(data)
+  return image_to_base64(flat_img)
 end
 
 -- ─── CAPTURE MASK ────────────────────────────────────────────
@@ -507,16 +615,7 @@ local function capture_mask()
         end
       end
     end
-    _file_counter = _file_counter + 1
-    local tmp_dir = app.fs.tempPath or os.getenv("TEMP") or os.getenv("TMP") or "."
-    local tmp = app.fs.joinPath(tmp_dir, "pixytoon_mask_" .. os.time() .. "_" .. _file_counter .. ".png")
-    mask_img:saveAs(tmp)
-    local f = io.open(tmp, "rb")
-    if not f then return nil end
-    local data = f:read("*a")
-    f:close()
-    os.remove(tmp)
-    return base64_encode(data)
+    return image_to_base64(mask_img)
   end
 
   -- Strategy B: look for a layer named "Mask" or "mask"
@@ -524,16 +623,7 @@ local function capture_mask()
     if layer.name == "Mask" or layer.name == "mask" then
       local cel = layer:cel(app.frame)
       if cel and cel.image then
-        _file_counter = _file_counter + 1
-        local tmp_dir = app.fs.tempPath or os.getenv("TEMP") or os.getenv("TMP") or "."
-        local tmp = app.fs.joinPath(tmp_dir, "pixytoon_mask_" .. os.time() .. "_" .. _file_counter .. ".png")
-        cel.image:saveAs(tmp)
-        local f = io.open(tmp, "rb")
-        if not f then return nil end
-        local data = f:read("*a")
-        f:close()
-        os.remove(tmp)
-        return base64_encode(data)
+        return image_to_base64(cel.image)
       end
     end
   end
@@ -558,16 +648,7 @@ local function capture_mask()
         end
       end
     end
-    _file_counter = _file_counter + 1
-    local tmp_dir = app.fs.tempPath or os.getenv("TEMP") or os.getenv("TMP") or "."
-    local tmp = app.fs.joinPath(tmp_dir, "pixytoon_mask_" .. os.time() .. "_" .. _file_counter .. ".png")
-    mask_img:saveAs(tmp)
-    local f = io.open(tmp, "rb")
-    if not f then return nil end
-    local data = f:read("*a")
-    f:close()
-    os.remove(tmp)
-    return base64_encode(data)
+    return image_to_base64(mask_img)
   end
 
   return nil
@@ -578,10 +659,19 @@ end
 local function build_dialog()
   dlg = Dialog{
     title = "PixyToon — AI Pixel Art Generator",
+    onclose = function()
+      disconnect()
+    end
   }
 
   -- ── Connection ──
   dlg:separator{ text = "Connection" }
+  dlg:entry{
+    id = "server_url",
+    label = "Server",
+    text = SERVER_URL,
+    tooltip = "WebSocket server URL (e.g. ws://127.0.0.1:9876/ws)",
+  }
   dlg:label{ id = "status", text = "Disconnected" }
   dlg:button{
     id = "connect_btn",
@@ -590,6 +680,7 @@ local function build_dialog()
       if connected then
         disconnect()
       else
+        SERVER_URL = dlg.data.server_url or SERVER_URL
         connect()
       end
     end
@@ -620,6 +711,7 @@ local function build_dialog()
       "controlnet_scribble", "controlnet_lineart",
     },
     option = "txt2img",
+    tooltip = "Generation mode: text-to-image, image-to-image, inpaint, or ControlNet variants.",
   }
 
   dlg:combobox{
@@ -627,12 +719,30 @@ local function build_dialog()
     label = "LoRA",
     options = { "(default)" },
     option = "(default)",
+    tooltip = "Style LoRA to apply. Place .safetensors files in server/models/loras/.",
+  }
+
+  dlg:slider{
+    id = "lora_weight",
+    label = "LoRA Strength",
+    min = -200,
+    max = 200,
+    value = 100,
+    tooltip = "LoRA influence strength. 100 = full, 0 = none, negative = inverse."
   }
 
   dlg:entry{
     id = "prompt",
     label = "Prompt",
     text = "pixel art, PixArFK, game sprite, sharp pixels",
+    tooltip = "Describe what to generate. Comma-separated tags work best."
+  }
+
+  dlg:entry{
+    id = "negative_prompt",
+    label = "Neg. Prompt",
+    text = "blurry, antialiased, smooth gradient, photorealistic, 3d render, soft edges, low quality, worst quality",
+    tooltip = "Terms to avoid. Pre-filled with pixel art optimized defaults."
   }
 
   dlg:combobox{
@@ -643,12 +753,14 @@ local function build_dialog()
       "384x384", "256x256", "128x128", "64x64",
     },
     option = "512x512",
+    tooltip = "Generated image dimensions (must be multiple of 8)"
   }
 
   dlg:entry{
     id = "seed",
     label = "Seed (-1=rand)",
     text = "-1",
+    tooltip = "Seed for reproducibility. -1 = random each time."
   }
 
   dlg:slider{
@@ -657,6 +769,7 @@ local function build_dialog()
     min = 0,
     max = 100,
     value = 100,
+    tooltip = "Denoising strength. 100% = full redraw, lower = preserve more of source image."
   }
 
   dlg:slider{
@@ -665,14 +778,16 @@ local function build_dialog()
     min = 1,
     max = 50,
     value = 8,
+    tooltip = "Inference steps. 6-12 for Hyper-SD. More steps = slower but sometimes better."
   }
 
   dlg:slider{
     id = "cfg_scale",
-    label = "CFG (x10)",
+    label = "CFG Scale",
     min = 10,
     max = 200,
     value = 50,
+    tooltip = "Classifier-Free Guidance. Higher = more prompt adherence. 3-7 typical."
   }
 
   dlg:slider{
@@ -681,6 +796,7 @@ local function build_dialog()
     min = 1,
     max = 4,
     value = 2,
+    tooltip = "CLIP skip layers. 2 recommended for stylized/pixel art."
   }
 
   -- ── Post-Processing ──
@@ -690,6 +806,7 @@ local function build_dialog()
     id = "pixelate",
     label = "Pixelate",
     selected = true,
+    tooltip = "Enable pixel art downscaling to target size.",
   }
 
   dlg:slider{
@@ -698,6 +815,7 @@ local function build_dialog()
     min = 8,
     max = 256,
     value = 128,
+    tooltip = "Pixel art resolution (before upscale). Lower = more pixelated."
   }
 
   dlg:slider{
@@ -706,6 +824,7 @@ local function build_dialog()
     min = 2,
     max = 256,
     value = 32,
+    tooltip = "Max colors in final palette. Lower = more retro."
   }
 
   dlg:combobox{
@@ -713,6 +832,7 @@ local function build_dialog()
     label = "Quantize",
     options = { "kmeans", "median_cut", "octree" },
     option = "kmeans",
+    tooltip = "Color quantization algorithm. kmeans=best quality, octree=fastest.",
   }
 
   dlg:combobox{
@@ -720,6 +840,7 @@ local function build_dialog()
     label = "Dithering",
     options = { "none", "floyd_steinberg", "bayer_2x2", "bayer_4x4", "bayer_8x8" },
     option = "none",
+    tooltip = "Dithering algorithm for color reduction."
   }
 
   dlg:combobox{
@@ -727,6 +848,12 @@ local function build_dialog()
     label = "Palette",
     options = { "auto", "preset", "custom" },
     option = "auto",
+    tooltip = "auto=extract, preset=use palette file, custom=your hex colors.",
+    onchange = function()
+      local m = dlg.data.palette_mode
+      dlg:modify{ id = "palette_name", visible = (m == "preset") }
+      dlg:modify{ id = "palette_custom_colors", visible = (m == "custom") }
+    end
   }
 
   dlg:combobox{
@@ -734,18 +861,23 @@ local function build_dialog()
     label = "Preset",
     options = { "pico8" },  -- populated on connect
     option = "pico8",
+    visible = false,
+    tooltip = "Preset palette from server/palettes/.",
   }
 
   dlg:entry{
     id = "palette_custom_colors",
     label = "Custom Hex",
     text = "",  -- comma-separated: #ff0000,#00ff00,#0000ff
+    visible = false,
+    tooltip = "Comma-separated hex colors: #ff0000,#00ff00,#0000ff",
   }
 
   dlg:check{
     id = "remove_bg",
     label = "Remove BG",
     selected = false,
+    tooltip = "Remove background using AI (adds ~3-4s, CPU)."
   }
 
   -- ── Animation Settings ──
@@ -756,14 +888,21 @@ local function build_dialog()
     label = "Method",
     options = { "chain", "animatediff" },
     option = "chain",
+    tooltip = "chain=frame-by-frame img2img, animatediff=temporal coherence model.",
+    onchange = function()
+      local is_ad = dlg.data.anim_method == "animatediff"
+      dlg:modify{ id = "anim_freeinit", visible = is_ad }
+      dlg:modify{ id = "anim_freeinit_iters", visible = is_ad }
+    end
   }
 
   dlg:slider{
     id = "anim_frames",
     label = "Frames",
     min = 2,
-    max = 60,
+    max = 120,
     value = 8,
+    tooltip = "Total frames to generate."
   }
 
   dlg:slider{
@@ -772,6 +911,7 @@ local function build_dialog()
     min = 50,
     max = 500,
     value = 100,
+    tooltip = "Milliseconds per frame for playback."
   }
 
   dlg:slider{
@@ -780,6 +920,7 @@ local function build_dialog()
     min = 5,
     max = 100,
     value = 30,
+    tooltip = "Denoising per frame. Lower = more consistency between frames."
   }
 
   dlg:combobox{
@@ -787,18 +928,22 @@ local function build_dialog()
     label = "Seed Mode",
     options = { "increment", "fixed", "random" },
     option = "increment",
+    tooltip = "How seed changes between frames."
   }
 
   dlg:entry{
     id = "anim_tag",
     label = "Tag Name",
     text = "",
+    tooltip = "Aseprite tag name for the animation (e.g. walk, idle).",
   }
 
   dlg:check{
     id = "anim_freeinit",
     label = "FreeInit",
     selected = false,
+    visible = false,
+    tooltip = "FreeInit: improve temporal consistency (AnimateDiff only, slower)."
   }
 
   dlg:slider{
@@ -807,6 +952,8 @@ local function build_dialog()
     min = 1,
     max = 3,
     value = 2,
+    visible = false,
+    tooltip = "FreeInit iterations (higher = better consistency, slower).",
   }
 
   -- ── Actions (all action buttons grouped together) ──
@@ -814,72 +961,41 @@ local function build_dialog()
   dlg:button{
     id = "generate_btn",
     text = "GENERATE",
+    enabled = false,
     onclick = function()
       if generating then return end
+      if animating then return end
 
       -- Parse size
       local size_str = dlg.data.output_size
       local gw, gh = size_str:match("(%d+)x(%d+)")
       gw, gh = tonumber(gw), tonumber(gh)
 
+      -- Seed validation
+      local seed_text = dlg.data.seed
+      local seed_val = tonumber(seed_text) or -1
+      if seed_val ~= math.floor(seed_val) then seed_val = -1 end
+
       -- Build request
       local req = {
         action = "generate",
         prompt = dlg.data.prompt,
+        negative_prompt = dlg.data.negative_prompt,
         mode = dlg.data.mode,
         width = gw,
         height = gh,
-        seed = tonumber(dlg.data.seed) or -1,
+        seed = seed_val,
         steps = dlg.data.steps,
         cfg_scale = dlg.data.cfg_scale / 10.0,
         clip_skip = dlg.data.clip_skip,
         denoise_strength = dlg.data.denoise / 100.0,
-        post_process = {
-          pixelate = {
-            enabled = dlg.data.pixelate,
-            target_size = dlg.data.pixel_size,
-          },
-          quantize_method = dlg.data.quantize_method,
-          quantize_colors = dlg.data.colors,
-          dither = dlg.data.dither,
-          palette = {
-            mode = dlg.data.palette_mode,
-            name = dlg.data.palette_name,
-          },
-          remove_bg = dlg.data.remove_bg,
-        },
+        post_process = build_post_process(),
       }
 
       -- LoRA selection
       local lora_sel = dlg.data.lora_name
       if lora_sel and lora_sel ~= "(default)" then
-        req.lora = { name = lora_sel, weight = 1.0 }
-      end
-
-      -- Custom palette colors (with hex validation)
-      if dlg.data.palette_mode == "custom" then
-        local colors_str = dlg.data.palette_custom_colors or ""
-        if colors_str ~= "" then
-          local colors = {}
-          local invalid = false
-          for hex in colors_str:gmatch("[^,%s]+") do
-            local clean = hex:match("^#?(%x%x%x%x%x%x)$") or hex:match("^#?(%x%x%x)$")
-            if not clean then
-              app.alert("Invalid hex color: " .. hex .. "\nExpected format: #RRGGBB or #RGB")
-              invalid = true
-              break
-            end
-            -- Normalize #RGB → #RRGGBB
-            if #clean == 3 then
-              clean = clean:sub(1,1):rep(2) .. clean:sub(2,2):rep(2) .. clean:sub(3,3):rep(2)
-            end
-            colors[#colors + 1] = "#" .. clean
-          end
-          if invalid then return end
-          if #colors > 0 then
-            req.post_process.palette.colors = colors
-          end
-        end
+        req.lora = { name = lora_sel, weight = dlg.data.lora_weight / 100.0 }
       end
 
       -- Source image for img2img / ControlNet
@@ -917,6 +1033,7 @@ local function build_dialog()
       generating = true
       gen_step_start = os.clock()
       dlg:modify{ id = "generate_btn", enabled = false }
+      dlg:modify{ id = "cancel_btn", enabled = true }
       update_status("Generating...")
       send(req)
     end
@@ -925,6 +1042,7 @@ local function build_dialog()
   dlg:button{
     id = "cancel_btn",
     text = "CANCEL",
+    enabled = false,
     onclick = function()
       if generating or animating then
         send({ action = "cancel" })
@@ -936,8 +1054,10 @@ local function build_dialog()
   dlg:button{
     id = "animate_btn",
     text = "ANIMATE",
+    enabled = false,
     onclick = function()
       if animating then return end
+      if generating then return end
 
       -- Parse size (reuse from main generation section)
       local size_str = dlg.data.output_size
@@ -947,14 +1067,20 @@ local function build_dialog()
       local tag_name = dlg.data.anim_tag or ""
       if tag_name == "" then tag_name = nil end
 
+      -- Seed validation
+      local seed_text = dlg.data.seed
+      local seed_val = tonumber(seed_text) or -1
+      if seed_val ~= math.floor(seed_val) then seed_val = -1 end
+
       local req = {
         action = "generate_animation",
         method = dlg.data.anim_method,
         prompt = dlg.data.prompt,
+        negative_prompt = dlg.data.negative_prompt,
         mode = dlg.data.mode,
         width = gw,
         height = gh,
-        seed = tonumber(dlg.data.seed) or -1,
+        seed = seed_val,
         steps = dlg.data.steps,
         cfg_scale = dlg.data.cfg_scale / 10.0,
         clip_skip = dlg.data.clip_skip,
@@ -965,52 +1091,13 @@ local function build_dialog()
         tag_name = tag_name,
         enable_freeinit = dlg.data.anim_freeinit,
         freeinit_iterations = dlg.data.anim_freeinit_iters,
-        post_process = {
-          pixelate = {
-            enabled = dlg.data.pixelate,
-            target_size = dlg.data.pixel_size,
-          },
-          quantize_method = dlg.data.quantize_method,
-          quantize_colors = dlg.data.colors,
-          dither = dlg.data.dither,
-          palette = {
-            mode = dlg.data.palette_mode,
-            name = dlg.data.palette_name,
-          },
-          remove_bg = dlg.data.remove_bg,
-        },
+        post_process = build_post_process(),
       }
 
       -- LoRA selection (same as single gen)
       local lora_sel = dlg.data.lora_name
       if lora_sel and lora_sel ~= "(default)" then
-        req.lora = { name = lora_sel, weight = 1.0 }
-      end
-
-      -- Custom palette colors
-      if dlg.data.palette_mode == "custom" then
-        local colors_str = dlg.data.palette_custom_colors or ""
-        if colors_str ~= "" then
-          local colors = {}
-          local invalid = false
-          for hex in colors_str:gmatch("[^,%s]+") do
-            local clean = hex:match("^#?(%x%x%x%x%x%x)$") or hex:match("^#?(%x%x%x)$")
-            if not clean then
-              app.alert("Invalid hex color: " .. hex .. "\nExpected format: #RRGGBB or #RGB")
-              invalid = true
-              break
-            end
-            -- Normalize #RGB → #RRGGBB
-            if #clean == 3 then
-              clean = clean:sub(1,1):rep(2) .. clean:sub(2,2):rep(2) .. clean:sub(3,3):rep(2)
-            end
-            colors[#colors + 1] = "#" .. clean
-          end
-          if invalid then return end
-          if #colors > 0 then
-            req.post_process.palette.colors = colors
-          end
-        end
+        req.lora = { name = lora_sel, weight = dlg.data.lora_weight / 100.0 }
       end
 
       -- Source image for img2img / ControlNet modes
@@ -1048,6 +1135,7 @@ local function build_dialog()
       animating = true
       gen_step_start = os.clock()
       dlg:modify{ id = "animate_btn", enabled = false }
+      dlg:modify{ id = "cancel_btn", enabled = true }
       update_status("Animating...")
       send(req)
     end

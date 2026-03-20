@@ -14,10 +14,11 @@ from .config import settings
 
 __all__ = ["remove_bg", "unload"]
 
-# Verify onnxruntime is available — rembg requires it at runtime
+_onnx_available = True
 try:
     import onnxruntime  # noqa: F401
 except ImportError as _e:
+    _onnx_available = False
     import logging as _logging
     _logging.getLogger("pixytoon.rembg").error(
         "onnxruntime is not installed — rembg background removal will fail. "
@@ -41,6 +42,8 @@ def _get_session():
 
 
 def remove_bg(img: Image.Image) -> Image.Image:
+    if not _onnx_available:
+        raise RuntimeError("Background removal unavailable: onnxruntime not installed")
     from rembg import remove
     session = _get_session()
     return remove(img, session=session)
@@ -49,5 +52,7 @@ def remove_bg(img: Image.Image) -> Image.Image:
 def unload():
     """Free the rembg session from memory."""
     global _session
+    import gc
     with _session_lock:
         _session = None
+    gc.collect()

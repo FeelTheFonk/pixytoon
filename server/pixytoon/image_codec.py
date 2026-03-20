@@ -14,10 +14,16 @@ def round8(v: int) -> int:
 
 
 def decode_b64_image(data: str) -> Image.Image:
-    """Decode a base64-encoded PNG into a PIL Image (RGB)."""
+    """Decode a base64-encoded PNG into a PIL Image (preserves alpha if present)."""
     try:
         raw = b64decode(data)
-        return Image.open(BytesIO(raw)).convert("RGB")
+        img = Image.open(BytesIO(raw))
+        # Convert palette/LA modes to standard RGB/RGBA
+        if img.mode in ("P", "PA"):
+            img = img.convert("RGBA")
+        elif img.mode == "L":
+            img = img.convert("RGB")
+        return img
     except Exception as e:
         raise ValueError(f"Invalid base64 image data: {e}") from e
 
@@ -59,6 +65,11 @@ def composite_with_mask(
     Applies binary threshold (128) to avoid soft edges in pixel art.
     Both images must be same size. Mask is converted to binary L mode.
     """
+    if original.size != inpainted.size:
+        raise ValueError(f"Size mismatch: original {original.size} vs inpainted {inpainted.size}")
+    if mask.size != original.size:
+        mask = mask.resize(original.size, Image.NEAREST)
+
     # Ensure all images are same mode for compositing
     if original.mode != inpainted.mode:
         inpainted = inpainted.convert(original.mode)
