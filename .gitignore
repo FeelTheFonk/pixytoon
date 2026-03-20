@@ -1,6 +1,5 @@
 # Aseprite binary (large, built from source)
-bin/aseprite/data/
-bin/aseprite/icudtl.dat
+bin/
 
 # Models (large, downloaded at runtime)
 server/models/
@@ -24,7 +23,6 @@ venv/
 
 # UV
 .uv/
-uv.lock
 
 # IDE
 .vscode/

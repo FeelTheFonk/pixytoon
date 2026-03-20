@@ -6,6 +6,7 @@ AnimateDiff motion module, and progress callbacks for the WebSocket server.
 
 from __future__ import annotations
 
+import copy
 import logging
 import threading
 import time
@@ -190,12 +191,15 @@ class DiffusionEngine:
                 log.warning("DeepCache unavailable: %s", e)
 
         # 7. Create img2img pipeline from same components
+        #    CRITICAL: scheduler must be a separate instance — txt2img and img2img
+        #    both call set_timesteps() which mutates internal state. Sharing one
+        #    scheduler causes chain animation to deadlock on the 3rd frame.
         self._img2img_pipe = StableDiffusionImg2ImgPipeline(
             vae=self._pipe.vae,
             text_encoder=self._pipe.text_encoder,
             tokenizer=self._pipe.tokenizer,
             unet=self._pipe.unet,
-            scheduler=self._pipe.scheduler,
+            scheduler=copy.deepcopy(self._pipe.scheduler),
             safety_checker=None,
             feature_extractor=None,
         )
@@ -340,6 +344,7 @@ class DiffusionEngine:
         self._pipe = None
         self._img2img_pipe = None
         self._controlnet_pipe = None
+        self._controlnet_mode = None
         self._deepcache_helper = None
         self._current_pixel_lora = None
         self._current_pixel_lora_weight = 0.0
@@ -862,47 +867,58 @@ class DiffusionEngine:
                 generator = torch.Generator("cuda").manual_seed(frame_seed)
 
                 # Progress callback with frame context
-                def step_callback(pipe, step_idx, timestep, callback_kwargs):
+                # Default args capture frame_idx by value (closure would capture by reference)
+                def step_callback(pipe, step_idx, timestep, callback_kwargs, _fi=frame_idx, _fc=req.frame_count):
                     if self._cancel_event.is_set():
                         raise GenerationCancelled("Animation cancelled by client")
                     if on_progress:
                         on_progress(ProgressResponse(
                             step=step_idx + 1, total=req.steps,
-                            frame_index=frame_idx, total_frames=req.frame_count,
+                            frame_index=_fi, total_frames=_fc,
                         ))
                     return callback_kwargs
 
-                # Frame 0: use source or generate from scratch
+                # Frame 0: initial generation (direct pipeline call — NO cudagraph markers)
+                # Chain mode uses raw (non-compiled) UNet, so _txt2img/_img2img
+                # wrappers must be avoided as they call cudagraph_mark_step_begin()
+                # which corrupts CUDA state for subsequent raw UNet calls.
+                target_w, target_h = _round8(req.width), _round8(req.height)
+
                 if frame_idx == 0:
                     if req.mode == GenerationMode.TXT2IMG:
-                        image = self._txt2img(
-                            _to_gen_req(req, frame_seed), generator, step_callback, effective_neg,
-                        )
+                        image = self._pipe(
+                            prompt=req.prompt,
+                            negative_prompt=effective_neg,
+                            num_inference_steps=req.steps,
+                            guidance_scale=req.cfg_scale,
+                            width=target_w,
+                            height=target_h,
+                            generator=generator,
+                            clip_skip=req.clip_skip,
+                            callback_on_step_end=step_callback,
+                            output_type="pil",
+                        ).images[0]
                     elif req.mode == GenerationMode.IMG2IMG:
-                        image = self._img2img(
-                            _to_gen_req(req, frame_seed), generator, step_callback, effective_neg,
-                        )
+                        source = _decode_b64_image(req.source_image)
+                        if source.size != (target_w, target_h):
+                            source = source.resize((target_w, target_h), Image.LANCZOS)
+                        image = self._img2img_pipe(
+                            prompt=req.prompt,
+                            negative_prompt=effective_neg,
+                            image=source,
+                            num_inference_steps=req.steps,
+                            guidance_scale=req.cfg_scale,
+                            strength=req.denoise_strength,
+                            generator=generator,
+                            clip_skip=req.clip_skip,
+                            callback_on_step_end=step_callback,
+                            output_type="pil",
+                        ).images[0]
                     elif req.mode.value.startswith("controlnet_"):
-                        image = self._controlnet_generate(
-                            _to_gen_req(req, frame_seed), generator, step_callback, effective_neg,
-                        )
-                    else:
-                        raise ValueError(f"Unknown mode: {req.mode}")
-                else:
-                    # Frame 1+: img2img from previous frame at denoise_strength
-                    source = prev_image
-                    target_w, target_h = _round8(req.width), _round8(req.height)
-                    if source.size != (target_w, target_h):
-                        source = source.resize((target_w, target_h), Image.LANCZOS)
-
-                    if req.mode.value.startswith("controlnet_") and req.control_image is not None:
-                        # ControlNet chain: use original control_image as anchor,
-                        # previous frame as conditioning via img2img-like denoise
                         self._ensure_controlnet(req.mode)
                         control = _decode_b64_image(req.control_image)
                         if control.size != (target_w, target_h):
                             control = control.resize((target_w, target_h), Image.LANCZOS)
-                        torch.compiler.cudagraph_mark_step_begin()
                         image = self._controlnet_pipe(
                             prompt=req.prompt,
                             negative_prompt=effective_neg,
@@ -917,8 +933,32 @@ class DiffusionEngine:
                             output_type="pil",
                         ).images[0]
                     else:
-                        # Standard img2img chain
-                        torch.compiler.cudagraph_mark_step_begin()
+                        raise ValueError(f"Unknown mode: {req.mode}")
+                else:
+                    # Frame 1+: img2img from previous frame at denoise_strength
+                    source = prev_image
+                    if source.size != (target_w, target_h):
+                        source = source.resize((target_w, target_h), Image.LANCZOS)
+
+                    if req.mode.value.startswith("controlnet_") and req.control_image is not None:
+                        self._ensure_controlnet(req.mode)
+                        control = _decode_b64_image(req.control_image)
+                        if control.size != (target_w, target_h):
+                            control = control.resize((target_w, target_h), Image.LANCZOS)
+                        image = self._controlnet_pipe(
+                            prompt=req.prompt,
+                            negative_prompt=effective_neg,
+                            image=control,
+                            num_inference_steps=req.steps,
+                            guidance_scale=req.cfg_scale,
+                            width=target_w,
+                            height=target_h,
+                            generator=generator,
+                            clip_skip=req.clip_skip,
+                            callback_on_step_end=step_callback,
+                            output_type="pil",
+                        ).images[0]
+                    else:
                         image = self._img2img_pipe(
                             prompt=req.prompt,
                             negative_prompt=effective_neg,
@@ -1105,7 +1145,10 @@ def _decode_b64_image(data: str) -> Image.Image:
 
 
 def _to_gen_req(anim_req: AnimationRequest, seed: int) -> GenerateRequest:
-    """Convert AnimationRequest to GenerateRequest for single-frame dispatch."""
+    """Convert AnimationRequest to GenerateRequest for single-frame dispatch.
+
+    post_process intentionally omitted — caller applies per-frame after generation.
+    """
     return GenerateRequest(
         prompt=anim_req.prompt,
         negative_prompt=anim_req.negative_prompt,
@@ -1121,5 +1164,4 @@ def _to_gen_req(anim_req: AnimationRequest, seed: int) -> GenerateRequest:
         clip_skip=anim_req.clip_skip,
         lora=anim_req.lora,
         negative_ti=anim_req.negative_ti,
-        post_process=anim_req.post_process,
     )

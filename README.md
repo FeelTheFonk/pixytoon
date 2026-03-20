@@ -219,7 +219,7 @@ Connect to `ws://127.0.0.1:9876/ws`. All messages are JSON.
 
 Executed in strict order (non-negotiable):
 
-1. **Background Removal** — rembg with BiRefNet-general (CPU, configurable)
+1. **Background Removal** — rembg with u2net (CPU, fast ~3-4s). Configurable: birefnet-general (best edges), bria-rmbg (SOTA quality)
 2. **Pixelation** — NEAREST downscale to target size (aspect-ratio preserving)
 3. **Color Quantization** — MiniBatchKMeans (batch=4096) / PIL Median Cut / Octree
 4. **Palette Enforcement** — CIELAB nearest neighbor via cached KD-Tree
@@ -257,8 +257,8 @@ All prefixed with `PIXYTOON_`. Example: `PIXYTOON_PORT=8080`.
 | `FREEU_S2`                 | `0.2`                                 | FreeU v2 skip scale 2           |
 | `FREEU_B1`                 | `1.5`                                 | FreeU v2 backbone scale 1       |
 | `FREEU_B2`                 | `1.6`                                 | FreeU v2 backbone scale 2       |
-| `GENERATION_TIMEOUT`       | `300.0`                               | Max seconds per generation      |
-| `REMBG_MODEL`              | `birefnet-general`                    | Background removal model        |
+| `GENERATION_TIMEOUT`       | `600.0`                               | Max seconds per generation      |
+| `REMBG_MODEL`              | `u2net`                                 | Background removal model (u2net / birefnet-general / bria-rmbg) |
 | `REMBG_ON_CPU`             | `True`                                | Run rembg on CPU                |
 | `DEFAULT_ANIM_FRAMES`      | `8`                                   | Default animation frame count   |
 | `DEFAULT_ANIM_DURATION_MS` | `100`                                 | Default frame duration (ms)     |

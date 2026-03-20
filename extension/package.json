@@ -2,7 +2,7 @@
   "name": "pixytoon",
   "displayName": "PixyToon - AI Pixel Art Generator & Animator",
   "description": "Generate SOTA pixel art and animations using local Stable Diffusion + AnimateDiff from within Aseprite",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "PixyToon",
   "categories": ["Scripts"],
   "contributes": {

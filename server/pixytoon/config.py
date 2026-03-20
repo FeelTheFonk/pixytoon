@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     generation_timeout: float = 600.0  # 10 minutes max per generation
 
     # ── rembg ────────────────────────────────────────────────
-    rembg_model: str = "birefnet-general"
+    rembg_model: str = "u2net"  # Fast CPU (~3-4s). Alt: birefnet-general (best edges, ~10s), bria-rmbg (SOTA quality)
     rembg_on_cpu: bool = True  # Keep GPU free for diffusion
 
     # ── Animation ────────────────────────────────────────────

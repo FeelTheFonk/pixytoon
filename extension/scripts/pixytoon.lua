@@ -182,6 +182,13 @@ local function disconnect()
   end
   set_connected(false)
   resources_requested = false
+  -- Reset animation state to prevent stale references
+  anim_layer = nil
+  anim_start_frame = 0
+  anim_frame_count = 0
+  anim_base_seed = 0
+  generating = false
+  animating = false
   update_status("Disconnected")
 end
 
@@ -260,15 +267,18 @@ handle_response = function(resp)
     local spr = app.sprite
     if spr and anim_frame_count > 0 then
       local dur = (dlg and dlg.data.anim_duration or 100) / 1000.0
-      for i = anim_start_frame, anim_start_frame + anim_frame_count - 1 do
-        if spr.frames[i] then
-          spr.frames[i].duration = dur
+      for i = 0, anim_frame_count - 1 do
+        local fn = anim_start_frame + i
+        if spr.frames[fn] then
+          spr.frames[fn].duration = dur
         end
       end
 
       -- Create animation tag
-      if resp.tag_name and resp.tag_name ~= "" then
-        local tag = spr:newTag(anim_start_frame, anim_start_frame + anim_frame_count - 1)
+      local tag_start = anim_start_frame
+      local tag_end = anim_start_frame + anim_frame_count - 1
+      if resp.tag_name and resp.tag_name ~= "" and spr.frames[tag_start] and spr.frames[tag_end] then
+        local tag = spr:newTag(tag_start, tag_end)
         tag.name = resp.tag_name
       end
 
@@ -394,23 +404,30 @@ import_animation_frame = function(resp)
     anim_layer.name = "PixyToon Anim #" .. (resp.seed or "?")
     anim_base_seed = resp.seed or 0
     anim_frame_count = 0
+    -- Anchor: use last existing frame number as the start position
+    anim_start_frame = #spr.frames
   end
 
-  -- Create frame
-  local frame_obj
+  -- Create frame at deterministic position
+  local frame_num
   if resp.frame_index == 0 then
-    -- Use the current frame for frame 0
-    frame_obj = app.frame or spr.frames[#spr.frames]
-    anim_start_frame = frame_obj.frameNumber
+    -- Reuse the last existing frame for frame 0
+    frame_num = anim_start_frame
   else
-    -- Add new empty frame after the last one
-    frame_obj = spr:newEmptyFrame(#spr.frames + 1)
+    -- Add new empty frame at the exact position after start
+    local target_pos = anim_start_frame + resp.frame_index
+    -- Ensure we don't exceed the frame array + 1
+    if target_pos > #spr.frames then
+      target_pos = #spr.frames + 1
+    end
+    local new_frame = spr:newEmptyFrame(target_pos)
+    frame_num = new_frame.frameNumber
   end
 
-  -- Load image and create cel on animation layer
+  -- Load image and create cel on animation layer at the exact frame
   local img = Image{ fromFile = tmp }
-  if img and anim_layer then
-    spr:newCel(anim_layer, frame_obj, img, Point(0, 0))
+  if img and anim_layer and spr.frames[frame_num] then
+    spr:newCel(anim_layer, spr.frames[frame_num], img, Point(0, 0))
   end
 
   anim_frame_count = anim_frame_count + 1
@@ -532,6 +549,30 @@ local function build_dialog()
     value = 100,
   }
 
+  dlg:slider{
+    id = "steps",
+    label = "Steps",
+    min = 1,
+    max = 50,
+    value = 8,
+  }
+
+  dlg:slider{
+    id = "cfg_scale",
+    label = "CFG (x10)",
+    min = 10,
+    max = 200,
+    value = 50,
+  }
+
+  dlg:slider{
+    id = "clip_skip",
+    label = "CLIP Skip",
+    min = 1,
+    max = 4,
+    value = 2,
+  }
+
   -- ── Post-Processing ──
   dlg:separator{ text = "Post-Processing" }
 
@@ -597,6 +638,67 @@ local function build_dialog()
     selected = false,
   }
 
+  -- ── Animation Settings ──
+  dlg:separator{ text = "Animation Settings" }
+
+  dlg:combobox{
+    id = "anim_method",
+    label = "Method",
+    options = { "chain", "animatediff" },
+    option = "chain",
+  }
+
+  dlg:slider{
+    id = "anim_frames",
+    label = "Frames",
+    min = 2,
+    max = 60,
+    value = 8,
+  }
+
+  dlg:slider{
+    id = "anim_duration",
+    label = "Duration (ms)",
+    min = 50,
+    max = 500,
+    value = 100,
+  }
+
+  dlg:slider{
+    id = "anim_denoise",
+    label = "Denoise %",
+    min = 5,
+    max = 100,
+    value = 30,
+  }
+
+  dlg:combobox{
+    id = "anim_seed_strategy",
+    label = "Seed Mode",
+    options = { "increment", "fixed", "random" },
+    option = "increment",
+  }
+
+  dlg:entry{
+    id = "anim_tag",
+    label = "Tag Name",
+    text = "",
+  }
+
+  dlg:check{
+    id = "anim_freeinit",
+    label = "FreeInit",
+    selected = false,
+  }
+
+  dlg:slider{
+    id = "anim_freeinit_iters",
+    label = "FreeInit Iters",
+    min = 1,
+    max = 3,
+    value = 2,
+  }
+
   -- ── Actions (all action buttons grouped together) ──
   dlg:separator{ text = "Actions" }
   dlg:button{
@@ -610,7 +712,7 @@ local function build_dialog()
       local gw, gh = size_str:match("(%d+)x(%d+)")
       gw, gh = tonumber(gw), tonumber(gh)
 
-      -- Build request (server handles neg_prompt, steps, cfg, LoRA, embeddings defaults)
+      -- Build request
       local req = {
         action = "generate",
         prompt = dlg.data.prompt,
@@ -618,6 +720,9 @@ local function build_dialog()
         width = gw,
         height = gh,
         seed = tonumber(dlg.data.seed) or -1,
+        steps = dlg.data.steps,
+        cfg_scale = dlg.data.cfg_scale / 10.0,
+        clip_skip = dlg.data.clip_skip,
         denoise_strength = dlg.data.denoise / 100.0,
         post_process = {
           pixelate = {
@@ -654,7 +759,11 @@ local function build_dialog()
               invalid = true
               break
             end
-            colors[#colors + 1] = hex
+            -- Normalize #RGB → #RRGGBB
+            if #clean == 3 then
+              clean = clean:sub(1,1):rep(2) .. clean:sub(2,2):rep(2) .. clean:sub(3,3):rep(2)
+            end
+            colors[#colors + 1] = "#" .. clean
           end
           if invalid then return end
           if #colors > 0 then
@@ -719,6 +828,9 @@ local function build_dialog()
         width = gw,
         height = gh,
         seed = tonumber(dlg.data.seed) or -1,
+        steps = dlg.data.steps,
+        cfg_scale = dlg.data.cfg_scale / 10.0,
+        clip_skip = dlg.data.clip_skip,
         denoise_strength = dlg.data.anim_denoise / 100.0,
         frame_count = dlg.data.anim_frames,
         frame_duration_ms = dlg.data.anim_duration,
@@ -757,11 +869,15 @@ local function build_dialog()
           for hex in colors_str:gmatch("[^,%s]+") do
             local clean = hex:match("^#?(%x%x%x%x%x%x)$") or hex:match("^#?(%x%x%x)$")
             if not clean then
-              app.alert("Invalid hex color: " .. hex)
+              app.alert("Invalid hex color: " .. hex .. "\nExpected format: #RRGGBB or #RGB")
               invalid = true
               break
             end
-            colors[#colors + 1] = hex
+            -- Normalize #RGB → #RRGGBB
+            if #clean == 3 then
+              clean = clean:sub(1,1):rep(2) .. clean:sub(2,2):rep(2) .. clean:sub(3,3):rep(2)
+            end
+            colors[#colors + 1] = "#" .. clean
           end
           if invalid then return end
           if #colors > 0 then
@@ -791,67 +907,6 @@ local function build_dialog()
       update_status("Animating...")
       send(req)
     end
-  }
-
-  -- ── Animation Settings ──
-  dlg:separator{ text = "Animation Settings" }
-
-  dlg:combobox{
-    id = "anim_method",
-    label = "Method",
-    options = { "chain", "animatediff" },
-    option = "chain",
-  }
-
-  dlg:slider{
-    id = "anim_frames",
-    label = "Frames",
-    min = 2,
-    max = 60,
-    value = 8,
-  }
-
-  dlg:slider{
-    id = "anim_duration",
-    label = "Duration (ms)",
-    min = 50,
-    max = 500,
-    value = 100,
-  }
-
-  dlg:slider{
-    id = "anim_denoise",
-    label = "Denoise %",
-    min = 5,
-    max = 100,
-    value = 30,
-  }
-
-  dlg:combobox{
-    id = "anim_seed_strategy",
-    label = "Seed Mode",
-    options = { "increment", "fixed", "random" },
-    option = "increment",
-  }
-
-  dlg:entry{
-    id = "anim_tag",
-    label = "Tag Name",
-    text = "",
-  }
-
-  dlg:check{
-    id = "anim_freeinit",
-    label = "FreeInit",
-    selected = false,
-  }
-
-  dlg:slider{
-    id = "anim_freeinit_iters",
-    label = "FreeInit Iters",
-    min = 1,
-    max = 3,
-    value = 2,
   }
 
   dlg:show{ wait = false }

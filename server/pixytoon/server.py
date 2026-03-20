@@ -180,6 +180,15 @@ async def _handle(websocket: WebSocket, req: Request) -> None:
 
         elif req.action == Action.GENERATE_ANIMATION:
             anim_req = req.to_animation_request()
+
+            # Server-side frame count validation (protocol allows 120, config may differ)
+            if anim_req.frame_count > settings.max_animation_frames:
+                await _send(websocket, ErrorResponse(
+                    code="INVALID_REQUEST",
+                    message=f"frame_count {anim_req.frame_count} exceeds max {settings.max_animation_frames}",
+                ))
+                return
+
             loop = asyncio.get_running_loop()
 
             def on_anim_progress(p: ProgressResponse) -> None:
