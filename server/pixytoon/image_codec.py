@@ -34,3 +34,36 @@ def resize_to_target(image: Image.Image, width: int, height: int) -> Image.Image
     if image.size != (width, height):
         return image.resize((width, height), Image.LANCZOS)
     return image
+
+
+def decode_b64_mask(data: str) -> Image.Image:
+    """Decode a base64-encoded PNG mask into a grayscale PIL Image.
+
+    White (255) = repaint area, Black (0) = keep area.
+    """
+    try:
+        raw = b64decode(data)
+        return Image.open(BytesIO(raw)).convert("L")
+    except Exception as e:
+        raise ValueError(f"Invalid base64 mask data: {e}") from e
+
+
+def composite_with_mask(
+    original: Image.Image,
+    inpainted: Image.Image,
+    mask: Image.Image,
+) -> Image.Image:
+    """Composite inpainted result onto original using mask.
+
+    White pixels in mask take from inpainted, black from original.
+    Applies binary threshold (128) to avoid soft edges in pixel art.
+    Both images must be same size. Mask is converted to binary L mode.
+    """
+    # Ensure all images are same mode for compositing
+    if original.mode != inpainted.mode:
+        inpainted = inpainted.convert(original.mode)
+
+    # Binary threshold — no anti-aliasing for pixel art
+    mask_binary = mask.point(lambda p: 255 if p >= 128 else 0)
+
+    return Image.composite(inpainted, original, mask_binary)

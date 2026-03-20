@@ -13,10 +13,13 @@ import asyncio
 import json
 import sys
 import time
-from base64 import b64decode
+from base64 import b64decode, b64encode
+from io import BytesIO
 from pathlib import Path
 
+import numpy as np
 import websockets
+from PIL import Image
 
 
 SERVER_URL = "ws://127.0.0.1:9876/ws"
@@ -42,7 +45,7 @@ async def run():
 
     # ── Test 1: txt2img ──────────────────────────────────────
 
-    print("\n[TEST] 1/2 — txt2img generation...")
+    print("\n[TEST] 1/3 — txt2img generation...")
     t0 = time.perf_counter()
     await ws.send(json.dumps({
         "action": "generate",
@@ -87,7 +90,7 @@ async def run():
     # ── Test 2: img2img (using txt2img result) ───────────────
 
     if result_b64:
-        print("\n[TEST] 2/2 — img2img generation (from txt2img result)...")
+        print("\n[TEST] 2/3 — img2img generation (from txt2img result)...")
         t0 = time.perf_counter()
         await ws.send(json.dumps({
             "action": "generate",
@@ -129,7 +132,65 @@ async def run():
                 all_passed = False
                 break
     else:
-        print("\n[SKIP] 2/2 — img2img (no source from previous test)")
+        print("\n[SKIP] 2/3 — img2img (no source from previous test)")
+        all_passed = False
+
+    # ── Test 3: inpaint (using txt2img result) ───────────────
+
+    if result_b64:
+        print("\n[TEST] 3/3 — inpaint generation (from txt2img result)...")
+
+        # Create a synthetic mask: white center square on black
+        mask_arr = np.zeros((512, 512), dtype=np.uint8)
+        mask_arr[192:320, 192:320] = 255
+        mask_img = Image.fromarray(mask_arr, "L")
+        buf = BytesIO()
+        mask_img.save(buf, format="PNG")
+        mask_b64 = b64encode(buf.getvalue()).decode("ascii")
+
+        t0 = time.perf_counter()
+        await ws.send(json.dumps({
+            "action": "generate",
+            "prompt": "pixel art, PixArFK, game sprite, a golden crown, sharp pixels",
+            "mode": "inpaint",
+            "width": 512,
+            "height": 512,
+            "seed": 456,
+            "steps": 8,
+            "cfg_scale": 5.0,
+            "denoise_strength": 0.7,
+            "source_image": result_b64,
+            "mask_image": mask_b64,
+            "post_process": {
+                "pixelate": {"enabled": True, "target_size": 64},
+                "quantize_method": "kmeans",
+                "quantize_colors": 16,
+                "dither": "none",
+                "palette": {"mode": "auto"},
+                "remove_bg": False,
+            },
+        }))
+
+        while True:
+            raw = await asyncio.wait_for(ws.recv(), timeout=120)
+            resp = json.loads(raw)
+            if resp["type"] == "progress":
+                pct = int(resp["step"] / resp["total"] * 100)
+                print(f"       Step {resp['step']}/{resp['total']} ({pct}%)")
+            elif resp["type"] == "result":
+                elapsed = time.perf_counter() - t0
+                print(f"[OK]   inpaint done — {resp['time_ms']}ms, seed={resp['seed']}, "
+                      f"{resp['width']}x{resp['height']}, wall={elapsed:.1f}s")
+                out = OUTPUT_DIR / "test_inpaint_from_gen.png"
+                out.write_bytes(b64decode(resp["image"]))
+                print(f"       Saved: {out}")
+                break
+            elif resp["type"] == "error":
+                print(f"[FAIL] inpaint error: {resp['message']}")
+                all_passed = False
+                break
+    else:
+        print("\n[SKIP] 3/3 — inpaint (no source from previous test)")
         all_passed = False
 
     await ws.close()

@@ -38,7 +38,10 @@ pixytoon/
 │       └── pixytoon.lua         # Dialog UI + WebSocket client
 ├── scripts/
 │   ├── build_extension.py       # Package -> .aseprite-extension
-│   └── download_models.py       # Download all models from HuggingFace
+│   ├── download_models.py       # Download all models from HuggingFace
+│   ├── test_generate.py         # Test: txt2img, img2img, inpaint
+│   ├── test_animation.py        # Test: chain, animatediff, chain-img2img
+│   └── test_inpaint.py          # Test: inpaint (high/low denoise)
 ├── server/
 │   ├── pyproject.toml           # Dependencies (torch CUDA 12.8)
 │   ├── run.py                   # Entry point
@@ -57,7 +60,7 @@ pixytoon/
 
 ## Features
 
-- **txt2img / img2img / ControlNet** — OpenPose, Canny, Scribble, Lineart (v1.1)
+- **txt2img / img2img / inpaint / ControlNet** — OpenPose, Canny, Scribble, Lineart (v1.1)
 - **Animation** — Dual-method: Frame Chain (img2img chaining) + AnimateDiff (motion module temporal consistency)
 - **AnimateDiff** — Motion adapter v1-5-3, FreeInit support, auto DeepCache disable/re-enable, ControlNet compatible
 - **LoRA stacking** — Hyper-SD (speed) + pixel art LoRA (style, ±2.0 weight range)
@@ -134,7 +137,7 @@ Connect to `ws://127.0.0.1:9876/ws`. All messages are JSON.
   "action": "generate",
   "prompt": "pixel art character",
   "negative_prompt": "blurry, photorealistic",
-  "mode": "txt2img",
+  "mode": "txt2img | img2img | inpaint | controlnet_*",
   "width": 512,
   "height": 512,
   "seed": -1,
@@ -152,6 +155,27 @@ Connect to `ws://127.0.0.1:9876/ws`. All messages are JSON.
     "palette": { "mode": "auto" },
     "remove_bg": false
   }
+}
+```
+
+#### Inpaint Mode
+
+For inpainting, set `mode` to `"inpaint"` and include `source_image` (base64 PNG of the original image) and `mask_image` (base64 PNG where white=repaint, black=keep):
+
+```json
+{
+  "action": "generate",
+  "prompt": "pixel art, golden crown",
+  "mode": "inpaint",
+  "width": 512,
+  "height": 512,
+  "seed": -1,
+  "steps": 8,
+  "cfg_scale": 5.0,
+  "denoise_strength": 0.7,
+  "source_image": "<base64 PNG>",
+  "mask_image": "<base64 PNG, white=repaint, black=keep>",
+  "post_process": { "..." }
 }
 ```
 
@@ -291,7 +315,7 @@ All prefixed with `PIXYTOON_`. Example: `PIXYTOON_PORT=8080`.
 | LoRA change is slow            | Expected: LoRA weight change triggers recompilation (~30-60s once) |
 | AnimateDiff OOM                | AnimateDiff needs ~8-10GB VRAM; reduce `frame_count` or resolution |
 | AnimateDiff slow first run     | Motion adapter downloads on first use (~97MB); subsequent runs use cache |
-| Chain animation hangs          | Ensure DeepCache interval < step count × denoise_strength        |
+| Chain animation hangs          | Fixed in v0.1.4: scheduler state now reset between frames          |
 
 ## License
 

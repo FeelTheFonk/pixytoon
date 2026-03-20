@@ -26,6 +26,7 @@ class Action(str, Enum):
 class GenerationMode(str, Enum):
     TXT2IMG = "txt2img"
     IMG2IMG = "img2img"
+    INPAINT = "inpaint"
     CONTROLNET_OPENPOSE = "controlnet_openpose"
     CONTROLNET_CANNY = "controlnet_canny"
     CONTROLNET_SCRIBBLE = "controlnet_scribble"
@@ -114,7 +115,8 @@ class GenerateRequest(BaseModel):
     mode: GenerationMode = GenerationMode.TXT2IMG
     width: int = Field(512, ge=64, le=2048)
     height: int = Field(512, ge=64, le=2048)
-    source_image: Optional[str] = None      # base64 PNG (img2img)
+    source_image: Optional[str] = None      # base64 PNG (img2img / inpaint)
+    mask_image: Optional[str] = None        # base64 PNG (inpaint) — white=repaint, black=keep
     control_image: Optional[str] = None     # base64 PNG (ControlNet)
     seed: int = -1
     steps: int = Field(8, ge=1, le=100)
@@ -135,6 +137,7 @@ class AnimationRequest(BaseModel):
     width: int = Field(512, ge=64, le=2048)
     height: int = Field(512, ge=64, le=2048)
     source_image: Optional[str] = None
+    mask_image: Optional[str] = None
     control_image: Optional[str] = None
     seed: int = -1
     steps: int = Field(8, ge=1, le=100)
@@ -163,6 +166,7 @@ class Request(BaseModel):
     width: Optional[int] = None
     height: Optional[int] = None
     source_image: Optional[str] = None
+    mask_image: Optional[str] = None
     control_image: Optional[str] = None
     seed: Optional[int] = None
     steps: Optional[int] = None

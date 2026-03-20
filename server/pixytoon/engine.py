@@ -14,6 +14,7 @@ Delegates construction and lifecycle concerns to:
 
 from __future__ import annotations
 
+import copy
 import logging
 import threading
 import time
@@ -56,7 +57,14 @@ from . import deepcache_manager
 from . import pipeline_factory
 from .animatediff_manager import AnimateDiffManager, get_uncompiled_unet
 from .freeu_applicator import apply_freeu
-from .image_codec import decode_b64_image, encode_image_b64, resize_to_target, round8
+from .image_codec import (
+    composite_with_mask,
+    decode_b64_image,
+    decode_b64_mask,
+    encode_image_b64,
+    resize_to_target,
+    round8,
+)
 from .lora_fuser import LoRAFuser
 
 log = logging.getLogger("pixytoon.engine")
@@ -330,6 +338,9 @@ class DiffusionEngine:
                 elif req.mode == GenerationMode.IMG2IMG:
                     image = self._img2img(req, generator, step_callback, effective_neg)
 
+                elif req.mode == GenerationMode.INPAINT:
+                    image = self._inpaint(req, generator, step_callback, effective_neg)
+
                 elif req.mode.value.startswith("controlnet_"):
                     image = self._controlnet_generate(req, generator, step_callback, effective_neg)
 
@@ -395,6 +406,37 @@ class DiffusionEngine:
             callback_on_step_end=callback,
             output_type="pil",
         ).images[0]
+
+    def _inpaint(self, req, generator, callback, effective_neg):
+        """Inpaint: img2img full image, then composite via mask."""
+        if req.source_image is None:
+            raise ValueError("inpaint requires source_image")
+        if req.mask_image is None:
+            raise ValueError("inpaint requires mask_image")
+
+        source = decode_b64_image(req.source_image)
+        mask = decode_b64_mask(req.mask_image)
+        target_w, target_h = round8(req.width), round8(req.height)
+        source = resize_to_target(source, target_w, target_h)
+        mask = resize_to_target(mask, target_w, target_h)
+
+        # Run img2img on the full source (model sees context for coherent inpainting)
+        torch.compiler.cudagraph_mark_step_begin()
+        inpainted = self._img2img_pipe(
+            prompt=req.prompt,
+            negative_prompt=effective_neg,
+            image=source,
+            num_inference_steps=req.steps,
+            guidance_scale=req.cfg_scale,
+            strength=req.denoise_strength,
+            generator=generator,
+            clip_skip=req.clip_skip,
+            callback_on_step_end=callback,
+            output_type="pil",
+        ).images[0]
+
+        # Composite: keep original where mask is black, use inpainted where white
+        return composite_with_mask(source, inpainted, mask)
 
     def _controlnet_generate(self, req, generator, callback, effective_neg):
         if req.control_image is None:
@@ -503,6 +545,9 @@ class DiffusionEngine:
         effective_neg = self._build_effective_negative(req.negative_prompt, req.negative_ti)
         target_w, target_h = round8(req.width), round8(req.height)
 
+        log.info("Chain animation: %d frames, mode=%s, steps=%d, denoise=%.2f, seed_base=%d",
+                 req.frame_count, req.mode.value, req.steps, req.denoise_strength, base_seed)
+
         with torch.inference_mode():
             for frame_idx in range(req.frame_count):
                 if self._cancel_event.is_set():
@@ -535,6 +580,16 @@ class DiffusionEngine:
                 # Frame 0: initial generation (direct pipeline call — NO cudagraph markers)
                 # Chain mode uses raw (non-compiled) UNet, so _txt2img/_img2img
                 # wrappers must be avoided as they call cudagraph_mark_step_begin()
+                # Reset img2img scheduler before each frame to prevent
+                # stale state accumulation (timesteps, _step_index).
+                # This is the root fix for the chain animation infinite loop.
+                if frame_idx > 0:
+                    self._img2img_pipe.scheduler = copy.deepcopy(self._pipe.scheduler)
+                    log.debug("Chain frame %d: scheduler reset", frame_idx)
+
+                log.info("Chain frame %d/%d: seed=%d, mode=%s",
+                         frame_idx, req.frame_count, frame_seed, req.mode.value)
+
                 if frame_idx == 0:
                     if req.mode == GenerationMode.TXT2IMG:
                         image = self._pipe(
@@ -564,6 +619,26 @@ class DiffusionEngine:
                             callback_on_step_end=step_callback,
                             output_type="pil",
                         ).images[0]
+                    elif req.mode == GenerationMode.INPAINT:
+                        if req.source_image is None or req.mask_image is None:
+                            raise ValueError("inpaint requires source_image and mask_image")
+                        source = decode_b64_image(req.source_image)
+                        mask = decode_b64_mask(req.mask_image)
+                        source = resize_to_target(source, target_w, target_h)
+                        mask = resize_to_target(mask, target_w, target_h)
+                        inpainted = self._img2img_pipe(
+                            prompt=req.prompt,
+                            negative_prompt=effective_neg,
+                            image=source,
+                            num_inference_steps=req.steps,
+                            guidance_scale=req.cfg_scale,
+                            strength=req.denoise_strength,
+                            generator=generator,
+                            clip_skip=req.clip_skip,
+                            callback_on_step_end=step_callback,
+                            output_type="pil",
+                        ).images[0]
+                        image = composite_with_mask(source, inpainted, mask)
                     elif req.mode.value.startswith("controlnet_"):
                         self._ensure_controlnet(req.mode)
                         control = decode_b64_image(req.control_image)

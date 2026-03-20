@@ -463,6 +463,58 @@ local function capture_active_layer()
   return base64_encode(data)
 end
 
+-- ─── CAPTURE MASK ────────────────────────────────────────────
+
+local function capture_mask()
+  local spr = app.sprite
+  if spr == nil then return nil end
+
+  -- Strategy A: use active selection as mask
+  local sel = spr.selection
+  if sel and not sel.isEmpty then
+    local mask_img = Image(spr.width, spr.height, ColorMode.GRAY)
+    mask_img:clear(Color{ gray = 0 })  -- black = keep
+    for y = sel.bounds.y, sel.bounds.y + sel.bounds.height - 1 do
+      for x = sel.bounds.x, sel.bounds.x + sel.bounds.width - 1 do
+        if sel:contains(x, y) then
+          mask_img:drawPixel(x, y, Color{ gray = 255 })  -- white = repaint
+        end
+      end
+    end
+    _file_counter = _file_counter + 1
+    local tmp_dir = app.fs.tempPath or os.getenv("TEMP") or os.getenv("TMP") or "."
+    local tmp = app.fs.joinPath(tmp_dir, "pixytoon_mask_" .. os.time() .. "_" .. _file_counter .. ".png")
+    mask_img:saveAs(tmp)
+    local f = io.open(tmp, "rb")
+    if not f then return nil end
+    local data = f:read("*a")
+    f:close()
+    os.remove(tmp)
+    return base64_encode(data)
+  end
+
+  -- Strategy B: look for a layer named "Mask" or "mask"
+  for _, layer in ipairs(spr.layers) do
+    if layer.name == "Mask" or layer.name == "mask" then
+      local cel = layer:cel(app.frame)
+      if cel and cel.image then
+        _file_counter = _file_counter + 1
+        local tmp_dir = app.fs.tempPath or os.getenv("TEMP") or os.getenv("TMP") or "."
+        local tmp = app.fs.joinPath(tmp_dir, "pixytoon_mask_" .. os.time() .. "_" .. _file_counter .. ".png")
+        cel.image:saveAs(tmp)
+        local f = io.open(tmp, "rb")
+        if not f then return nil end
+        local data = f:read("*a")
+        f:close()
+        os.remove(tmp)
+        return base64_encode(data)
+      end
+    end
+  end
+
+  return nil
+end
+
 -- ─── BUILD DIALOG ────────────────────────────────────────────
 
 local function build_dialog()
@@ -505,7 +557,7 @@ local function build_dialog()
     id = "mode",
     label = "Mode",
     options = {
-      "txt2img", "img2img",
+      "txt2img", "img2img", "inpaint",
       "controlnet_openpose", "controlnet_canny",
       "controlnet_scribble", "controlnet_lineart",
     },
@@ -772,18 +824,28 @@ local function build_dialog()
         end
       end
 
-      -- Source image for img2img / ControlNet
-      if req.mode == "img2img" or req.mode:find("controlnet_") then
+      -- Source image for img2img / ControlNet / Inpaint
+      if req.mode == "img2img" or req.mode == "inpaint" or req.mode:find("controlnet_") then
         local b64 = capture_active_layer()
         if b64 == nil then
           app.alert("No active layer to use as source.")
           return
         end
-        if req.mode == "img2img" then
+        if req.mode == "img2img" or req.mode == "inpaint" then
           req.source_image = b64
         else
           req.control_image = b64
         end
+      end
+
+      -- Mask image for inpaint mode
+      if req.mode == "inpaint" then
+        local b64_mask = capture_mask()
+        if b64_mask == nil then
+          app.alert("Inpaint requires a mask.\nEither:\n- Make a selection (rectangle/lasso/wand)\n- Create a layer named 'Mask' with white=repaint areas")
+          return
+        end
+        req.mask_image = b64_mask
       end
 
       -- Send
@@ -886,18 +948,28 @@ local function build_dialog()
         end
       end
 
-      -- Source image for img2img / ControlNet modes
-      if req.mode == "img2img" or req.mode:find("controlnet_") then
+      -- Source image for img2img / ControlNet / Inpaint modes
+      if req.mode == "img2img" or req.mode == "inpaint" or req.mode:find("controlnet_") then
         local b64 = capture_active_layer()
         if b64 == nil then
           app.alert("No active layer to use as source.")
           return
         end
-        if req.mode == "img2img" then
+        if req.mode == "img2img" or req.mode == "inpaint" then
           req.source_image = b64
         else
           req.control_image = b64
         end
+      end
+
+      -- Mask image for inpaint mode
+      if req.mode == "inpaint" then
+        local b64_mask = capture_mask()
+        if b64_mask == nil then
+          app.alert("Inpaint requires a mask.\nEither:\n- Make a selection (rectangle/lasso/wand)\n- Create a layer named 'Mask' with white=repaint areas")
+          return
+        end
+        req.mask_image = b64_mask
       end
 
       -- Send animation request
