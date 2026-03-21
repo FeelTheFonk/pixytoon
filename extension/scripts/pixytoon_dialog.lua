@@ -162,7 +162,7 @@ local function build_tab_generate()
     onclick = function()
       local locked = {}
       if PT.dlg.data.lock_subject and PT.dlg.data.fixed_subject ~= "" then
-        locked.subjects = PT.dlg.data.fixed_subject
+        locked.subject = PT.dlg.data.fixed_subject
       end
       PT.send({ action = "generate_prompt", locked_fields = locked })
       PT.update_status("Generating prompt...")
@@ -535,7 +535,7 @@ local function build_actions_panel()
         -- Build locked_fields from UI
         PT.loop.locked_fields = {}
         if dlg.data.lock_subject and dlg.data.fixed_subject ~= "" then
-          PT.loop.locked_fields.subjects = dlg.data.fixed_subject
+          PT.loop.locked_fields.subject = dlg.data.fixed_subject
         end
       end
 
