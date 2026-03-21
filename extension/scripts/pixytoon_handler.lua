@@ -184,6 +184,7 @@ handlers.error = function(resp)
   PT.state.animating = false
   PT.loop.mode = false
   PT.loop.random_mode = false
+  PT.timers.loop = PT.stop_timer(PT.timers.loop)
   PT.state.gen_step_start = nil
   PT.stop_gen_timeout()
 
@@ -206,6 +207,10 @@ handlers.error = function(resp)
   PT.live.request_inflight = false
   PT.live.inflight_time = nil
   PT.state.cancel_pending = false
+  -- If live mode was active, stop it cleanly before resetting UI
+  if PT.live.mode then
+    PT.stop_live_mode()
+  end
   if PT.dlg then
     PT.update_status("Error: " .. tostring(resp.message or "Unknown"))
     PT.dlg:modify{ id = "generate_btn", text = "GENERATE", enabled = not PT.live.mode }

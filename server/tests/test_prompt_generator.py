@@ -15,7 +15,7 @@ class TestPromptGenerator:
         gen = PromptGenerator(tmp_prompts_dir)
         cats = gen.list_categories()
         assert len(cats) > 0
-        assert "subjects" in cats
+        assert "subject" in cats
 
     def test_generate_returns_tuple(self, tmp_prompts_dir: Path):
         gen = PromptGenerator(tmp_prompts_dir)
@@ -30,13 +30,13 @@ class TestPromptGenerator:
 
     def test_locked_fields(self, tmp_prompts_dir: Path):
         gen = PromptGenerator(tmp_prompts_dir)
-        locked = {"styles": "pixel art"}
+        locked = {"style": "pixel art"}
         _, _, components = gen.generate(locked=locked)
-        assert components.get("styles") == "pixel art"
+        assert components.get("style") == "pixel art"
 
     def test_custom_template(self, tmp_prompts_dir: Path):
         gen = PromptGenerator(tmp_prompts_dir)
-        template = "{subjects} in {styles}"
+        template = "{subject} in {style}"
         prompt, _, _ = gen.generate(template=template)
         assert " in " in prompt
 
@@ -59,7 +59,7 @@ class TestPromptGenerator:
 
     def test_get_category_items(self, tmp_prompts_dir: Path):
         gen = PromptGenerator(tmp_prompts_dir)
-        items = gen.get_category_items("subjects")
+        items = gen.get_category_items("subject")
         assert isinstance(items, list)
         assert len(items) > 0
 

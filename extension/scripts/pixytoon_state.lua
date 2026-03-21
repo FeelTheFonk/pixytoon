@@ -85,6 +85,7 @@ PT.timers = {
   connect     = nil,
   heartbeat   = nil,
   gen_timeout = nil,
+  loop        = nil,
 }
 
 end

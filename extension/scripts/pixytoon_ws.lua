@@ -47,7 +47,9 @@ function PT.start_gen_timeout()
         PT.state.animating = false
         PT.loop.mode = false
         PT.loop.random_mode = false
+        PT.timers.loop = PT.stop_timer(PT.timers.loop)
         PT.state.gen_step_start = nil
+        if PT.live.mode then PT.stop_live_mode() end
         if PT.dlg then
           PT.update_status("Timed out — no response from server")
           PT.dlg:modify{ id = "generate_btn", text = "GENERATE", enabled = not PT.live.mode }
@@ -90,6 +92,7 @@ function PT.set_connected(is_connected)
     PT.live.request_inflight = false
     PT.loop.mode = false
     PT.loop.random_mode = false
+    PT.timers.loop = PT.stop_timer(PT.timers.loop)
     PT.state.cancel_pending = false
   end
 end

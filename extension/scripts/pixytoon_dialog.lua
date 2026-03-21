@@ -579,6 +579,7 @@ local function build_actions_panel()
     onclick = function()
       PT.loop.mode = false
       PT.loop.random_mode = false
+      PT.timers.loop = PT.stop_timer(PT.timers.loop)
       if PT.state.generating or PT.state.animating then
         PT.send({ action = "cancel" })
         PT.state.cancel_pending = true
@@ -650,9 +651,7 @@ local function build_actions_panel()
     onclick = function()
       if PT.live.mode then
         PT.send({ action = "realtime_stop" })
-        PT.stop_live_timer()
-        PT.live.mode = false
-        PT.update_status("Stopping live...")
+        PT.stop_live_mode()
       else
         if PT.state.generating or PT.state.animating then return end
         local spr = app.sprite
@@ -702,12 +701,14 @@ local function build_actions_panel()
       if spr == nil or PT.live.preview_layer == nil then return end
       local ok_cel, cel = pcall(function() return PT.live.preview_layer:cel(app.frame) end)
       if not ok_cel or cel == nil or cel.image == nil then return end
+      PT.live.importing = true
       app.transaction("PixyToon Accept Live", function()
         local new_layer = spr:newLayer()
         new_layer.name = "PixyToon Live"
         spr:newCel(new_layer, app.frame, cel.image:clone(), cel.position)
         pcall(function() spr:deleteCel(cel) end)
       end)
+      PT.live.importing = false
       PT.live.prev_canvas = nil
       app.refresh()
       PT.update_status("Live result accepted")
