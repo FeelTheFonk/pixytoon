@@ -398,6 +398,14 @@ All prefixed with `PIXYTOON_`. Example: `PIXYTOON_PORT=8080`.
 | Live Paint high latency        | Reduce steps (2-3), reduce resolution, ensure no other GPU load    |
 | Live Paint auto-stopped        | Session times out after 60s of inactivity (configurable via `PIXYTOON_REALTIME_TIMEOUT`) |
 
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| **[User Guide](docs/GUIDE.md)** | First launch, modes, parameters, post-processing, LoRA, performance, troubleshooting |
+| **[Cookbook](docs/COOKBOOK.md)** | Tested recipes by creative intention — characters, environments, items, animation, palettes |
+| **[Live Paint Guide](docs/LIVE-PAINT.md)** | Dedicated guide for real-time AI-assisted painting — techniques, workflow, parameters |
+
 ## License
 
 MIT
