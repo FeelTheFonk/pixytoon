@@ -60,20 +60,13 @@ cd /d "%ROOT%"
 
 :: ── 5. Install extension into Aseprite ────────────────────────
 echo.
-echo [4/6] Installing scripts into Aseprite...
-set ASEPRITE_SCRIPTS=%APPDATA%\Aseprite\scripts
+echo [4/6] Installing extension into Aseprite...
 set ASEPRITE_EXT=%APPDATA%\Aseprite\extensions\pixytoon
-rem -- Scripts dir (compiled Aseprite)
-mkdir "%ASEPRITE_SCRIPTS%" 2>nul
-copy /y "%ROOT%extension\scripts\json.lua" "%ASEPRITE_SCRIPTS%\" >nul
-copy /y "%ROOT%extension\scripts\pixytoon.lua" "%ASEPRITE_SCRIPTS%\" >nul
-rem -- Extensions dir (purchased Aseprite)
 if exist "%ASEPRITE_EXT%" rmdir /s /q "%ASEPRITE_EXT%"
 mkdir "%ASEPRITE_EXT%\scripts" 2>nul
 copy /y "%ROOT%extension\package.json" "%ASEPRITE_EXT%\" >nul
-copy /y "%ROOT%extension\scripts\json.lua" "%ASEPRITE_EXT%\scripts\" >nul
-copy /y "%ROOT%extension\scripts\pixytoon.lua" "%ASEPRITE_EXT%\scripts\" >nul
-echo [OK] Scripts installed to %ASEPRITE_SCRIPTS%
+copy /y "%ROOT%extension\scripts\*.lua" "%ASEPRITE_EXT%\scripts\" >nul
+echo [OK] Extension installed to %ASEPRITE_EXT%
 
 :: ── 6. Verify installation ──────────────────────────────────
 echo.

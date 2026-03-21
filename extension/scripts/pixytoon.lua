@@ -8,18 +8,76 @@
 -- Module load order matters: later modules reference functions defined by earlier ones.
 -- All cross-module calls resolve at runtime (not load time), so circular references work.
 --
--- Uses the official Aseprite plugin pattern (init/exit) for reliable path resolution.
+-- Uses the official Aseprite plugin pattern: package.json contributes.scripts
+-- defines this file, Aseprite executes it, then calls init(plugin) with
+-- a plugin object whose .path field points to the extension root directory.
 --
 
--- ─── JSON Loader (standalone, loaded before PT) ───────────
+-- ─── Shared State (accessible by both init and exit) ──────
+
+local _PT = nil
+
+-- ─── Path Detection ───────────────────────────────────────
+-- Tries multiple strategies to locate the scripts directory.
+-- Strategy 1 (plugin.path) is the most reliable for extensions.
+
+local function find_scripts_dir(plugin)
+  local tried = {}
+
+  -- Strategy 1: plugin.path (official Aseprite plugin API)
+  -- plugin.path = extension root (where package.json lives)
+  if plugin and plugin.path then
+    local dir = app.fs.joinPath(plugin.path, "scripts")
+    tried[#tried + 1] = "[plugin.path/scripts] " .. dir
+    if app.fs.isFile(app.fs.joinPath(dir, "json.lua")) then
+      return dir, tried
+    end
+    -- Maybe all files are directly in plugin root (flat layout)
+    tried[#tried + 1] = "[plugin.path] " .. plugin.path
+    if app.fs.isFile(app.fs.joinPath(plugin.path, "json.lua")) then
+      return plugin.path, tried
+    end
+  end
+
+  -- Strategy 2: debug.getinfo (fallback for edge cases)
+  for level = 1, 6 do
+    local ok, info = pcall(debug.getinfo, level, "S")
+    if ok and info and info.source then
+      local src = info.source
+      if src:sub(1, 1) == "@" then
+        local raw = src:sub(2)
+        local dir = app.fs.filePath(raw)
+        if dir and dir ~= "" then
+          tried[#tried + 1] = "[debug L" .. level .. "] " .. dir
+          if app.fs.isFile(app.fs.joinPath(dir, "json.lua")) then
+            return dir, tried
+          end
+        end
+      end
+    end
+  end
+
+  -- Strategy 3: Well-known Aseprite extension paths
+  local config = app.fs.userConfigPath
+  local candidates = {
+    app.fs.joinPath(config, "extensions", "pixytoon", "scripts"),
+    app.fs.joinPath(config, "extensions", "pixytoon"),
+  }
+  for _, dir in ipairs(candidates) do
+    tried[#tried + 1] = "[fallback] " .. dir
+    if app.fs.isFile(app.fs.joinPath(dir, "json.lua")) then
+      return dir, tried
+    end
+  end
+
+  return nil, tried
+end
+
+-- ─── JSON Loader ──────────────────────────────────────────
 
 local function load_json(scripts_dir)
-  local json_path = app.fs.joinPath(scripts_dir, "json.lua")
-  if not app.fs.isFile(json_path) then
-    app.alert("PixyToon: json.lua not found in:\n" .. scripts_dir)
-    return nil
-  end
-  local ok, result = pcall(dofile, json_path)
+  local path = app.fs.joinPath(scripts_dir, "json.lua")
+  local ok, result = pcall(dofile, path)
   if not ok or not result then
     app.alert("PixyToon: Failed to load json.lua\n" .. tostring(result))
     return nil
@@ -30,14 +88,34 @@ end
 -- ─── Module Loader ────────────────────────────────────────
 
 local function load_module(PT, scripts_dir, name)
+  -- dofile with absolute path (recommended by Aseprite creator dacap)
   local path = app.fs.joinPath(scripts_dir, name .. ".lua")
   if not app.fs.isFile(path) then
-    app.alert("PixyToon: Module not found: " .. name .. "\nLooked in: " .. scripts_dir)
+    -- Comprehensive diagnostic for troubleshooting
+    local diag = "PixyToon: Module file not found!\n\n"
+    diag = diag .. "Module: " .. name .. ".lua\n"
+    diag = diag .. "Expected at: " .. path .. "\n"
+    diag = diag .. "scripts_dir: " .. scripts_dir .. "\n\n"
+    diag = diag .. "Files found in directory:\n"
+    local ok_list, files = pcall(app.fs.listFiles, scripts_dir)
+    if ok_list and files then
+      for _, f in ipairs(files) do
+        diag = diag .. "  " .. f .. "\n"
+      end
+      if #files == 0 then diag = diag .. "  (empty directory)\n" end
+    else
+      diag = diag .. "  (cannot list: " .. tostring(files) .. ")\n"
+    end
+    diag = diag .. "\nFix: rebuild and reinstall the extension:\n"
+    diag = diag .. "  python scripts/build_extension.py\n"
+    diag = diag .. "  Then double-click dist/pixytoon.aseprite-extension"
+    app.alert(diag)
     return false
   end
+
   local ok, init_fn = pcall(dofile, path)
   if not ok then
-    app.alert("PixyToon: Failed to load " .. name .. "\n" .. tostring(init_fn))
+    app.alert("PixyToon: Error loading " .. name .. "\n" .. tostring(init_fn))
     return false
   end
   if type(init_fn) ~= "function" then
@@ -54,17 +132,24 @@ local function load_module(PT, scripts_dir, name)
 end
 
 -- ─── Plugin Lifecycle ─────────────────────────────────────
-
-local PT  -- shared context, accessible by exit()
+-- Aseprite executes this file top-to-bottom (defining functions),
+-- then calls init(plugin) with the plugin object.
+-- plugin.path = extension root directory (where package.json lives).
 
 function init(plugin)
-  -- plugin.path is the extension root (where package.json lives),
-  -- guaranteed by Aseprite — no debug.getinfo hacks needed.
-  local scripts_dir = app.fs.joinPath(plugin.path, "scripts")
-
-  -- Validate that the scripts directory actually exists
-  if not app.fs.isDirectory(scripts_dir) then
-    app.alert("PixyToon: Scripts directory not found:\n" .. scripts_dir)
+  local scripts_dir, tried = find_scripts_dir(plugin)
+  if not scripts_dir then
+    local msg = "PixyToon: Cannot find scripts directory!\n\n"
+    msg = msg .. "Tried " .. #tried .. " locations:\n"
+    for _, t in ipairs(tried) do
+      msg = msg .. "  " .. t .. "\n"
+    end
+    msg = msg .. "\nuserConfigPath: " .. tostring(app.fs.userConfigPath) .. "\n"
+    if plugin and plugin.path then
+      msg = msg .. "plugin.path: " .. tostring(plugin.path) .. "\n"
+    end
+    msg = msg .. "\nPlease rebuild and reinstall the extension."
+    app.alert(msg)
     return
   end
 
@@ -73,7 +158,7 @@ function init(plugin)
   if not json then return end
 
   -- Create shared context table
-  PT = { json = json, plugin = plugin }
+  _PT = { json = json, plugin = plugin }
 
   -- Load modules in dependency order
   local modules = {
@@ -91,34 +176,34 @@ function init(plugin)
   }
 
   for _, name in ipairs(modules) do
-    if not load_module(PT, scripts_dir, name) then return end
+    if not load_module(_PT, scripts_dir, name) then return end
   end
 
   -- Launch the dialog
-  PT.build_dialog()
-  PT.apply_settings(PT.load_settings())
+  _PT.build_dialog()
+  _PT.apply_settings(_PT.load_settings())
 end
 
 function exit(plugin)
-  if not PT then return end
+  if not _PT then return end
 
-  -- Stop all timers
-  if PT.timers then
-    for key, timer in pairs(PT.timers) do
+  -- Stop all named timers
+  if _PT.timers then
+    for key, timer in pairs(_PT.timers) do
       if timer then pcall(function() timer:stop() end) end
-      PT.timers[key] = nil
+      _PT.timers[key] = nil
     end
   end
 
   -- Stop live mode timers
-  if PT.stop_live_timer then pcall(PT.stop_live_timer) end
+  if _PT.stop_live_timer then pcall(_PT.stop_live_timer) end
 
   -- Disconnect WebSocket
-  if PT.ws_handle then
-    pcall(function() PT.ws_handle:close() end)
-    PT.ws_handle = nil
+  if _PT.ws_handle then
+    pcall(function() _PT.ws_handle:close() end)
+    _PT.ws_handle = nil
   end
 
   -- Save settings before exit
-  if PT.save_settings then pcall(PT.save_settings) end
+  if _PT.save_settings then pcall(_PT.save_settings) end
 end
