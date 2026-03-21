@@ -115,8 +115,13 @@ function PT.import_animation_frame(resp)
 end
 
 function PT.live_update_preview(resp)
+  PT.live.importing = true  -- Guard: prevent sprite change event from re-triggering
+
   local spr = app.sprite
-  if spr == nil or app.frame == nil then return end
+  if spr == nil or app.frame == nil then
+    PT.live.importing = false
+    return
+  end
 
   -- Validate or find/create preview layer
   local need_new = PT.live.preview_layer == nil
@@ -149,7 +154,7 @@ function PT.live_update_preview(resp)
   local img_data = PT.base64_decode(resp.image)
   local tmp = PT.make_tmp_path("live")
   local f = io.open(tmp, "wb")
-  if not f then return end
+  if not f then PT.live.importing = false; return end
   f:write(img_data)
   f:close()
 
@@ -157,6 +162,7 @@ function PT.live_update_preview(resp)
   os.remove(tmp)
   if not ok_img or not img then
     PT.update_status("Preview load failed")
+    PT.live.importing = false
     return
   end
 
@@ -164,6 +170,7 @@ function PT.live_update_preview(resp)
   local ok_cel, cel = pcall(function() return PT.live.preview_layer:cel(app.frame) end)
   if not ok_cel then
     PT.live.preview_layer = nil
+    PT.live.importing = false
     return
   end
   if cel then
@@ -179,6 +186,13 @@ function PT.live_update_preview(resp)
   end
 
   app.refresh()
+
+  PT.live.importing = false
+
+  -- If a change was pending during import, send now
+  if PT.live.pending_send and not PT.live.request_inflight then
+    PT.live_send_now()
+  end
 end
 
 end

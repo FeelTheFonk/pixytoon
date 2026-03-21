@@ -40,6 +40,7 @@ function PT.save_settings()
     live_steps         = d.live_steps,
     live_cfg           = d.live_cfg,
     live_opacity       = d.live_opacity,
+    live_mode          = d.live_mode,
     preset_name        = d.preset_name,
     lock_subject       = d.lock_subject,
     fixed_subject      = d.fixed_subject,
@@ -80,7 +81,7 @@ function PT.apply_settings(s)
   local opts = {
     "mode", "output_size", "quantize_method", "dither", "palette_mode",
     "palette_name", "lora_name", "anim_method", "anim_seed_strategy", "preset_name",
-    "loop_seed_combo",
+    "loop_seed_combo", "live_mode",
   }
   for _, id in ipairs(opts) do
     if s[id] ~= nil then PT.dlg:modify{ id = id, option = s[id] } end

@@ -12,12 +12,11 @@ PT.cfg = {
   CONNECT_TIMEOUT         = 5.0,
   HEARTBEAT_INTERVAL      = 30.0,
   GEN_TIMEOUT             = 300,
-  LIVE_TIMER_INTERVAL     = 0.15,
-  LIVE_COOLDOWN_INTERVAL  = 0.15,
+  LIVE_WATCHDOG_INTERVAL  = 0.5,
+  LIVE_STROKE_DEBOUNCE    = 0.3,
   LIVE_INFLIGHT_TIMEOUT   = 10.0,
-  LIVE_DEBOUNCE_INTERVAL  = 0.1,
+  LIVE_SLIDER_DEBOUNCE    = 0.1,
   LOOP_DELAY              = 0.1,
-  HASH_STEP_DIVISOR       = 16,
   DIRTY_STEP_DIVISOR      = 32,
 }
 
@@ -48,7 +47,6 @@ PT.anim = {
 PT.live = {
   mode             = false,
   timer            = nil,
-  canvas_hash      = nil,
   frame_id         = 0,
   request_inflight = false,
   inflight_time    = nil,
@@ -56,10 +54,15 @@ PT.live = {
   last_prompt      = nil,
   preview_sprite   = nil,
   prev_canvas      = nil,
-  stroke_cooldown  = nil,
-  cooldown_timer   = nil,
-  cached_capture   = nil,
   slider_debounce  = nil,
+  -- Event-driven system
+  change_listener  = nil,
+  site_listener    = nil,
+  monitored_sprite = nil,
+  auto_mode        = true,
+  importing        = false,
+  pending_send     = false,
+  debounce_timer   = nil,
 }
 
 PT.loop = {

@@ -405,12 +405,30 @@ end
 local function build_tab_live()
   local dlg = PT.dlg
 
+  -- Trigger mode selector
+  dlg:combobox{
+    id = "live_mode",
+    label = "Trigger",
+    options = { "Auto (stroke)", "Manual (F5)" },
+    option = "Auto (stroke)",
+    onchange = function()
+      PT.live.auto_mode = (dlg.data.live_mode == "Auto (stroke)")
+      if PT.live.mode and PT.dlg then
+        if PT.live.auto_mode then
+          PT.update_status("Live — auto mode (sends after each stroke)")
+        else
+          PT.update_status("Live — manual mode (press F5 to send)")
+        end
+      end
+    end,
+  }
+
   -- Batched slider update: sends all changed params once after debounce
   local function schedule_live_slider_update()
     if not PT.live.mode then return end
     PT.live.slider_debounce = PT.stop_timer(PT.live.slider_debounce)
     PT.live.slider_debounce = Timer{
-      interval = PT.cfg.LIVE_DEBOUNCE_INTERVAL,
+      interval = PT.cfg.LIVE_SLIDER_DEBOUNCE,
       ontick = function()
         PT.live.slider_debounce = PT.stop_timer(PT.live.slider_debounce)
         if not PT.live.mode or not PT.dlg then return end
@@ -633,6 +651,7 @@ local function build_actions_panel()
       if PT.live.mode then
         PT.send({ action = "realtime_stop" })
         PT.stop_live_timer()
+        PT.live.mode = false
         PT.update_status("Stopping live...")
       else
         if PT.state.generating or PT.state.animating then return end
@@ -656,11 +675,21 @@ local function build_actions_panel()
         }
         PT.attach_lora(req)
         PT.attach_neg_ti(req)
-        PT.live.canvas_hash = nil
         PT.live.frame_id = 0
+        PT.live.auto_mode = (dlg.data.live_mode == "Auto (stroke)")
         PT.update_status("Starting live...")
         PT.send(req)
       end
+    end,
+  }
+
+  dlg:button{
+    id = "live_send_btn",
+    text = "SEND (F5)",
+    visible = false,
+    hexpand = true,
+    onclick = function()
+      PT.live_send_now()
     end,
   }
 
@@ -679,9 +708,7 @@ local function build_actions_panel()
         spr:newCel(new_layer, app.frame, cel.image:clone(), cel.position)
         pcall(function() spr:deleteCel(cel) end)
       end)
-      PT.live.canvas_hash = nil
       PT.live.prev_canvas = nil
-      PT.live.cached_capture = nil
       app.refresh()
       PT.update_status("Live result accepted")
     end,

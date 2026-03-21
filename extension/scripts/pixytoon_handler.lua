@@ -262,9 +262,11 @@ handlers.realtime_ready = function(resp)
   PT.live.request_inflight = false
   PT.live.last_prompt = PT.dlg and PT.dlg.data.prompt or nil
   if PT.dlg then
-    PT.update_status("Live mode active")
+    local mode_str = PT.live.auto_mode and "auto (stroke)" or "manual (F5)"
+    PT.update_status("Live mode active — " .. mode_str)
     PT.dlg:modify{ id = "live_btn", text = "STOP LIVE" }
     PT.dlg:modify{ id = "live_accept_btn", visible = true }
+    PT.dlg:modify{ id = "live_send_btn", visible = true }
     PT.dlg:modify{ id = "generate_btn", enabled = false }
     PT.dlg:modify{ id = "animate_btn", enabled = false }
   end
@@ -284,41 +286,29 @@ handlers.realtime_result = function(resp)
   end
   if PT.live.mode then
     PT.live_update_preview(resp)
-    -- Reset state so changes made during inflight get re-detected immediately
-    PT.live.canvas_hash = nil
-    PT.live.stroke_cooldown = nil
     if PT.dlg then
-      PT.update_status("Live (" .. tostring(resp.latency_ms or "?") .. "ms)")
+      local mode_str = PT.live.auto_mode and "auto" or "manual"
+      PT.update_status("Live " .. mode_str .. " (" .. tostring(resp.latency_ms or "?") .. "ms)")
     end
   end
 end
 
 handlers.realtime_stopped = function(resp)
-  PT.stop_live_timer()
-  PT.live.mode = false
-  PT.live.request_inflight = false
-  PT.live.canvas_hash = nil
-  -- Clean up preview layer
+  -- Clean up preview layer before stopping timers/listeners
   if PT.live.preview_layer then
     local spr = app.sprite
     if spr then
+      PT.live.importing = true
       pcall(function()
         local cel = PT.live.preview_layer:cel(app.frame)
         if cel then spr:deleteCel(cel) end
         spr:deleteLayer(PT.live.preview_layer)
       end)
+      PT.live.importing = false
     end
-    PT.live.preview_layer = nil
-    PT.live.preview_sprite = nil
     pcall(app.refresh)
   end
-  if PT.dlg then
-    PT.update_status("Live mode stopped")
-    PT.dlg:modify{ id = "live_btn", text = "START LIVE" }
-    PT.dlg:modify{ id = "live_accept_btn", visible = false }
-    PT.dlg:modify{ id = "generate_btn", enabled = true }
-    PT.dlg:modify{ id = "animate_btn", enabled = true }
-  end
+  PT.stop_live_mode()
 end
 
 -- ─── Pong / Misc ────────────────────────────────────────────

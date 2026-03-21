@@ -22,7 +22,13 @@
 
 ## What is Live Paint?
 
-Live Paint turns Aseprite into a collaborative canvas between you and the AI. As you draw — shapes, colors, rough strokes — the server continuously reinterprets your canvas through Stable Diffusion and shows the result as a semi-transparent overlay. Every brush stroke triggers a new AI pass with a GPU latency of ~200-500ms depending on resolution and step count.
+Live Paint turns Aseprite into a collaborative canvas between you and the AI. As you draw — shapes, colors, rough strokes — the server reinterprets your canvas through Stable Diffusion and shows the result as a semi-transparent overlay.
+
+**Two trigger modes** (v0.6.0):
+- **Auto (stroke)** — Each completed brush stroke triggers an AI pass automatically (event-driven via `sprite.events:on('change')`, debounced 300ms). Zero CPU when idle, zero interference while drawing.
+- **Manual (F5)** — You control when to send: press **F5** (or click SEND) to trigger an AI pass on demand.
+
+GPU latency per frame: ~200-500ms depending on resolution and step count.
 
 You keep full artistic control. The AI is your assistant, not your replacement.
 
@@ -33,12 +39,12 @@ You keep full artistic control. The AI is your assistant, not your replacement.
 1. **Connect** to the server (the Connect button in the PixyToon dialog)
 2. **Open or create a sprite** in Aseprite (any size, but 512x512 works best)
 3. **Type a prompt** in the Generate tab — this tells the AI what to make of your strokes
-4. **Switch to the Live tab** and click **START LIVE**
-5. **Start painting** — the AI preview appears on a `_pixytoon_live` layer
+4. **Switch to the Live tab**, choose **Auto (stroke)** or **Manual (F5)** trigger mode
+5. Click **START LIVE**
+6. **Start painting** — in Auto mode, each completed stroke triggers AI processing. In Manual mode, press **F5** when ready.
+7. The AI preview appears on a `_pixytoon_live` layer
 
-That's it. Paint, and watch the AI respond.
-
-To finish: click **STOP LIVE**. Use **Accept** anytime to copy the current AI preview to a permanent layer (the session keeps running).
+To finish: click **STOP LIVE**. Use **Accept** anytime to copy the current AI preview to a permanent layer (the session keeps running). Use **SEND (F5)** anytime to manually trigger a new AI pass.
 
 ```mermaid
 sequenceDiagram
@@ -50,8 +56,17 @@ sequenceDiagram
     Aseprite->>Server: realtime_start (prompt, settings)
     Server-->>Aseprite: realtime_ready
 
-    loop Every 150ms (if canvas changed)
+    alt Auto mode (event-driven)
         You->>Aseprite: Paint strokes
+        Note over Aseprite: sprite.events:on('change') fires
+        Note over Aseprite: Debounce 300ms
+        Aseprite->>Server: realtime_frame (full canvas PNG + ROI coords)
+        Server->>Server: img2img on ROI (fast, 4 steps)
+        Server-->>Aseprite: realtime_result (AI image)
+        Aseprite->>Aseprite: Update preview layer
+    else Manual mode (F5 hotkey)
+        You->>Aseprite: Paint strokes
+        You->>Aseprite: Press F5 (or click SEND)
         Aseprite->>Server: realtime_frame (full canvas PNG + ROI coords)
         Server->>Server: img2img on ROI (fast, 4 steps)
         Server-->>Aseprite: realtime_result (AI image)
@@ -71,6 +86,7 @@ The **Live** tab in the PixyToon dialog has these controls:
 
 | Control | Default | What it does |
 |---------|---------|-------------|
+| **Trigger** | Auto (stroke) | Auto = sends after each brush stroke; Manual (F5) = sends on F5 only |
 | **Strength** | 0.50 | How much the AI changes your canvas (the most important slider) |
 | **Steps** | 4 | Inference steps per frame (more = better quality, slower) |
 | **CFG** | 2.5 | How strictly the AI follows the prompt |
@@ -81,6 +97,7 @@ Action buttons (at the bottom of the dialog):
 | Button | What it does |
 |--------|-------------|
 | **START LIVE** / **STOP LIVE** | Toggle the live session |
+| **SEND (F5)** | Manually send the current canvas for AI processing (always available during live) |
 | **Accept** | Copies the current AI preview to a permanent layer (session continues) |
 
 > [!NOTE]
@@ -188,7 +205,7 @@ pixel art, stardew valley style, cute farmer, warm colors
 Same drawing, completely different interpretations. This is one of the fastest ways to explore art direction.
 
 > [!TIP]
-> Prompt changes are auto-detected. Just edit the prompt field in the Generate tab — Live Paint picks it up within one poll cycle (~150ms). Steps and CFG sliders are also hot-updatable mid-session.
+> Prompt changes are auto-detected by a lightweight watchdog (500ms interval). Just edit the prompt field in the Generate tab — Live Paint picks it up automatically. Steps and CFG sliders are also hot-updatable mid-session (debounced 100ms).
 
 ---
 
@@ -311,7 +328,7 @@ Approximate latency per frame at 512x512, 4 steps, after torch.compile warmup:
 - **Lower resolution** — work at 256x256 or 384x384 during Live Paint, upscale later
 - **Keep torch.compile enabled** — it makes the biggest difference for repeated inference
 - **Close other GPU applications** — VRAM and compute are fully dedicated to Live Paint
-- **Use the canvas hash** — the system only sends frames when your canvas actually changes, so idle time costs nothing
+- **Event-driven detection** — frames are only sent when your canvas actually changes (via `sprite.events:on('change')`), so idle time costs zero CPU
 
 ### ROI Detection
 
@@ -369,11 +386,12 @@ Another generation (or animation) is still running. Wait for it to finish or can
 - Make sure **torch.compile** is enabled (check server logs for "torch.compile: enabled")
 - Close any other GPU-intensive applications
 
-### Canvas changes not detected
+### Canvas changes not detected (Auto mode)
 
-- The system uses a hash-based change detection (sampling every min(w,h)/16 pixels — e.g. every 32nd pixel on a 512x512 canvas)
-- Very small changes (single pixel edits) might not trigger a new frame
-- Draw a few more strokes — the hash will pick up the change
+- Auto mode uses `sprite.events:on('change')` which fires once per completed operation (brush stroke, fill, paste, etc.)
+- Changes are debounced by 300ms — rapid strokes are batched into a single send
+- If Auto mode misses a change, press **F5** to force-send the current canvas
+- In Manual mode, changes are never auto-detected — use F5 exclusively
 
 ### "Live stopped (sprite closed)"
 

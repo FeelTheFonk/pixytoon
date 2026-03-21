@@ -39,6 +39,8 @@ pixytoon/
 ├── dist/                        # Built .aseprite-extension
 ├── extension/
 │   ├── package.json             # Extension manifest
+│   ├── keys/
+│   │   └── pixytoon.aseprite-keys  # F5 hotkey for Live Send
 │   └── scripts/
 │       ├── json.lua             # Pure Lua JSON parser
 │       ├── pixytoon.lua         # Plugin entry point (init/exit + module loader)
@@ -50,7 +52,7 @@ pixytoon/
 │       ├── pixytoon_capture.lua # Image capture (active layer, flattened, mask)
 │       ├── pixytoon_request.lua # Request builders (parse, attach, build)
 │       ├── pixytoon_import.lua  # Import result, animation frame, live preview
-│       ├── pixytoon_live.lua    # Live paint system (hash, dirty region, timers)
+│       ├── pixytoon_live.lua    # Live paint system (event-driven, F5 hotkey, ROI)
 │       ├── pixytoon_handler.lua # Response dispatch table
 │       └── pixytoon_dialog.lua  # Dialog construction (tabs + actions)
 ├── scripts/
@@ -73,7 +75,7 @@ pixytoon/
 │   │   ├── loras/               # User LoRA files (.safetensors)
 │   │   └── embeddings/          # Textual Inversion embeddings
 │   └── pixytoon/                # Python package
-│       ├── __init__.py          # Package version (0.5.0)
+│       ├── __init__.py          # Package version (0.6.0)
 │       ├── config.py            # Pydantic Settings (env vars)
 │       ├── protocol.py          # WebSocket schemas (Pydantic v2)
 │       ├── engine.py            # SD1.5 SOTA pipeline orchestrator
@@ -97,7 +99,7 @@ pixytoon/
 ## Features
 
 - **txt2img / img2img / inpaint / ControlNet** — OpenPose, Canny, Scribble, Lineart (v1.1)
-- **Live Paint** (v0.3.0) — Real-time AI-assisted painting: paint in Aseprite, see AI-enhanced results live (~200-500ms latency), ROI dirty-region detection (v0.4.0)
+- **Live Paint** (v0.3.0, v0.6.0 rewrite) — Event-driven AI-assisted painting: Auto mode (sends after each brush stroke) + Manual mode (F5 hotkey), zero CPU when idle, ROI dirty-region detection, debounced stroke detection via `sprite.events:on('change')`
 - **Loop Mode** (v0.4.0) — Continuous generation with random seeds for rapid variation exploration
 - **Random Loop** (v0.5.0) — Continuous generation with auto-randomized prompts; lock subject/elements while randomizing the rest
 - **Auto-Prompt Generator** (v0.4.0) — Randomize creative prompts from curated templates with lockable fields

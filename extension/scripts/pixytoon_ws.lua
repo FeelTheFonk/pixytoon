@@ -80,6 +80,7 @@ function PT.set_connected(is_connected)
     PT.dlg:modify{ id = "live_btn", enabled = false }
     PT.dlg:modify{ id = "live_btn", text = "START LIVE" }
     PT.dlg:modify{ id = "live_accept_btn", visible = false }
+    PT.dlg:modify{ id = "live_send_btn", visible = false }
     if PT.state.generating then PT.state.generating = false end
     if PT.state.animating then PT.state.animating = false end
     PT.stop_live_timer()
@@ -171,7 +172,7 @@ function PT.disconnect()
   PT.stop_gen_timeout()
   PT.live.mode = false
   PT.live.request_inflight = false
-  PT.live.canvas_hash = nil
+  PT.live.pending_send = false
   -- Clean up preview layer from sprite
   if PT.live.preview_layer then
     local spr = app.sprite

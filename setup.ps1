@@ -73,11 +73,13 @@ foreach ($f in "pixytoon.lua", "json.lua") {
 # Deploy extension
 if (Test-Path $aseExt) { Remove-Item $aseExt -Recurse -Force }
 New-Item "$aseExt/scripts" -ItemType Directory -Force | Out-Null
+New-Item "$aseExt/keys" -ItemType Directory -Force | Out-Null
 Copy-Item "$Root/extension/package.json" "$aseExt/" -Force
 Copy-Item "$Root/extension/scripts/*.lua" "$aseExt/scripts/" -Force
+Copy-Item "$Root/extension/keys/*" "$aseExt/keys/" -Force
 
 $count = (Get-ChildItem "$aseExt/scripts/*.lua").Count
-Ok "$count Lua files -> $aseExt"
+Ok "$count Lua files + keys -> $aseExt"
 
 # --- 6. Environment config ---------------------------------------------------
 Step 6 6 "Checking environment config"

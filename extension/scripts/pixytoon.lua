@@ -40,7 +40,7 @@ local modules = {
   "pixytoon_capture",   -- image capture (active layer, flattened, mask)
   "pixytoon_request",   -- request builders (parse, attach, build)
   "pixytoon_import",    -- import result, animation frame, live preview
-  "pixytoon_live",      -- live paint system (hash, dirty region, timers)
+  "pixytoon_live",      -- live paint system (event-driven, dirty region, F5 hotkey)
   "pixytoon_handler",   -- response dispatch table
   "pixytoon_dialog",    -- dialog construction (tabs + actions)
 }
@@ -69,6 +69,20 @@ end
 
 function init(plugin)
   _PT.plugin = plugin
+
+  -- Register hotkey command for live send (F5 default via .aseprite-keys)
+  plugin:newCommand{
+    id = "PixyToonLiveSend",
+    title = "PixyToon: Send Live Frame",
+    group = "sprite_crop",
+    onenabled = function()
+      return _PT.live.mode and _PT.state.connected and not _PT.live.request_inflight
+    end,
+    onclick = function()
+      if _PT.live_send_now then _PT.live_send_now() end
+    end,
+  }
+
   _PT.build_dialog()
   _PT.apply_settings(_PT.load_settings())
 end
@@ -84,7 +98,7 @@ function exit(plugin)
     end
   end
 
-  -- Stop live mode timers
+  -- Stop live mode timers + event listeners
   if _PT.stop_live_timer then pcall(_PT.stop_live_timer) end
 
   -- Disconnect WebSocket
