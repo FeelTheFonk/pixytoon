@@ -138,7 +138,14 @@ async def ws_endpoint(websocket: WebSocket) -> None:
                         message=f"Malformed request: {e}",
                     ))
                     continue
-                await _handle(websocket, req, ws_id)
+                try:
+                    await _handle(websocket, req, ws_id)
+                except Exception as e:
+                    log.exception("Handler error for action '%s': %s", req.action, e)
+                    await _send(websocket, ErrorResponse(
+                        code="ENGINE_ERROR",
+                        message=f"Handler error: {e}",
+                    ))
 
             elif "bytes" in msg:
                 # P0-L4: Binary frame from live painting client

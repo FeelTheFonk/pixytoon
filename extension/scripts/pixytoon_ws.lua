@@ -52,6 +52,7 @@ function PT.start_gen_timeout()
           PT.update_status("Timed out — no response from server")
           PT.dlg:modify{ id = "generate_btn", text = "GENERATE", enabled = not PT.live.mode }
           PT.dlg:modify{ id = "animate_btn", enabled = not PT.live.mode }
+          PT.dlg:modify{ id = "live_btn", enabled = not PT.live.mode }
           PT.dlg:modify{ id = "cancel_btn", enabled = false }
         end
       end

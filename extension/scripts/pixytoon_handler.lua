@@ -50,6 +50,7 @@ handlers.result = function(resp)
     if PT.dlg then
       PT.dlg:modify{ id = "generate_btn", text = "GENERATE", enabled = true }
       PT.dlg:modify{ id = "animate_btn", enabled = true }
+      PT.dlg:modify{ id = "live_btn", enabled = true }
       PT.dlg:modify{ id = "cancel_btn", enabled = false }
     end
     return
@@ -92,6 +93,7 @@ handlers.result = function(resp)
           if PT.dlg then
             PT.dlg:modify{ id = "generate_btn", text = "GENERATE", enabled = true }
             PT.dlg:modify{ id = "animate_btn", enabled = true }
+            PT.dlg:modify{ id = "live_btn", enabled = true }
             PT.dlg:modify{ id = "cancel_btn", enabled = false }
           end
           PT.update_status("Loop stopped (no source image)")
@@ -208,6 +210,7 @@ handlers.error = function(resp)
     PT.update_status("Error: " .. tostring(resp.message or "Unknown"))
     PT.dlg:modify{ id = "generate_btn", text = "GENERATE", enabled = not PT.live.mode }
     PT.dlg:modify{ id = "animate_btn", enabled = not PT.live.mode }
+    PT.dlg:modify{ id = "live_btn", enabled = not PT.live.mode }
     PT.dlg:modify{ id = "cancel_btn", enabled = false }
   end
   if resp.code ~= "CANCELLED" then
@@ -335,6 +338,7 @@ handlers.prompt_result = function(resp)
       if PT.dlg then
         PT.dlg:modify{ id = "generate_btn", text = "GENERATE", enabled = true }
         PT.dlg:modify{ id = "animate_btn", enabled = true }
+        PT.dlg:modify{ id = "live_btn", enabled = true }
         PT.dlg:modify{ id = "cancel_btn", enabled = false }
       end
       PT.update_status("Random loop stopped (no source image)")
