@@ -41,6 +41,9 @@ Thumbs.db
 *.tmp
 *.pdb
 
+# Screenshots (user captures)
+/menu*.png
+
 # Test output
 test_output/
 

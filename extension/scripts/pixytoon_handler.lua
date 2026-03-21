@@ -333,6 +333,10 @@ handlers.prompt_result = function(resp)
   if resp.negative_prompt and resp.negative_prompt ~= "" then
     PT.dlg:modify{ id = "negative_prompt", text = resp.negative_prompt }
   end
+  -- Populate fixed_subject from generated components so Lock Subject works
+  if resp.components and resp.components.subject then
+    PT.dlg:modify{ id = "fixed_subject", text = resp.components.subject }
+  end
 
   -- Random loop: auto-trigger generation after prompt is set
   if PT.loop.random_mode and PT.loop.mode and PT.dlg and PT.state.connected then
