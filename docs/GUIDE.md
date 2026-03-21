@@ -240,11 +240,14 @@ The generation resolution. Higher = more detail but slower and more VRAM.
 
 | Size | Use case |
 |------|----------|
-| 32x32 - 64x64 | Tiny icons, inventory items |
+| 64x64 | Tiny sprites (minimum generation size) |
 | 128x128 | Small sprites |
 | 256x256 | Medium sprites |
 | **512x512** | **Default** — best quality/speed ratio for SD 1.5 |
 | 768x768 | Large scenes (needs more VRAM) |
+
+> [!NOTE]
+> The generation size is how large the AI canvas is. For small pixel art output (32x32, 48x48), generate at 512x512 and use the post-processing **Pixelate** to downscale to your target size.
 
 > [!WARNING]
 > SD 1.5 was trained on 512x512. Going above 768 often produces duplicated compositions or artifacts. For large scenes, generate at 512x512 and upscale in Aseprite.

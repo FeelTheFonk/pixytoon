@@ -38,7 +38,7 @@ You keep full artistic control. The AI is your assistant, not your replacement.
 
 That's it. Paint, and watch the AI respond.
 
-To finish: click **STOP LIVE** or **Accept** to flatten the preview into your work.
+To finish: click **STOP LIVE**. Use **Accept** anytime to copy the current AI preview to a permanent layer (the session keeps running).
 
 ```mermaid
 sequenceDiagram
@@ -80,7 +80,7 @@ Action buttons (at the bottom of the dialog):
 | Button | What it does |
 |--------|-------------|
 | **START LIVE** / **STOP LIVE** | Toggle the live session |
-| **Accept** | Keeps the current AI preview as a permanent layer, stops the session |
+| **Accept** | Copies the current AI preview to a permanent layer (session continues) |
 
 > [!NOTE]
 > While Live Paint is active, **Generate** and **Animate** are disabled. The GPU is dedicated to real-time rendering. Stop the session to use other modes.
