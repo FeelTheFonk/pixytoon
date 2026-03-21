@@ -134,18 +134,23 @@ class AnimateDiffManager:
         # UNet already PEFT-stripped by ensure_base() above
         unet = get_uncompiled_unet(base_pipe)
 
-        self.controlnet_pipe = AnimateDiffControlNetPipeline(
-            vae=base_pipe.vae,
-            text_encoder=base_pipe.text_encoder,
-            tokenizer=base_pipe.tokenizer,
-            unet=unet,
-            motion_adapter=self.motion_adapter,
-            controlnet=controlnet,
-            scheduler=copy.deepcopy(base_pipe.scheduler),
-            feature_extractor=None,
-        )
-        self.controlnet_pipe.to("cuda")
-        apply_freeu(self.controlnet_pipe)
+        try:
+            self.controlnet_pipe = AnimateDiffControlNetPipeline(
+                vae=base_pipe.vae,
+                text_encoder=base_pipe.text_encoder,
+                tokenizer=base_pipe.tokenizer,
+                unet=unet,
+                motion_adapter=self.motion_adapter,
+                controlnet=controlnet,
+                scheduler=copy.deepcopy(base_pipe.scheduler),
+                feature_extractor=None,
+            )
+            self.controlnet_pipe.to("cuda")
+            apply_freeu(self.controlnet_pipe)
+        except Exception:
+            self.controlnet_pipe = None
+            self.controlnet_mode = None
+            raise
 
         self.controlnet_mode = mode
         log.info("AnimateDiff + ControlNet pipeline ready (mode=%s)", mode.value)

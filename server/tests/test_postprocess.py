@@ -24,11 +24,12 @@ def _make_test_image(w=128, h=128, mode="RGBA"):
     arr = np.random.randint(0, 255, (h, w, 4 if mode == "RGBA" else 3), dtype=np.uint8)
     if mode == "RGBA":
         arr[:, :, 3] = 255
-    return Image.fromarray(arr, mode)
+    return Image.fromarray(arr)
 
 
 class TestPixelation:
     def test_pixelate_enabled(self):
+        np.random.seed(42)
         img = _make_test_image(512, 512)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=True, target_size=64),
@@ -38,6 +39,7 @@ class TestPixelation:
         assert result.size == (64, 64)
 
     def test_pixelate_disabled(self):
+        np.random.seed(42)
         img = _make_test_image(128, 128)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=False),
@@ -47,6 +49,7 @@ class TestPixelation:
         assert result.size == (128, 128)
 
     def test_pixelate_rectangular(self):
+        np.random.seed(42)
         img = _make_test_image(256, 128)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=True, target_size=64),
@@ -59,6 +62,7 @@ class TestPixelation:
 
 class TestQuantization:
     def test_kmeans_reduces_colors(self):
+        np.random.seed(42)
         img = _make_test_image(64, 64)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=False),
@@ -70,9 +74,10 @@ class TestQuantization:
         colors = set()
         for px in result.getdata():
             colors.add(px[:3])
-        assert len(colors) <= 16  # Allow some slack for alpha compositing
+        assert len(colors) <= 10  # Allow some slack for alpha compositing
 
     def test_octree_method(self):
+        np.random.seed(42)
         img = _make_test_image(64, 64)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=False),
@@ -84,6 +89,7 @@ class TestQuantization:
         assert result.size == (64, 64)
 
     def test_median_cut_method(self):
+        np.random.seed(42)
         img = _make_test_image(64, 64)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=False),
@@ -97,6 +103,7 @@ class TestQuantization:
 
 class TestDithering:
     def test_floyd_steinberg(self):
+        np.random.seed(42)
         img = _make_test_image(64, 64)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=False),
@@ -107,6 +114,7 @@ class TestDithering:
         assert result.size == (64, 64)
 
     def test_bayer_4x4(self):
+        np.random.seed(42)
         img = _make_test_image(64, 64)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=False),
@@ -117,6 +125,7 @@ class TestDithering:
         assert result.size == (64, 64)
 
     def test_no_dither(self):
+        np.random.seed(42)
         img = _make_test_image(64, 64)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=False),
@@ -128,6 +137,7 @@ class TestDithering:
 
 class TestPalette:
     def test_auto_palette(self):
+        np.random.seed(42)
         img = _make_test_image(64, 64)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=False),
@@ -138,6 +148,7 @@ class TestPalette:
         assert result.size == (64, 64)
 
     def test_custom_palette(self):
+        np.random.seed(42)
         img = _make_test_image(64, 64)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=False),
@@ -153,6 +164,7 @@ class TestPalette:
 
 class TestFullPipeline:
     def test_complete_pixel_art_pipeline(self):
+        np.random.seed(42)
         img = _make_test_image(512, 512)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=True, target_size=64),
@@ -167,6 +179,7 @@ class TestFullPipeline:
         assert result.mode == "RGBA"
 
     def test_passthrough_no_processing(self):
+        np.random.seed(42)
         img = _make_test_image(128, 128)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=False),

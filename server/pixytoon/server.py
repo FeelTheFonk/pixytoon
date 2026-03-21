@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 import threading
-import time as _time
+import time
 from contextlib import asynccontextmanager
 
 import torch
@@ -50,10 +51,11 @@ log = logging.getLogger("pixytoon.server")
 
 engine = DiffusionEngine()
 _generate_lock: asyncio.Lock | None = None
+_realtime_lock: asyncio.Lock | None = None  # protects _realtime_owner / _realtime_ws
 _generating: dict[int, threading.Event] = {}  # connection id -> cancel event
 _active_connections: set[WebSocket] = set()
 _MAX_CONNECTIONS = 5
-_ws_counter = 0  # monotonic connection ID (avoids id() reuse)
+_ws_id_gen = itertools.count(1)  # thread-safe monotonic connection ID
 _realtime_owner: int | None = None  # ws_id that owns realtime mode (None = free)
 _realtime_ws: WebSocket | None = None  # WebSocket of the realtime owner (for auto-stop notify)
 _realtime_timeout_task: asyncio.Task | None = None  # auto-stop timer
@@ -61,8 +63,9 @@ _realtime_timeout_task: asyncio.Task | None = None  # auto-stop timer
 
 @asynccontextmanager
 async def _lifespan(application: FastAPI):
-    global _generate_lock
+    global _generate_lock, _realtime_lock
     _generate_lock = asyncio.Lock()
+    _realtime_lock = asyncio.Lock()
 
     log.info("PixyToon server starting — loading diffusion engine...")
     loop = asyncio.get_running_loop()
@@ -102,19 +105,19 @@ app = FastAPI(title="PixyToon Server", version=__version__, lifespan=_lifespan)
 
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket) -> None:
+    # Accept first (WebSocket protocol requires accept before sending), then
+    # enforce the connection limit and close with a proper error if exceeded.
     await websocket.accept()
 
     if len(_active_connections) >= _MAX_CONNECTIONS:
-        await websocket.send_text(ErrorResponse(
+        await _send(websocket, ErrorResponse(
             code="MAX_CONNECTIONS", message="Too many connections"
-        ).model_dump_json())
-        await websocket.close()
+        ))
+        await websocket.close(code=1008, reason="Server at capacity")
         return
     _active_connections.add(websocket)
 
-    global _ws_counter
-    _ws_counter += 1
-    ws_id = _ws_counter
+    ws_id = next(_ws_id_gen)
     _generating[ws_id] = threading.Event()
     log.info("Client connected: %s", websocket.client)
 
@@ -134,11 +137,11 @@ async def ws_endpoint(websocket: WebSocket) -> None:
 
     except WebSocketDisconnect:
         log.info("Client disconnected: %s", websocket.client)
-        if _generating.get(ws_id, threading.Event()).is_set():
+        if ws_id in _generating and _generating[ws_id].is_set():
             engine.cancel()
     except Exception as e:
         log.exception("WebSocket error: %s", e)
-        if _generating.get(ws_id, threading.Event()).is_set():
+        if ws_id in _generating and _generating[ws_id].is_set():
             engine.cancel()
     finally:
         _active_connections.discard(websocket)
@@ -159,7 +162,8 @@ def _make_thread_callback(websocket: WebSocket, loop: asyncio.AbstractEventLoop,
                 if websocket.application_state.name != "CONNECTED":
                     return
             except AttributeError:
-                return  # Starlette internal changed — skip safely
+                log.debug("WebSocket state check failed (Starlette internal changed) — skipping send")
+                return
             fut = asyncio.run_coroutine_threadsafe(
                 _send(websocket, response), loop
             )
@@ -179,7 +183,7 @@ async def _handle(websocket: WebSocket, req: Request, ws_id: int) -> None:
             await _send(websocket, PongResponse())
 
         elif req.action == Action.CANCEL:
-            if _generating.get(ws_id, threading.Event()).is_set():
+            if ws_id in _generating and _generating[ws_id].is_set():
                 engine.cancel()
                 # Don't send response here — the GenerationCancelled exception
                 # handler will send CANCELLED when the generation actually stops.
@@ -239,7 +243,9 @@ async def _handle(websocket: WebSocket, req: Request, ws_id: int) -> None:
 
         elif req.action == Action.GENERATE:
             # Block if realtime mode is active
-            if _realtime_owner is not None:
+            async with _realtime_lock:
+                rt_busy = _realtime_owner is not None
+            if rt_busy:
                 await _send(websocket, ErrorResponse(
                     code="REALTIME_BUSY",
                     message="Cannot generate while real-time mode is active",
@@ -274,7 +280,9 @@ async def _handle(websocket: WebSocket, req: Request, ws_id: int) -> None:
 
         elif req.action == Action.GENERATE_ANIMATION:
             # Block if realtime mode is active
-            if _realtime_owner is not None:
+            async with _realtime_lock:
+                rt_busy = _realtime_owner is not None
+            if rt_busy:
                 await _send(websocket, ErrorResponse(
                     code="REALTIME_BUSY",
                     message="Cannot animate while real-time mode is active",
@@ -305,7 +313,7 @@ async def _handle(websocket: WebSocket, req: Request, ws_id: int) -> None:
             async with _generate_lock:
                 _generating[ws_id].set()
                 try:
-                    t0 = _time.perf_counter()
+                    t0 = time.perf_counter()
                     frames = await asyncio.wait_for(
                         loop.run_in_executor(
                             None,
@@ -317,7 +325,7 @@ async def _handle(websocket: WebSocket, req: Request, ws_id: int) -> None:
                         ),
                         timeout=anim_timeout,
                     )
-                    total_ms = int((_time.perf_counter() - t0) * 1000)
+                    total_ms = int((time.perf_counter() - t0) * 1000)
                 except asyncio.TimeoutError:
                     engine.cancel()
                     raise RuntimeError(
@@ -335,7 +343,7 @@ async def _handle(websocket: WebSocket, req: Request, ws_id: int) -> None:
         else:
             await _send(websocket, ErrorResponse(
                 code="UNKNOWN_ACTION",
-                message=f"Unknown action: {req.action}",
+                message=f"Unknown action: {req.action!r}",
             ))
 
     except GenerationCancelled:
@@ -370,8 +378,10 @@ async def _handle_generate_prompt(websocket: WebSocket, req: Request) -> None:
     from .prompt_generator import prompt_generator
     locked = req.locked_fields or {}
     template = req.prompt_template
-    prompt, components = prompt_generator.generate(locked, template)
-    await _send(websocket, PromptResultResponse(prompt=prompt, components=components))
+    prompt, negative, components = prompt_generator.generate(locked, template)
+    await _send(websocket, PromptResultResponse(
+        prompt=prompt, negative_prompt=negative, components=components,
+    ))
 
 
 async def _handle_get_preset(websocket: WebSocket, req: Request) -> None:
@@ -417,11 +427,15 @@ async def _handle_delete_preset(websocket: WebSocket, req: Request) -> None:
 
 
 async def _handle_cleanup(websocket: WebSocket) -> None:
-    if _realtime_owner is not None:
+    async with _realtime_lock:
+        rt_busy = _realtime_owner is not None
+    if rt_busy:
         await _send(websocket, ErrorResponse(
             code="REALTIME_BUSY",
             message="Cannot cleanup while real-time mode is active"))
         return
+    # Best-effort check: locked() is racy but acceptable here — we only use it
+    # as a courtesy guard and never enter the lock afterward.
     if _generate_lock is not None and _generate_lock.locked():
         await _send(websocket, ErrorResponse(
             code="GPU_BUSY",
@@ -442,30 +456,32 @@ async def _handle_cleanup(websocket: WebSocket) -> None:
 async def _handle_realtime_start(websocket: WebSocket, req: Request, ws_id: int) -> None:
     global _realtime_owner, _realtime_ws, _realtime_timeout_task
 
-    if _realtime_owner is not None and _realtime_owner != ws_id:
-        await _send(websocket, ErrorResponse(
-            code="REALTIME_BUSY",
-            message="Another client is using real-time mode",
-        ))
-        return
+    async with _realtime_lock:
+        if _realtime_owner is not None and _realtime_owner != ws_id:
+            await _send(websocket, ErrorResponse(
+                code="REALTIME_BUSY",
+                message="Another client is using real-time mode",
+            ))
+            return
 
-    if _generate_lock is None:
-        raise RuntimeError("Server not fully initialized")
+        if _generate_lock is None:
+            raise RuntimeError("Server not fully initialized")
 
-    # Check if generate_lock is currently held (generation in progress)
-    if _generate_lock.locked():
-        await _send(websocket, ErrorResponse(
-            code="GPU_BUSY",
-            message="Cannot start real-time mode while a generation is in progress",
-        ))
-        return
+        # Best-effort check: locked() is racy but acceptable here — we only use it
+        # as a courtesy guard and never enter the lock afterward.
+        if _generate_lock.locked():
+            await _send(websocket, ErrorResponse(
+                code="GPU_BUSY",
+                message="Cannot start real-time mode while a generation is in progress",
+            ))
+            return
+
+        # Claim ownership inside the lock to prevent race condition
+        _realtime_owner = ws_id
+        _realtime_ws = websocket
 
     rt_req = req.to_realtime_start()
     loop = asyncio.get_running_loop()
-
-    # Claim ownership BEFORE async work to prevent race condition
-    _realtime_owner = ws_id
-    _realtime_ws = websocket
 
     try:
         result = await loop.run_in_executor(
@@ -475,14 +491,17 @@ async def _handle_realtime_start(websocket: WebSocket, req: Request, ws_id: int)
         await _send(websocket, result)
     except Exception as e:
         # Release ownership on failure
-        _realtime_owner = None
-        _realtime_ws = None
+        async with _realtime_lock:
+            _realtime_owner = None
+            _realtime_ws = None
         log.exception("Failed to start realtime: %s", e)
         await _send(websocket, ErrorResponse(code="ENGINE_ERROR", message=str(e)))
 
 
 async def _handle_realtime_frame(websocket: WebSocket, req: Request, ws_id: int) -> None:
-    if _realtime_owner != ws_id:
+    async with _realtime_lock:
+        is_owner = _realtime_owner == ws_id
+    if not is_owner:
         await _send(websocket, ErrorResponse(
             code="REALTIME_NOT_ACTIVE",
             message="Real-time mode not active for this connection",
@@ -497,7 +516,8 @@ async def _handle_realtime_frame(websocket: WebSocket, req: Request, ws_id: int)
         ))
         return
 
-    # Safety: skip frame if GPU is busy (e.g. overlapping executor calls)
+    # Best-effort check: locked() is racy but acceptable here — we only use it
+    # as a courtesy guard to skip frames and never enter the lock afterward.
     if _generate_lock is not None and _generate_lock.locked():
         await _send(websocket, ErrorResponse(
             code="GPU_BUSY",
@@ -532,7 +552,9 @@ async def _handle_realtime_frame(websocket: WebSocket, req: Request, ws_id: int)
 
 
 async def _handle_realtime_update(websocket: WebSocket, req: Request, ws_id: int) -> None:
-    if _realtime_owner != ws_id:
+    async with _realtime_lock:
+        is_owner = _realtime_owner == ws_id
+    if not is_owner:
         return  # Silently ignore updates from non-owner
 
     update_req = req.to_realtime_update()
@@ -542,11 +564,13 @@ async def _handle_realtime_update(websocket: WebSocket, req: Request, ws_id: int
             None, lambda: engine.update_realtime_params(update_req),
         )
     except Exception as e:
-        log.warning("Realtime update error: %s", e)
+        log.exception("Realtime update error: %s", e)
 
 
 async def _handle_realtime_stop(websocket: WebSocket, ws_id: int) -> None:
-    if _realtime_owner != ws_id:
+    async with _realtime_lock:
+        is_owner = _realtime_owner == ws_id
+    if not is_owner:
         await _send(websocket, ErrorResponse(
             code="REALTIME_NOT_ACTIVE",
             message="Real-time mode not active for this connection",
@@ -561,12 +585,16 @@ async def _cleanup_realtime(ws_id: int) -> None:
     """Stop realtime mode if owned by ws_id. Safe to call multiple times."""
     global _realtime_owner, _realtime_ws, _realtime_timeout_task
 
-    if _realtime_owner != ws_id:
-        return
+    async with _realtime_lock:
+        if _realtime_owner != ws_id:
+            return
 
-    if _realtime_timeout_task is not None:
-        _realtime_timeout_task.cancel()
-        _realtime_timeout_task = None
+        if _realtime_timeout_task is not None:
+            _realtime_timeout_task.cancel()
+            _realtime_timeout_task = None
+
+        _realtime_owner = None
+        _realtime_ws = None
 
     loop = asyncio.get_running_loop()
     try:
@@ -574,8 +602,6 @@ async def _cleanup_realtime(ws_id: int) -> None:
     except Exception as e:
         log.warning("Realtime cleanup error: %s", e)
 
-    _realtime_owner = None
-    _realtime_ws = None
     log.info("Realtime session cleaned up for ws_id=%d", ws_id)
 
 
@@ -589,24 +615,26 @@ def _reset_realtime_timeout() -> None:
     async def _auto_stop():
         await asyncio.sleep(settings.realtime_timeout)
         global _realtime_owner, _realtime_ws
-        if _realtime_owner is not None:
+        async with _realtime_lock:
+            if _realtime_owner is None:
+                return
             log.info("Realtime auto-stop: no frame for %.0fs", settings.realtime_timeout)
             ws = _realtime_ws
-            loop = asyncio.get_running_loop()
-            try:
-                await loop.run_in_executor(None, engine.stop_realtime)
-            except Exception:
-                pass
             _realtime_owner = None
             _realtime_ws = None
-            # Notify client that realtime was auto-stopped
-            if ws is not None:
-                try:
-                    await _send(ws, RealtimeStoppedResponse(
-                        message="Real-time mode auto-stopped (timeout)",
-                    ))
-                except Exception:
-                    pass
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(None, engine.stop_realtime)
+        except Exception:
+            pass
+        # Notify client that realtime was auto-stopped
+        if ws is not None:
+            try:
+                await _send(ws, RealtimeStoppedResponse(
+                    message="Real-time mode auto-stopped (timeout)",
+                ))
+            except Exception:
+                pass
 
     try:
         loop = asyncio.get_running_loop()

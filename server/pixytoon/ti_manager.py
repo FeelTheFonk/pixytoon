@@ -15,11 +15,14 @@ def list_embeddings() -> list[str]:
     d = settings.embeddings_dir
     if not d.is_dir():
         return []
-    return sorted(
-        p.stem
-        for p in d.iterdir()
-        if p.is_file() and p.suffix.lower() in _TI_EXTENSIONS
-    )
+    try:
+        return sorted(
+            p.stem
+            for p in d.iterdir()
+            if p.is_file() and p.suffix.lower() in _TI_EXTENSIONS
+        )
+    except OSError:
+        return []
 
 
 def resolve_embedding_path(name: str) -> Path:

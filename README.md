@@ -53,7 +53,7 @@ pixytoon/
 │   ├── run.py                   # Entry point
 │   ├── palettes/                # 7 preset palettes (JSON)
 │   └── pixytoon/                # Python package
-│       ├── __init__.py          # Package version (0.3.0)
+│       ├── __init__.py          # Package version (0.4.0)
 │       ├── config.py            # Pydantic Settings (env vars)
 │       ├── protocol.py          # WebSocket schemas (Pydantic v2)
 │       ├── engine.py            # SD1.5 SOTA pipeline orchestrator
@@ -70,12 +70,17 @@ pixytoon/
 │       ├── lora_manager.py      # LoRA discovery (path-validated)
 │       ├── ti_manager.py        # Textual Inversion discovery
 │       └── palette_manager.py   # Palette loading (path-validated)
+│   ├── presets/              # Built-in and user-saved generation presets
+│   ├── data/prompts/         # Auto-prompt generator data files
 ```
 
 ## Features
 
 - **txt2img / img2img / inpaint / ControlNet** — OpenPose, Canny, Scribble, Lineart (v1.1)
-- **Live Paint** (v0.3.0) — Real-time AI-assisted painting: paint in Aseprite, see AI-enhanced results live (~200-500ms latency)
+- **Live Paint** (v0.3.0) — Real-time AI-assisted painting: paint in Aseprite, see AI-enhanced results live (~200-500ms latency), ROI dirty-region detection (v0.4.0)
+- **Loop Mode** (v0.4.0) — Continuous generation with random seeds for rapid variation exploration
+- **Auto-Prompt Generator** (v0.4.0) — Randomize creative prompts from curated templates with lockable fields
+- **Presets** (v0.4.0) — Save/load generation settings; built-in presets for pixel art, anime, character, landscape, and more
 - **Animation** — Dual-method: Frame Chain (img2img chaining) + AnimateDiff (motion module temporal consistency)
 - **AnimateDiff** — Motion adapter v1-5-3, FreeInit support, auto DeepCache disable/re-enable, ControlNet compatible
 - **LoRA stacking** — Hyper-SD (speed) + pixel art LoRA (style, ±2.0 weight range)
@@ -149,6 +154,12 @@ Connect to `ws://127.0.0.1:9876/ws`. All messages are JSON.
 | `realtime_frame`     | Send canvas frame for live processing |
 | `realtime_update`    | Hot-update realtime parameters      |
 | `realtime_stop`      | Stop real-time paint session        |
+| `generate_prompt`    | Generate a random prompt using templates |
+| `list_presets`       | List available presets               |
+| `get_preset`         | Load a preset by name                |
+| `save_preset`        | Save current settings as preset      |
+| `delete_preset`      | Delete a user preset                 |
+| `cleanup`            | Free GPU VRAM and run garbage collection |
 
 ### Generate Request
 
@@ -262,7 +273,9 @@ Send canvas frames for processing:
   "action": "realtime_frame",
   "image": "<base64 PNG — current canvas>",
   "frame_id": 1,
-  "prompt": "optional prompt override"
+  "prompt": "optional prompt override",
+  "mask": "<base64 mask of dirty region (optional)>",
+  "roi_x": 0, "roi_y": 0, "roi_w": 128, "roi_h": 128
 }
 ```
 
@@ -272,6 +285,7 @@ Hot-update parameters mid-session (all fields optional):
 {
   "action": "realtime_update",
   "prompt": "new prompt",
+  "negative_prompt": "blurry, photorealistic",
   "denoise_strength": 0.6,
   "steps": 3,
   "cfg_scale": 3.0,
@@ -305,8 +319,13 @@ Stop the session:
 | `list`               | `list_type`, `items`                                                |
 | `pong`               | (no fields)                                                         |
 | `realtime_ready`     | `message`                                                           |
-| `realtime_result`    | `image` (b64 PNG), `latency_ms`, `frame_id`, `width`, `height`     |
+| `realtime_result`    | `image` (b64 PNG), `latency_ms`, `frame_id`, `width`, `height`, `roi_x` (opt), `roi_y` (opt) |
 | `realtime_stopped`   | `message`                                                           |
+| `prompt_result`      | `prompt`, `components`                                              |
+| `preset`             | `name`, `data`                                                      |
+| `preset_saved`       | `name`                                                              |
+| `preset_deleted`     | `name`                                                              |
+| `cleanup_done`       | `message`, `freed_mb`                                               |
 
 ### Input Validation
 
@@ -319,6 +338,7 @@ Stop the session:
 | `clip_skip` | 1 - 12               |
 | `denoise_strength` | 0.0 - 1.0     |
 | `lora.weight` | -2.0 - 2.0 (negative LoRA) |
+| `target_size` | 8 - 512              |
 | `colors`    | 2 - 256              |
 
 ## Post-Processing Pipeline
@@ -375,6 +395,8 @@ All prefixed with `PIXYTOON_`. Example: `PIXYTOON_PORT=8080`.
 | `REALTIME_DEFAULT_STEPS`   | `4`                                   | Default realtime inference steps |
 | `REALTIME_DEFAULT_CFG`     | `2.5`                                 | Default realtime CFG scale      |
 | `REALTIME_DEFAULT_DENOISE` | `0.5`                                 | Default realtime denoise strength |
+| `REALTIME_ROI_PADDING`     | `32`                                  | Padding around ROI crop (pixels)  |
+| `REALTIME_ROI_MIN_SIZE`    | `64`                                  | Minimum ROI dimension (pixels)    |
 
 ## HTTP Endpoints
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import warnings
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,8 @@ def tmp_presets_dir(tmp_path: Path) -> Path:
     if src.is_dir():
         for f in src.glob("*.json"):
             shutil.copy(f, d / f.name)
+    else:
+        warnings.warn("presets/ directory not found — tests may use empty fixtures")
     return d
 
 
@@ -30,6 +33,8 @@ def tmp_prompts_dir(tmp_path: Path) -> Path:
     if src.is_dir():
         for f in src.glob("*.json"):
             shutil.copy(f, d / f.name)
+    else:
+        warnings.warn("data/prompts/ directory not found — tests may use empty fixtures")
     return d
 
 

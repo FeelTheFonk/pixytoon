@@ -26,8 +26,6 @@ _session_lock = threading.Lock()
 
 def _get_session():
     global _session
-    if _session is not None:
-        return _session
     with _session_lock:
         if _session is None:
             from rembg import new_session

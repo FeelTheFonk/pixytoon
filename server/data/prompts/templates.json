@@ -4,6 +4,13 @@
     "simple": "{subject}, {style}, {quality}",
     "atmospheric": "{subject}, {style}, {lighting}, {mood}, {camera}",
     "detailed": "{quality}, {subject}, {style}, {camera}, {lighting}, {mood}",
-    "minimal": "{subject}, {style}"
+    "minimal": "{subject}, {style}",
+    "rich": "{quality}, {subject}, {style}, {details}, {colors}, {lighting}, {mood}, {camera}",
+    "colorful": "{quality}, {subject}, {style}, {colors}, {lighting}, {mood}",
+    "portrait": "{quality}, {subject}, {style}, {lighting}, {camera}, portrait",
+    "scene": "{quality}, {subject}, {style}, {mood}, {lighting}, {colors}, scene composition",
+    "concept": "{quality}, concept art, {subject}, {style}, {details}, {lighting}",
+    "cinematic": "{quality}, cinematic shot, {subject}, {style}, {camera}, {lighting}, {mood}",
+    "texture": "{quality}, {details}, {colors}, {style}, texture study, {lighting}"
   }
 }

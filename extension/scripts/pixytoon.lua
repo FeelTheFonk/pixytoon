@@ -94,11 +94,15 @@ local live_last_prompt = nil
 local live_preview_sprite = nil
 local live_prev_canvas = nil
 local live_stroke_cooldown = nil
+local live_cooldown_timer = nil  -- C6: reusable cooldown timer (avoid leak)
 
 -- Loop mode state
 local loop_mode = false
 local loop_counter = 0
 local loop_seed_mode = "random"
+
+-- Cancel debounce state (H10)
+local cancel_pending = false
 
 -- Presets state
 local available_presets = {}
@@ -334,6 +338,8 @@ local function set_connected(state)
     stop_gen_timeout()
     live_mode = false
     live_request_inflight = false
+    loop_mode = false  -- H: reset loop mode on disconnect
+    cancel_pending = false  -- H10: reset cancel debounce on disconnect
   end
 end
 
@@ -404,6 +410,13 @@ local function connect()
         set_connected(true)
         update_status("Connected")
         pcall(function() ws:sendText(json.encode({ action = "ping" })) end)
+        -- H13: auto re-request resources on reconnect
+        if resources_requested then
+          send({ action = "list_loras" })
+          send({ action = "list_palettes" })
+          send({ action = "list_embeddings" })
+          send({ action = "list_presets" })
+        end
         return
       end
       if msg_type == WebSocketMessageType.CLOSE then
@@ -414,13 +427,12 @@ local function connect()
         return
       end
       if msg_type == WebSocketMessageType.TEXT then
-        if not connected then
-          stop_connect_timer()
-          set_connected(true)
-          update_status("Connected")
-        end
+        -- #17: removed redundant set_connected(true) — already called in OPEN handler
         local ok, response = pcall(json.decode, data)
-        if not ok then return end
+        if not ok then
+          update_status("JSON error: " .. tostring(response))
+          return
+        end
         local hok, herr = pcall(handle_response, response)
         if not hok then update_status("Error: " .. tostring(herr)) end
       end
@@ -517,7 +529,18 @@ handle_response = function(resp)
     generating = false
     gen_step_start = nil
     stop_gen_timeout()
-    if resp.image then import_result(resp) end
+    cancel_pending = false  -- H10: reset cancel debounce on result
+    -- C8: validate critical fields
+    if not resp.image then
+      update_status("Error: missing image in result response")
+      if dlg then
+        dlg:modify{ id = "generate_btn", enabled = true }
+        dlg:modify{ id = "cancel_btn", enabled = false }
+      end
+      return
+    end
+    if not resp.seed then resp.seed = 0 end
+    import_result(resp)
     -- Loop mode: schedule next generation
     if loop_mode and dlg then
       local seed_info = tostring(resp.seed or "?")
@@ -571,7 +594,12 @@ handle_response = function(resp)
     end
 
   elseif resp.type == "animation_frame" then
-    if resp.image and resp.frame_index ~= nil then
+    -- C8: validate critical fields
+    if not resp.image then
+      update_status("Error: missing image in animation_frame response")
+      return
+    end
+    if resp.frame_index ~= nil then
       import_animation_frame(resp)
     end
 
@@ -579,6 +607,10 @@ handle_response = function(resp)
     animating = false
     gen_step_start = nil
     stop_gen_timeout()
+    -- #13: validate frame count matches expected total
+    if resp.total_frames and anim_frame_count ~= resp.total_frames then
+      update_status("Warning: received " .. anim_frame_count .. "/" .. resp.total_frames .. " frames")
+    end
     if dlg then
       local tag_str = ""
       if resp.tag_name and resp.tag_name ~= "" then tag_str = ", tag=" .. resp.tag_name end
@@ -633,6 +665,8 @@ handle_response = function(resp)
 
     if dlg then
       update_status("Error: " .. tostring(resp.message or "Unknown"))
+      -- H10: reset cancel debounce and re-enable generate
+      cancel_pending = false
       dlg:modify{ id = "generate_btn", enabled = not live_mode }
       dlg:modify{ id = "animate_btn", enabled = not live_mode }
       dlg:modify{ id = "cancel_btn", enabled = false }
@@ -692,7 +726,12 @@ handle_response = function(resp)
 
   elseif resp.type == "realtime_result" then
     live_request_inflight = false
-    if live_mode and resp.image then
+    -- C8: validate critical fields
+    if not resp.image then
+      update_status("Error: missing image in realtime_result")
+      return
+    end
+    if live_mode then
       live_update_preview(resp)
       if dlg then
         update_status("Live (" .. tostring(resp.latency_ms or "?") .. "ms)")
@@ -855,15 +894,16 @@ import_animation_frame = function(resp)
       end
     end
 
-    -- Determine frame position
+    -- H9: Determine frame position
+    -- If frame_index==0 and we just created the sprite, reuse the first frame (no need to insert).
+    -- Otherwise, insert a new empty frame at the correct position (clamped to valid range).
     local frame_num
     if resp.frame_index == 0 and created_sprite then
-      frame_num = 1
+      frame_num = 1  -- Reuse first frame of new sprite
     else
+      -- Insert new frame at correct position
       local target_pos = anim_start_frame + resp.frame_index
-      if target_pos > #spr.frames + 1 then
-        target_pos = #spr.frames + 1
-      end
+      target_pos = math.min(target_pos, #spr.frames + 1)
       local new_frame = spr:newEmptyFrame(target_pos)
       frame_num = new_frame.frameNumber
     end
@@ -909,6 +949,11 @@ local function capture_flattened()
   return image_to_base64(flat_img)
 end
 
+-- Capture an inpainting mask from the current sprite.
+-- Priority order:
+--   1) Active selection (marquee/lasso) -> white where selected
+--   2) Layer named "Mask"/"mask"        -> grayscale content of that layer
+--   3) Active layer alpha channel       -> white where alpha > 0
 local function capture_mask()
   local spr = app.sprite
   if spr == nil then return nil end
@@ -1009,12 +1054,24 @@ stop_live_timer = function()
     if live_timer.isRunning then live_timer:stop() end
     live_timer = nil
   end
+  -- H11: reset inflight flag when timer is stopped
+  live_request_inflight = false
+  -- C6: stop cooldown timer on live stop
+  if live_cooldown_timer then
+    live_cooldown_timer:stop()
+    live_cooldown_timer = nil
+  end
 end
 
 start_live_timer = function()
   stop_live_timer()
-  live_prev_canvas = nil
+  live_prev_canvas = nil  -- C7: release previous reference for GC
   live_stroke_cooldown = nil
+  -- C6: stop any lingering cooldown timer
+  if live_cooldown_timer then
+    live_cooldown_timer:stop()
+    live_cooldown_timer = nil
+  end
   live_timer = Timer{
     interval = 0.15,
     ontick = function()
@@ -1056,7 +1113,11 @@ start_live_timer = function()
 
       -- Debounce: wait 200ms after last change before sending
       live_stroke_cooldown = os.clock()
-      local cooldown_check = Timer{
+      -- C6: reuse a single cooldown timer to avoid memory leak
+      if live_cooldown_timer then
+        live_cooldown_timer:stop()
+      end
+      live_cooldown_timer = Timer{
         interval = 0.2,
         ontick = function(t)
           t:stop()
@@ -1095,6 +1156,8 @@ start_live_timer = function()
               mask_b64 = image_to_base64(mask_img)
             end
           end
+          -- C7: release previous reference for GC before cloning
+          live_prev_canvas = nil
           live_prev_canvas = curr_img:clone()
 
           -- Send frame with ROI data
@@ -1119,7 +1182,7 @@ start_live_timer = function()
           end
         end,
       }
-      cooldown_check:start()
+      live_cooldown_timer:start()
     end,
   }
   live_timer:start()
@@ -1152,9 +1215,13 @@ live_update_preview = function(resp)
   f:write(img_data)
   f:close()
 
-  local img = Image{ fromFile = tmp }
+  -- H12: pcall to safely load the image from temp file
+  local ok_img, img = pcall(function() return Image{ fromFile = tmp } end)
   os.remove(tmp)
-  if not img then return end
+  if not ok_img or not img then
+    update_status("Preview load failed")
+    return
+  end
 
   -- Update existing cel in-place (avoids layer churn)
   local cel = live_preview_layer:cel(app.frame)
@@ -1244,7 +1311,7 @@ local function build_dialog()
   -- ══════════════════════════════════════════════════════════
   -- CONNECTION (always visible)
   -- ══════════════════════════════════════════════════════════
-  dlg:separator{ text = "Connection" }
+  dlg:separator{ text = "Connection", hexpand = true }
 
   dlg:entry{
     id = "server_url",
@@ -1253,7 +1320,7 @@ local function build_dialog()
     hexpand = true,
   }
 
-  dlg:label{ id = "status", text = "Disconnected" }
+  dlg:label{ id = "status", text = "Disconnected", hexpand = true }
 
   dlg:button{
     id = "connect_btn",
@@ -1705,7 +1772,7 @@ local function build_dialog()
   -- ══════════════════════════════════════════════════════════
   -- ACTIONS (always visible, bottom)
   -- ══════════════════════════════════════════════════════════
-  dlg:separator{ text = "Actions" }
+  dlg:separator{ text = "Actions", hexpand = true }
 
   dlg:check{
     id = "loop_check",
@@ -1773,10 +1840,14 @@ local function build_dialog()
     id = "cancel_btn",
     text = "CANCEL",
     enabled = false,
+    hexpand = true,
     onclick = function()
       loop_mode = false
       if generating or animating then
         send({ action = "cancel" })
+        -- H10: cancel debounce — disable generate temporarily
+        cancel_pending = true
+        dlg:modify{ id = "generate_btn", enabled = false }
         update_status("Cancelling...")
       end
     end,

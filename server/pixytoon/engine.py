@@ -217,6 +217,9 @@ class DiffusionEngine:
     def _warmup(self) -> None:
         """Run a dummy txt2img to pre-compile the torch.compile graph.
 
+        NOTE: torch.compile is a one-time cost on first run. Subsequent
+        generations reuse the compiled graph and are significantly faster.
+
         CRITICAL: All parameters must match real generation defaults:
         - guidance_scale: Differs → CFG branch changes (single vs double UNet)
         - width/height: Differs → different tensor shapes → graph recompilation
@@ -224,6 +227,13 @@ class DiffusionEngine:
         """
         log.info("Warmup: triggering torch.compile + JIT compilation...")
         t0 = time.perf_counter()
+
+        # Disable DeepCache during warmup — warmup runs with dummy prompts
+        # and DeepCache caching can produce invalid compiled graph states.
+        dc_was_active = self._deepcache_helper is not None
+        if dc_was_active:
+            deepcache_manager.disable(self._deepcache_helper)
+
         try:
             with torch.inference_mode():
                 gen = torch.Generator("cuda").manual_seed(0)
@@ -244,8 +254,9 @@ class DiffusionEngine:
         except Exception as e:
             log.warning("Warmup generation failed (non-critical): %s", e)
         finally:
-            gc.collect()
-            torch.cuda.empty_cache()
+            # Re-enable DeepCache after warmup
+            if dc_was_active:
+                deepcache_manager.enable(self._deepcache_helper)
 
     def _load_embeddings(self) -> None:
         """Load all textual inversion embeddings from embeddings_dir."""
@@ -336,6 +347,7 @@ class DiffusionEngine:
         """Load or switch pixel art LoRA (fused into weights, no PEFT runtime)."""
         if not self._loaded or self._pipe is None:
             return
+        weight = max(-2.0, min(2.0, weight))
         self._lora_fuser.set_lora(self._pipe, name, weight)
 
     # ─── CONTROLNET ──────────────────────────────────────────
@@ -349,7 +361,6 @@ class DiffusionEngine:
         if self._animatediff._pipe is not None:
             log.info("Smart transition: unloading AnimateDiff before ControlNet load")
             self._animatediff.unload()
-            gc.collect()
 
         # Unload previous
         self._controlnet_pipe = None
@@ -460,7 +471,6 @@ class DiffusionEngine:
             raise
         finally:
             self._cancel_event.clear()
-            gc.collect()
 
     # ─── PRIVATE GENERATION METHODS ──────────────────────────
 
@@ -588,11 +598,11 @@ class DiffusionEngine:
 
         except torch.cuda.OutOfMemoryError:
             log.error("CUDA OOM during animation — clearing VRAM cache")
+            gc.collect()
             torch.cuda.empty_cache()
             raise
         finally:
             self._cancel_event.clear()
-            gc.collect()
 
     def _generate_chain(
         self,
@@ -791,6 +801,8 @@ class DiffusionEngine:
                         raise ValueError(f"Unknown mode: {req.mode}")
                 else:
                     # Frame 1+: img2img from previous frame at denoise_strength
+                    if chain_source is None:
+                        raise RuntimeError("Chain animation failed: previous frame did not produce output")
                     source = resize_to_target(chain_source, target_w, target_h)
 
                     if req.mode.value.startswith("controlnet_") and _control_img is not None:
@@ -839,6 +851,7 @@ class DiffusionEngine:
                 # Encode
                 b64_image = encode_image_b64(image)
                 w, h = image.size
+                # frame_time_ms: per-frame generation time (from this frame's t0_frame)
                 elapsed_ms = int((time.perf_counter() - t0_frame) * 1000)
 
                 frame_resp = AnimationFrameResponse(
@@ -869,9 +882,6 @@ class DiffusionEngine:
             log.info("Smart transition: unloading ControlNet before AnimateDiff")
             self._controlnet_pipe = None
             self._controlnet_mode = None
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
 
         with deepcache_manager.suspended(self._deepcache_helper):
             return self._generate_animatediff_inner(req, on_frame, on_progress)
@@ -962,10 +972,17 @@ class DiffusionEngine:
         # Post-process and encode each frame
         frames: list[AnimationFrameResponse] = []
         for frame_idx, pil_img in enumerate(pil_frames):
+            t0_frame = time.perf_counter()
             image = postprocess_apply(pil_img, req.post_process)
             b64_image = encode_image_b64(image)
             w, h = image.size
+            # time_ms: total elapsed since animation start (intentional —
+            # gives the client cumulative progress for the whole batch).
             elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            # frame_time_ms: time spent encoding/post-processing this individual frame
+            frame_time_ms = int((time.perf_counter() - t0_frame) * 1000)
+            log.debug("AnimateDiff frame %d: post-process %dms, total %dms",
+                       frame_idx, frame_time_ms, elapsed_ms)
 
             frame_resp = AnimationFrameResponse(
                 frame_index=frame_idx,
@@ -1188,10 +1205,6 @@ class DiffusionEngine:
         min_gen = settings.realtime_roi_min_size
         sw, sh = source.size
 
-        # Scale ROI to generation resolution
-        scale_x = sw / source.size[0] if source.size[0] > 0 else 1.0
-        scale_y = sh / source.size[1] if source.size[1] > 0 else 1.0
-
         # Compute padded ROI clamped to image bounds
         px1 = max(0, roi_x - pad)
         py1 = max(0, roi_y - pad)
@@ -1303,6 +1316,13 @@ class DiffusionEngine:
                 log.warning("Failed to re-enable DeepCache: %s", e)
 
         frames_processed = rt.frame_counter
+
+        # Explicitly delete GPU tensors before reset to avoid VRAM leak
+        if rt.prompt_embeds is not None:
+            del rt.prompt_embeds
+        if rt.negative_prompt_embeds is not None:
+            del rt.negative_prompt_embeds
+
         rt.reset()
 
         gc.collect()

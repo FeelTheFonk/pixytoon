@@ -19,6 +19,7 @@ class PromptGenerator:
     def __init__(self, data_dir: Path) -> None:
         self._data: dict[str, list[str]] = {}
         self._templates: dict[str, str] = {}
+        self._negative_sets: dict[str, str] = {}
         self._default_template = "{quality}, {subject}, {style}, {lighting}, {mood}"
         self._load_data(data_dir)
 
@@ -36,6 +37,9 @@ class PromptGenerator:
                     if "default" in self._templates:
                         self._default_template = self._templates["default"]
                     log.info("Loaded %d prompt templates", len(self._templates))
+                elif category == "negatives":
+                    self._negative_sets = data.get("sets", {})
+                    log.info("Loaded %d negative prompt sets", len(self._negative_sets))
                 else:
                     items = data.get("items", [])
                     if items:
@@ -48,15 +52,17 @@ class PromptGenerator:
         self,
         locked: Optional[dict[str, str]] = None,
         template: Optional[str] = None,
-    ) -> tuple[str, dict[str, str]]:
+        negative_set: Optional[str] = "universal",
+    ) -> tuple[str, str, dict[str, str]]:
         """Generate a random prompt.
 
         Args:
             locked: Category values to keep fixed (e.g. {"style": "pixel art"}).
             template: Custom template string with {category} placeholders.
+            negative_set: Name of the negative prompt set to use (default: "universal").
 
         Returns:
-            Tuple of (prompt_string, components_dict).
+            Tuple of (prompt_string, negative_prompt_string, components_dict).
         """
         locked = locked or {}
         components: dict[str, str] = {}
@@ -73,11 +79,14 @@ class PromptGenerator:
         # Only include categories that exist in the template
         try:
             prompt = template.format_map(components)
-        except KeyError:
+        except KeyError as e:
+            log.warning("Template key %s not found, using fallback join", e)
             # Fallback: join all components
-            prompt = ", ".join(components.values())
+            prompt = ", ".join(v for v in components.values() if v)
 
-        return prompt, components
+        negative = self._negative_sets.get(negative_set or "universal", "")
+
+        return prompt, negative, components
 
     def list_categories(self) -> list[str]:
         """Return sorted list of available categories."""
@@ -87,9 +96,17 @@ class PromptGenerator:
         """Return available named templates."""
         return dict(self._templates)
 
+    def list_negative_sets(self) -> list[str]:
+        """Return sorted list of available negative prompt sets."""
+        return sorted(self._negative_sets.keys())
+
     def get_category_items(self, category: str) -> list[str]:
         """Return items for a specific category."""
         return list(self._data.get(category, []))
+
+    def get_negative_set(self, name: str) -> str:
+        """Return a specific negative prompt set by name."""
+        return self._negative_sets.get(name, "")
 
 
 # Module-level singleton (lazy — created on first import)

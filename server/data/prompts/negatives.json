@@ -1,0 +1,14 @@
+{
+  "sets": {
+    "universal": "worst quality, low quality, normal quality, lowres, blurry, jpeg artifacts, watermark, text, signature, cropped, out of frame, error, duplicate, mutation, monochrome, grainy, noisy, overexposed, underexposed, distorted, ugly, disfigured, pixelated, compression artifacts",
+    "character": "bad anatomy, bad hands, mutated hands, fused fingers, extra fingers, missing fingers, ugly fingers, long fingers, poorly drawn hands, extra limbs, missing limbs, malformed limbs, disconnected limbs, poorly drawn face, deformed face, blurry face, asymmetrical, extra eyes, cross-eyed, unrealistic skin, bad proportions, gross proportions, long neck, multiple heads, clone",
+    "landscape": "ugly, tiling, poorly rendered, low detail, flat, lifeless, oversaturated, underexposed, blurry, repetitive pattern, cut off, out of frame, amateur, low effort",
+    "pixel_art": "blurry, smooth, anti-aliased, photorealistic, 3d render, gradient shading, soft edges, bokeh, depth of field, complex shading, high resolution photo",
+    "realistic": "cartoon, anime, drawing, painting, illustration, sketch, 3d render, doll-like, plastic, flat colors, cel-shaded, comic, manga, low poly",
+    "anime": "3d render, photorealistic, western cartoon, sketch, pencil drawing, live action, photograph, CGI, realistic, oil painting, watercolor, low quality, blurry",
+    "portrait": "bad anatomy, bad hands, missing fingers, extra fingers, deformed face, asymmetrical, cross-eyed, poorly drawn face, blurry face, multiple heads, clone, bad proportions, long neck, poorly drawn eyes, deformed iris",
+    "detailed": "simple background, flat colors, minimal detail, rough sketch, unfinished, low effort, amateur, beginner, plain, boring, empty background, no detail, lazy, messy",
+    "cinematic": "amateur, low budget, static, flat lighting, boring composition, snapshot, casual photo, low quality, grainy, shaky, handheld, overexposed, underexposed",
+    "fantasy": "modern objects, contemporary clothing, real-world brands, photorealistic, mundane, ordinary, plain background, modern architecture, cars, phones, computers, electronics"
+  }
+}

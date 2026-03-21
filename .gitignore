@@ -44,5 +44,17 @@ Thumbs.db
 # Test output
 test_output/
 
+# Logs
+*.log
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local env overrides
+.env.local
+.env.*.local
+
 .claude/
 .serena/

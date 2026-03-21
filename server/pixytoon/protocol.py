@@ -411,6 +411,7 @@ class PongResponse(BaseModel):
 class PromptResultResponse(BaseModel):
     type: Literal["prompt_result"] = "prompt_result"
     prompt: str
+    negative_prompt: str = ""
     components: dict[str, str]
 
 

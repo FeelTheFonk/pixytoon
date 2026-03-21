@@ -42,20 +42,20 @@ class LoRAFuser:
                 log.warning("Failed to unfuse pixel art LoRA '%s': %s — state may be corrupted",
                             self.current_name, e)
                 raise
-            # Unfuse succeeded — update tracking state before unload
-            self.current_name = None
-            self.current_weight = 0.0
             try:
                 pipe.unload_lora_weights()
             except Exception as e:
                 log.warning("Failed to unload LoRA weights (unfuse already done): %s", e)
+            # Both operations succeeded (or unload failed non-critically) — update tracking state
+            self.current_name = None
+            self.current_weight = 0.0
 
         if name is None:
             if had_lora and settings.enable_torch_compile:
                 try:
                     torch._dynamo.reset()
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.warning("Dynamo reset failed (non-critical): %s", e)
                 log.info("Dynamo cache reset after LoRA removal")
             return
 
@@ -87,6 +87,6 @@ class LoRAFuser:
         if settings.enable_torch_compile:
             try:
                 torch._dynamo.reset()
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("Dynamo reset failed (non-critical): %s", e)
             log.info("Dynamo cache reset after LoRA weight change (will recompile on next generation)")

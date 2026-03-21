@@ -15,11 +15,14 @@ def list_loras() -> list[str]:
     d = settings.loras_dir
     if not d.is_dir():
         return []
-    return sorted(
-        p.stem
-        for p in d.iterdir()
-        if p.is_file() and p.suffix.lower() in _LORA_EXTENSIONS
-    )
+    try:
+        return sorted(
+            p.stem
+            for p in d.iterdir()
+            if p.is_file() and p.suffix.lower() in _LORA_EXTENSIONS
+        )
+    except OSError:
+        return []
 
 
 def resolve_lora_path(name: str) -> Path:

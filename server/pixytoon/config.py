@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
+
+log = logging.getLogger("pixytoon.config")
 
 
 _SERVER_ROOT = Path(__file__).resolve().parent.parent
@@ -97,12 +100,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode='after')
     def _warn_missing_dirs(self):
-        import logging
-        _log = logging.getLogger("pixytoon.config")
         for name in ("models_dir", "checkpoints_dir", "loras_dir", "embeddings_dir", "palettes_dir", "presets_dir", "prompts_data_dir"):
             d = getattr(self, name)
             if not d.is_dir():
-                _log.warning("Directory does not exist: %s=%s", name, d)
+                log.warning("Directory does not exist: %s=%s", name, d)
         return self
 
 

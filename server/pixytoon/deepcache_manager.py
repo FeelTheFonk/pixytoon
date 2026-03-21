@@ -29,6 +29,11 @@ def create_helper(pipe):
         return helper
     except Exception as e:
         log.warning("DeepCache unavailable: %s", e)
+        if 'helper' in locals():
+            try:
+                helper.disable()
+            except Exception:
+                pass
         return None
 
 
@@ -59,19 +64,19 @@ def suspended(helper):
         yield
         return
 
+    disabled = False
     try:
         helper.disable()
+        disabled = True
         log.info("DeepCache temporarily disabled")
-    except Exception:
-        log.warning("Failed to disable DeepCache — proceeding anyway")
-        yield
-        return
-
+    except Exception as e:
+        log.warning("Failed to disable DeepCache: %s — proceeding anyway", e)
     try:
         yield
     finally:
-        try:
-            helper.enable()
-            log.info("DeepCache re-enabled")
-        except Exception as e:
-            log.warning("Failed to re-enable DeepCache: %s", e)
+        if disabled:
+            try:
+                helper.enable()
+                log.info("DeepCache re-enabled")
+            except Exception as e:
+                log.warning("Failed to re-enable DeepCache: %s", e)

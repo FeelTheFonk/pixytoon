@@ -18,6 +18,7 @@
 - [ControlNet Recipes](#controlnet-recipes)
 - [Palette Craft](#palette-craft)
 - [Parameter Matrix](#parameter-matrix)
+- [Presets](#presets)
 - [Anti-Patterns](#anti-patterns)
 
 ---
@@ -577,6 +578,36 @@ Quick reference: recommended settings by creative intention.
 | **Retro (NES)** | 8 | 5.0 | 1.0 | 64 | 12-16 | kmeans | none |
 | **Retro (PICO-8)** | 8 | 5.0 | 1.0 | 64-128 | 16 | kmeans | none |
 | **Hi-fi pixel art** | 10-12 | 5.0 | 1.0 | 192-256 | 48-64 | kmeans | floyd_steinberg |
+
+---
+
+## Presets
+
+### Using Built-in Presets
+
+PixyToon ships with built-in presets for common use cases. Select one from the dropdown to instantly load tuned settings.
+
+| Preset | Best for |
+|--------|----------|
+| **pixel_art** | General pixel art sprites (default LoRA + post-process) |
+| **anime** | Anime-style characters |
+| **character** | Detailed character art |
+| **landscape** | Environments and backgrounds |
+| **concept_art** | Concept exploration |
+| **illustration** | Detailed illustrations |
+| **realistic** | Photo-realistic output |
+
+### Saving Your Own Presets
+
+Found a combination of settings that works? Save it:
+
+1. Configure all parameters (prompt, steps, CFG, post-process, etc.)
+2. Click **Save** and enter a name
+3. Your preset appears in the dropdown for future use
+4. Click **Del** next to a user preset to remove it
+
+> [!TIP]
+> Save presets for each project or art style you work on. Switching between "RPG sprites" and "UI icons" becomes instant.
 
 ---
 

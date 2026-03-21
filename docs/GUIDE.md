@@ -16,6 +16,9 @@
 - [Post-Processing Pipeline](#post-processing-pipeline)
 - [LoRA and Models](#lora-and-models)
 - [ControlNet](#controlnet)
+- [Loop Mode](#loop-mode)
+- [Auto-Prompt Generator](#auto-prompt-generator)
+- [Presets](#presets)
 - [Seeds and Reproducibility](#seeds-and-reproducibility)
 - [Performance](#performance)
 - [Troubleshooting](#troubleshooting)
@@ -155,6 +158,35 @@ Parameters in the Animation tab:
 
 Real-time AI-assisted painting. See [the dedicated Live Paint guide](LIVE-PAINT.md).
 
+### Loop Mode
+
+Enable **Loop Mode** to continuously generate images with the same settings.
+Each iteration uses a random seed, allowing rapid exploration of variations.
+
+1. Check the "Loop Mode" checkbox
+2. Click **Generate**
+3. Images generate one after another automatically
+4. Click **Cancel** to stop the loop
+
+### Auto-Prompt Generator
+
+Click **Randomize** to generate a creative prompt from curated templates.
+The generator combines quality tags, subjects, styles, lighting, moods,
+and camera angles for diverse results.
+
+You can lock specific fields (e.g., keep "pixel art" as style) while
+randomizing the rest.
+
+### Presets
+
+Save and load generation settings as presets.
+
+- Select a preset from the dropdown to load its settings
+- Click **Save** to save current settings with a custom name
+- Click **Del** to remove a user-created preset
+
+Built-in presets: pixel_art, anime, character, landscape, concept_art, illustration, realistic.
+
 ---
 
 ## Generation Parameters
@@ -281,6 +313,7 @@ Downscales the image to your target pixel art size using **NEAREST neighbor** in
 
 | Target Size | Result |
 |-------------|--------|
+| 8 | Extreme low-res, abstract (minimum) |
 | 32 | Very chunky, retro (NES-era) |
 | 64 | Classic pixel art |
 | **128** | **Default** — good detail while still reading as pixel art |

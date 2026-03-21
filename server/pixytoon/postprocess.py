@@ -88,10 +88,10 @@ def _pixelate(img: Image.Image, target_size: int) -> Image.Image:
     # Compute proportional target maintaining aspect ratio
     if w >= h:
         new_w = target_size
-        new_h = max(1, round(h * target_size / w))
+        new_h = max(4, round(h * target_size / w))
     else:
         new_h = target_size
-        new_w = max(1, round(w * target_size / h))
+        new_w = max(4, round(w * target_size / h))
     # NEAREST is mandatory — any other interpolation introduces anti-aliasing
     return img.resize((new_w, new_h), Image.NEAREST)
 
@@ -151,8 +151,8 @@ def _quantize_kmeans(
         if n_unique <= n_colors:
             centers = [tuple(int(x) for x in c) for c in np.unique(pixels, axis=0).astype(int)]
             if has_alpha:
-                return Image.fromarray(arr, "RGBA"), centers
-            return Image.fromarray(rgb, "RGB"), centers
+                return Image.fromarray(arr), centers
+            return Image.fromarray(rgb), centers
 
     kmeans = MiniBatchKMeans(
         n_clusters=n_colors,
@@ -171,8 +171,8 @@ def _quantize_kmeans(
 
     if has_alpha:
         result = np.dstack([quantized, alpha])
-        return Image.fromarray(result, "RGBA"), palette
-    return Image.fromarray(quantized, "RGB"), palette
+        return Image.fromarray(result), palette
+    return Image.fromarray(quantized), palette
 
 
 def _quantize_pil(
@@ -186,7 +186,7 @@ def _quantize_pil(
         # Binarize alpha before quantization to avoid edge artifacts
         alpha_arr = np.array(alpha)
         alpha_arr = np.where(alpha_arr >= 128, 255, 0).astype(np.uint8)
-        alpha = Image.fromarray(alpha_arr, "L")
+        alpha = Image.fromarray(alpha_arr)
 
     rgb = img.convert("RGB")
     quantized = rgb.quantize(colors=n_colors, method=method, dither=0)
@@ -261,8 +261,8 @@ def _enforce_palette(
     result = palette_uint8[nearest_idx].reshape(h, w, 3)
 
     if has_alpha:
-        return Image.fromarray(np.dstack([result, alpha]), "RGBA")
-    return Image.fromarray(result, "RGB")
+        return Image.fromarray(np.dstack([result, alpha]))
+    return Image.fromarray(result)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -392,8 +392,8 @@ def _floyd_steinberg(
     rgb = _fs_core(rgb, pal)
     rgb = np.clip(rgb, 0, 255).astype(np.uint8)
     if has_alpha:
-        return Image.fromarray(np.dstack([rgb, alpha.astype(np.uint8)]), "RGBA")
-    return Image.fromarray(rgb, "RGB")
+        return Image.fromarray(np.dstack([rgb, alpha.astype(np.uint8)]))
+    return Image.fromarray(rgb)
 
 
 @functools.lru_cache(maxsize=8)
@@ -445,9 +445,9 @@ def _bayer_dither(
 
     # Snap to actual palette colors
     if has_alpha:
-        result_img = Image.fromarray(np.dstack([rgb, alpha.astype(np.uint8)]), "RGBA")
+        result_img = Image.fromarray(np.dstack([rgb, alpha.astype(np.uint8)]))
     else:
-        result_img = Image.fromarray(rgb, "RGB")
+        result_img = Image.fromarray(rgb)
     return _enforce_palette(result_img, palette_rgb)
 
 
@@ -457,7 +457,7 @@ def _bayer_dither(
 
 def warmup_numba() -> None:
     """Pre-compile Floyd-Steinberg JIT kernel with minimal data."""
-    tiny = Image.fromarray(np.zeros((2, 2, 3), dtype=np.uint8), "RGB")
+    tiny = Image.fromarray(np.zeros((2, 2, 3), dtype=np.uint8))
     _floyd_steinberg(tiny, [(0, 0, 0), (255, 255, 255)])
 
 
@@ -471,4 +471,4 @@ def _cleanup_alpha(img: Image.Image, threshold: int = 128) -> Image.Image:
         return img
     arr = np.array(img)
     arr[:, :, 3] = np.where(arr[:, :, 3] >= threshold, 255, 0)
-    return Image.fromarray(arr, "RGBA")
+    return Image.fromarray(arr)

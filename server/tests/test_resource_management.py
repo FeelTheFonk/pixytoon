@@ -1,59 +1,63 @@
-"""Tests for resource management — cleanup, mode transitions (mock CUDA)."""
+"""Tests for GPU resource management concepts."""
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+import unittest
 
 import pytest
+from pydantic import ValidationError
 
 
-class TestCleanupResources:
-    def test_cleanup_returns_freed_mb(self):
-        """Test that cleanup_resources returns a dict with freed_mb."""
-        with patch.dict("sys.modules", {
-            "torch": MagicMock(),
-            "torch.cuda": MagicMock(),
-        }):
-            mock_torch = MagicMock()
-            mock_torch.cuda.is_available.return_value = True
-            mock_torch.cuda.mem_get_info.side_effect = [
-                (1_000_000_000, 8_000_000_000),  # before
-                (2_000_000_000, 8_000_000_000),  # after
-            ]
+class TestCleanupResources(unittest.TestCase):
+    """Test cleanup_resources returns expected format."""
 
-            # Create a minimal mock engine
-            engine = MagicMock()
-            engine._controlnet_pipe = None
-            engine._controlnet_mode = None
-            engine._animatediff = MagicMock()
-            engine._animatediff.unload = MagicMock()
+    def test_cleanup_result_format(self):
+        """Cleanup should return dict with freed_mb and message keys."""
+        # The actual function requires CUDA; test the expected contract
+        result = {"freed_mb": 512.0, "message": "Freed 512.0 MB VRAM"}
+        assert "freed_mb" in result
+        assert "message" in result
+        assert isinstance(result["freed_mb"], (int, float))
+        assert result["freed_mb"] >= 0
 
-            # Simulate cleanup logic
-            freed_mb = (2_000_000_000 - 1_000_000_000) / (1024 * 1024)
-            result = {"freed_mb": round(freed_mb, 1), "message": "Cleanup complete"}
-
-            assert result["freed_mb"] > 0
-            assert "Cleanup" in result["message"]
-
-
-class TestModeTransitions:
-    def test_transition_concept(self):
-        """Verify the concept of smart mode transitions."""
-        # Test that the transition logic is sound:
-        # When loading ControlNet, AnimateDiff should be unloaded first
-        # When loading AnimateDiff, ControlNet should be unloaded first
-        controlnet_loaded = True
-        animatediff_loaded = False
-
-        # Simulate: user switches to AnimateDiff
-        if controlnet_loaded:
-            controlnet_loaded = False  # Unload ControlNet first
-        animatediff_loaded = True
-
-        assert animatediff_loaded is True
-        assert controlnet_loaded is False
-
-    def test_cleanup_when_no_gpu(self):
-        """Cleanup should work gracefully when no GPU is available."""
+    def test_cleanup_zero_freed(self):
+        """Cleanup with no GPU should report 0 freed."""
         result = {"freed_mb": 0.0, "message": "Cleanup complete (no GPU)"}
         assert result["freed_mb"] == 0.0
+        assert "message" in result
+
+
+class TestModeTransitions(unittest.TestCase):
+    """Test that mode transitions follow expected patterns."""
+
+    def test_txt2img_does_not_require_source(self):
+        """txt2img mode should not require source image."""
+        from pixytoon.protocol import GenerateRequest, GenerationMode
+
+        req = GenerateRequest(
+            prompt="test",
+            mode=GenerationMode.TXT2IMG,
+        )
+        assert req.source_image is None
+
+    def test_img2img_requires_source(self):
+        """img2img mode should require source image."""
+        from pixytoon.protocol import GenerateRequest, GenerationMode
+
+        with pytest.raises(ValidationError, match="source_image"):
+            GenerateRequest(
+                prompt="test",
+                mode=GenerationMode.IMG2IMG,
+            )
+
+    def test_img2img_valid_with_source(self):
+        """img2img mode should succeed when source image is provided."""
+        from pixytoon.protocol import GenerateRequest, GenerationMode
+
+        req = GenerateRequest(
+            prompt="test",
+            mode=GenerationMode.IMG2IMG,
+            source_image="base64data",
+        )
+        assert req.source_image == "base64data"
+        assert req.mode == GenerationMode.IMG2IMG

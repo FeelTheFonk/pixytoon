@@ -312,6 +312,16 @@ Approximate latency per frame at 512x512, 4 steps, after torch.compile warmup:
 - **Close other GPU applications** — VRAM and compute are fully dedicated to Live Paint
 - **Use the canvas hash** — the system only sends frames when your canvas actually changes, so idle time costs nothing
 
+### ROI Detection
+
+PixyToon automatically detects which region of the canvas changed
+(dirty-region detection). Only the modified area is sent to the server,
+reducing bandwidth and processing time.
+
+Configure ROI behavior with environment variables:
+- `PIXYTOON_REALTIME_ROI_PADDING=32` — Padding around detected changes (pixels)
+- `PIXYTOON_REALTIME_ROI_MIN_SIZE=64` — Minimum ROI size (pixels)
+
 ### Timeout and Auto-Stop
 
 If no canvas change is detected for **60 seconds** (configurable via `PIXYTOON_REALTIME_TIMEOUT`), the session automatically stops. This prevents the GPU from being locked indefinitely.

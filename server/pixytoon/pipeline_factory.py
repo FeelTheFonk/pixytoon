@@ -86,13 +86,21 @@ def setup_hyper_sd(pipe: StableDiffusionPipeline) -> None:
         timestep_spacing="trailing",
     )
     log.info("Loading Hyper-SD LoRA: %s/%s", settings.hyper_sd_repo, settings.hyper_sd_lora_file)
-    pipe.load_lora_weights(
-        settings.hyper_sd_repo,
-        weight_name=settings.hyper_sd_lora_file,
-        adapter_name="hyper_sd",
-    )
-    pipe.fuse_lora(lora_scale=settings.hyper_sd_fuse_scale)
-    pipe.unload_lora_weights()
+    try:
+        pipe.load_lora_weights(
+            settings.hyper_sd_repo,
+            weight_name=settings.hyper_sd_lora_file,
+            adapter_name="hyper_sd",
+        )
+        pipe.fuse_lora(lora_scale=settings.hyper_sd_fuse_scale)
+        pipe.unload_lora_weights()
+    except Exception as e:
+        log.error("Hyper-SD setup failed: %s", e)
+        try:
+            pipe.unload_lora_weights()
+        except Exception:
+            pass
+        raise RuntimeError(f"Failed to setup Hyper-SD: {e}") from e
     log.info("Hyper-SD LoRA fused into UNet weights (scale=%.3f)", settings.hyper_sd_fuse_scale)
 
 
@@ -170,7 +178,7 @@ def create_controlnet_pipeline(
         tokenizer=pipe.tokenizer,
         unet=pipe.unet,
         controlnet=controlnet,
-        scheduler=copy.deepcopy(pipe.scheduler),
+        scheduler=type(pipe.scheduler).from_config(pipe.scheduler.config),
         safety_checker=None,
         feature_extractor=None,
     )
@@ -187,5 +195,6 @@ def get_controlnet_from_pipe(
 ) -> Optional[ControlNetModel]:
     """Return existing ControlNet model if compatible, else None."""
     if cn_mode == mode and cn_pipe is not None:
-        return cn_pipe.controlnet
+        cn = getattr(cn_pipe, 'controlnet', None)
+        return cn
     return None
