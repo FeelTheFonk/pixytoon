@@ -619,7 +619,10 @@ async def _handle_generate_prompt(websocket: WebSocket, req: Request) -> None:
     from .prompt_generator import prompt_generator
     locked = req.locked_fields or {}
     template = req.prompt_template
-    prompt, negative, components = prompt_generator.generate(locked, template)
+    randomness = getattr(req, 'randomness', 0) or 0
+    prompt, negative, components = prompt_generator.generate(
+        locked, template, randomness=randomness,
+    )
     await _send(websocket, PromptResultResponse(
         prompt=prompt, negative_prompt=negative, components=components,
     ))

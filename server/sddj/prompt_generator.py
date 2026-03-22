@@ -54,6 +54,7 @@ class PromptGenerator:
         locked: Optional[dict[str, str]] = None,
         template: Optional[str] = None,
         negative_set: Optional[str] = "universal",
+        randomness: int = 0,
     ) -> tuple[str, str, dict[str, str]]:
         """Generate a random prompt.
 
@@ -61,21 +62,37 @@ class PromptGenerator:
             locked: Category values to keep fixed (e.g. {"style": "pixel art"}).
             template: Custom template string with {category} placeholders.
             negative_set: Name of the negative prompt set to use (default: "universal").
+            randomness: Diversity level 0-20 (0=standard, 5=subtle, 10=moderate, 15=wild, 20=chaos).
 
         Returns:
             Tuple of (prompt_string, negative_prompt_string, components_dict).
         """
         locked = locked or {}
+        randomness = max(0, min(20, randomness))
         components: dict[str, str] = {}
 
         for category, items in self._data.items():
             if category in locked:
                 components[category] = locked[category]
+            elif randomness >= 16 and len(items) > 1:
+                # Chaos: combine 2 items from the same category
+                picks = random.sample(items, min(2, len(items)))
+                components[category] = ", ".join(picks)
+            elif randomness >= 11 and len(items) > 2:
+                # Wild: favor rare items (latter half of the list)
+                half = len(items) // 2
+                pool = items[half:]
+                components[category] = random.choice(pool)
             else:
                 components[category] = random.choice(items)
 
+        # Template selection influenced by randomness
         if template is None:
-            template = self._default_template
+            if randomness >= 11 and self._templates:
+                template_names = list(self._templates.keys())
+                template = self._templates[random.choice(template_names)]
+            else:
+                template = self._default_template
 
         # Sanitize template: reject attribute/index access patterns (security)
         if re.search(r"\{[^}]*[.\[\]]", template):

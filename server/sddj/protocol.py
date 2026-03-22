@@ -284,6 +284,7 @@ class Request(BaseModel):
     # Auto-prompt fields
     locked_fields: Optional[dict[str, str]] = None
     prompt_template: Optional[str] = None
+    randomness: int = Field(0, ge=0, le=20)
     # Preset fields
     preset_name: Optional[str] = None
     preset_data: Optional[dict] = None
@@ -305,6 +306,8 @@ class Request(BaseModel):
         _exclude = {
             "action", "method", "frame_count", "frame_duration_ms",
             "seed_strategy", "tag_name", "enable_freeinit", "freeinit_iterations",
+            # Auto-prompt fields
+            "locked_fields", "prompt_template", "randomness",
             # Audio reactivity fields
             "audio_path", "fps", "enable_stems",
             "modulation_slots", "expressions", "modulation_preset",
@@ -316,6 +319,8 @@ class Request(BaseModel):
     def to_animation_request(self) -> AnimationRequest:
         _exclude = {
             "action",
+            # Auto-prompt fields
+            "locked_fields", "prompt_template", "randomness",
             # Audio reactivity fields
             "audio_path", "fps", "enable_stems",
             "modulation_slots", "expressions", "modulation_preset",
@@ -368,7 +373,8 @@ class Request(BaseModel):
         _exclude = {
             "action", "frame_count", "seed_strategy",
             "image", "frame_id", "mask", "roi_x", "roi_y", "roi_w", "roi_h",
-            "locked_fields", "prompt_template", "preset_name", "preset_data",
+            "locked_fields", "prompt_template",
+            "preset_name", "preset_data",
         }
         data = self.model_dump(exclude_none=True, exclude=_exclude)
         return AudioReactiveRequest(**data)
@@ -404,6 +410,7 @@ class AudioReactiveRequest(BaseModel):
     expressions: Optional[dict[str, str]] = None
     modulation_preset: Optional[str] = None
     prompt_segments: list[dict] = Field(default_factory=list)
+    randomness: int = Field(0, ge=0, le=20)
     max_frames: Optional[int] = Field(None, ge=1, le=3600)
     # Animation method: chain (default) or animatediff_audio
     method: AnimationMethod = AnimationMethod.CHAIN

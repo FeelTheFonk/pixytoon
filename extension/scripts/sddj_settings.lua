@@ -32,6 +32,8 @@ function PT.save_settings()
     palette_custom_colors = d.palette_custom_colors,
     remove_bg          = d.remove_bg,
     anim_method        = d.anim_method,
+    anim_steps         = d.anim_steps,
+    anim_cfg           = d.anim_cfg,
     anim_frames        = d.anim_frames,
     anim_duration      = d.anim_duration,
     anim_denoise       = d.anim_denoise,
@@ -47,6 +49,8 @@ function PT.save_settings()
     anim_tag           = d.anim_tag,
     anim_freeinit      = d.anim_freeinit,
     anim_freeinit_iters = d.anim_freeinit_iters,
+    randomize_before   = d.randomize_before,
+    randomness         = d.randomness,
     loop_seed_combo    = d.loop_seed_combo,
     loop_check         = d.loop_check,
     random_loop_check  = d.random_loop_check,
@@ -55,6 +59,9 @@ function PT.save_settings()
     save_output        = d.save_output,
     -- Audio tab
     audio_fps          = d.audio_fps,
+    audio_steps        = d.audio_steps,
+    audio_cfg          = d.audio_cfg,
+    audio_denoise      = d.audio_denoise,
     audio_stems_enable = d.audio_stems_enable,
     audio_frame_duration = d.audio_frame_duration,
     audio_max_frames   = d.audio_max_frames,
@@ -139,8 +146,10 @@ function PT.apply_settings(s)
   local vals = {
     "steps", "cfg_scale", "clip_skip", "denoise", "lora_weight",
     "neg_ti_weight", "pixel_size", "colors",
-    "anim_frames", "anim_duration", "anim_denoise", "anim_freeinit_iters",
+    "anim_steps", "anim_cfg", "anim_frames", "anim_duration", "anim_denoise", "anim_freeinit_iters",
     "live_strength", "live_steps", "live_cfg", "live_opacity",
+    "randomness",
+    "audio_steps", "audio_cfg", "audio_denoise",
     "audio_frame_duration", "audio_max_frames", "mod_slot_count",
     "mod1_min", "mod1_max", "mod1_attack", "mod1_release",
     "mod2_min", "mod2_max", "mod2_attack", "mod2_release",
@@ -152,7 +161,7 @@ function PT.apply_settings(s)
   end
   -- Boolean (checkbox) fields
   local bools = { "use_neg_ti", "pixelate", "remove_bg", "lock_subject", "anim_freeinit",
-                   "loop_check", "random_loop_check", "save_output",
+                   "randomize_before", "loop_check", "random_loop_check", "save_output",
                    "audio_stems_enable", "audio_advanced", "audio_use_expressions",
                    "mod1_enable", "mod2_enable", "mod3_enable", "mod4_enable" }
   for _, id in ipairs(bools) do
@@ -166,7 +175,10 @@ function PT.apply_settings(s)
   PT.dlg:modify{ id = "neg_ti_weight", label = string.format("Emb. (%.2f)", d.neg_ti_weight / 100.0) }
   PT.dlg:modify{ id = "pixel_size", label = "Target (" .. d.pixel_size .. "px)" }
   PT.dlg:modify{ id = "colors", label = "Colors (" .. d.colors .. ")" }
+  PT.dlg:modify{ id = "anim_cfg", label = string.format("CFG (%.1f)", d.anim_cfg / 10.0) }
   PT.dlg:modify{ id = "anim_denoise", label = string.format("Strength (%.2f)", d.anim_denoise / 100.0) }
+  PT.dlg:modify{ id = "audio_cfg", label = string.format("CFG (%.1f)", d.audio_cfg / 10.0) }
+  PT.dlg:modify{ id = "audio_denoise", label = string.format("Strength (%.2f)", d.audio_denoise / 100.0) }
   PT.dlg:modify{ id = "live_strength", label = string.format("Strength (%.2f)", d.live_strength / 100.0) }
   PT.dlg:modify{ id = "live_cfg", label = string.format("CFG (%.1f)", d.live_cfg / 10.0) }
   PT.dlg:modify{ id = "live_opacity", label = string.format("Preview (%d%%)", d.live_opacity) }
@@ -240,9 +252,39 @@ function PT.apply_settings(s)
       PT.dlg:modify{ id = "mode", label = "Mode" }
     end
   end
+  -- Sync randomness slider visibility
+  local show_rand = (s.randomize_before == true) or (s.random_loop_check == true)
+  PT.dlg:modify{ id = "randomness", visible = show_rand }
+  -- Sync randomness label
+  if s.randomness then
+    local v = s.randomness
+    local names = { [0]="Off", [5]="Subtle", [10]="Moderate", [15]="Wild", [20]="Chaos" }
+    local name = names[v] or ""
+    local suffix = name ~= "" and (" — " .. name) or ""
+    PT.dlg:modify{ id = "randomness", label = "Randomness (" .. v .. suffix .. ")" }
+  end
   -- Sync output state
   if s.save_output ~= nil then
     PT.output.enabled = s.save_output
+  end
+  -- Migration v0.7.5→v0.7.7: copy shared sliders to dedicated pipeline sliders
+  if s.anim_steps == nil and s.steps then
+    PT.dlg:modify{ id = "anim_steps", value = s.steps }
+  end
+  if s.anim_cfg == nil and s.cfg_scale then
+    PT.dlg:modify{ id = "anim_cfg", value = s.cfg_scale }
+    PT.dlg:modify{ id = "anim_cfg", label = string.format("CFG (%.1f)", s.cfg_scale / 10.0) }
+  end
+  if s.audio_steps == nil and s.steps then
+    PT.dlg:modify{ id = "audio_steps", value = s.steps }
+  end
+  if s.audio_cfg == nil and s.cfg_scale then
+    PT.dlg:modify{ id = "audio_cfg", value = s.cfg_scale }
+    PT.dlg:modify{ id = "audio_cfg", label = string.format("CFG (%.1f)", s.cfg_scale / 10.0) }
+  end
+  if s.audio_denoise == nil and s.denoise then
+    PT.dlg:modify{ id = "audio_denoise", value = s.denoise }
+    PT.dlg:modify{ id = "audio_denoise", label = string.format("Strength (%.2f)", s.denoise / 100.0) }
   end
 end
 

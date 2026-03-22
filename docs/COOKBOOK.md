@@ -19,7 +19,7 @@
 - [Loop and Random Loop](#loop-and-random-loop)
 - [Live Paint Recipes](#live-paint-recipes)
 - [ControlNet Recipes](#controlnet-recipes)
-- [Palette Craft](#palette-craft)
+- [Color Control](#color-control)
 - [Parameter Matrix](#parameter-matrix)
 - [Presets](#presets)
 - [Anti-Patterns](#anti-patterns)
@@ -36,6 +36,9 @@ Each recipe shows:
 - **Why** — what makes this combination work
 
 Default settings (if not overridden in a recipe): steps=8, CFG=5.0, clip_skip=2, denoise=1.0, pixelate=128, colors=32, quantize=kmeans, dither=none, palette=auto.
+
+> [!NOTE]
+> The default post-processing settings (pixelate, colors, quantize, dither) are optimized for **pixel art**. For non-pixel-art styles (anime, illustration, concept art, realistic, etc.), set **Pixelate to OFF** (or 0) and **Colors to 256** with **Palette set to Auto**. This lets the model's native output come through without pixel-art-specific processing.
 
 ---
 
@@ -141,6 +144,97 @@ The first three share the same composition but differ in details. The last one (
 
 ---
 
+### Anime Character
+
+A clean anime-style character with vibrant colors and soft shading.
+
+**Prompt:**
+```
+anime style girl with blue hair, school uniform, cherry blossoms,
+detailed eyes, soft shading, clean linework
+```
+
+**Settings:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Mode | txt2img | Starting from scratch |
+| Size | 512x512 | Standard SD 1.5 resolution |
+| Steps | 10 | Slightly more steps for smoother shading |
+| CFG | 6.0 | Clean prompt adherence without over-saturation |
+| Clip Skip | 2 | Standard for anime aesthetics |
+| Denoise | 1.0 | Full generation |
+
+**Post-Process:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Pixelate | OFF | Preserve smooth anime lines and shading |
+| Colors | 256 | Full color range for gradients |
+| Palette | Auto | Let the model choose colors freely |
+
+---
+
+### Illustration Character
+
+A richly detailed illustration-style character with complex lighting.
+
+**Prompt:**
+```
+detailed illustration, fantasy warrior, ornate armor, golden lighting,
+intricate details, dramatic pose, high quality
+```
+
+**Settings:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Mode | txt2img | Starting from scratch |
+| Size | 512x512 | Standard SD 1.5 resolution |
+| Steps | 12 | Extra steps for fine detail |
+| CFG | 7.0 | Tighter prompt following for specific details |
+| Denoise | 1.0 | Full generation |
+
+**Post-Process:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Pixelate | OFF | Preserve illustration detail |
+| Colors | 256 | Full color range |
+| Palette | Auto | Unrestricted color palette |
+
+---
+
+### Concept Art Character
+
+Quick concept art for character design exploration.
+
+**Prompt:**
+```
+concept art, sci-fi android, chrome body, blueprint style,
+clean design, technical illustration, cool lighting
+```
+
+**Settings:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Mode | txt2img | Starting from scratch |
+| Size | 512x512 | Standard SD 1.5 resolution |
+| Steps | 12 | Extra steps for clean rendering |
+| CFG | 6.5 | Balanced between creativity and control |
+| Denoise | 1.0 | Full generation |
+
+**Post-Process:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Pixelate | OFF | Preserve fine concept art detail |
+| Colors | 256 | Full color range |
+| Palette | Auto | Unrestricted color palette |
+
+---
+
 ## Environments
 
 ### Side-Scroller Background
@@ -227,6 +321,90 @@ fireplace, warm lighting, top down view, game scene
 
 ---
 
+### Anime Background
+
+A lush anime-style landscape suitable for visual novel or game backgrounds.
+
+**Prompt:**
+```
+anime style landscape, sunset over ocean, warm colors, studio ghibli feel,
+beautiful sky, detailed clouds, vibrant scenery
+```
+
+**Settings:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Size | 768x512 | Wide aspect for scenic backgrounds |
+| Steps | 10 | Enough for smooth gradients |
+| CFG | 5.0 | Balanced for natural-feeling scenery |
+
+**Post-Process:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Pixelate | OFF | Preserve soft anime gradients |
+| Colors | 256 | Full color range for sky gradients |
+| Palette | Auto | Unrestricted color palette |
+
+---
+
+### Concept Art Environment
+
+Sci-fi or fantasy environment concept for pre-production work.
+
+**Prompt:**
+```
+concept art, alien planet surface, bioluminescent flora, sci-fi,
+atmospheric perspective, dramatic lighting, detailed environment
+```
+
+**Settings:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Size | 768x512 | Wide aspect for environment concepts |
+| Steps | 12 | Extra steps for atmospheric detail |
+| CFG | 6.5 | Tighter adherence to sci-fi prompt |
+
+**Post-Process:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Pixelate | OFF | Preserve painterly detail |
+| Colors | 256 | Full color range |
+| Palette | Auto | Unrestricted color palette |
+
+---
+
+### Painterly Landscape
+
+An impressionist-style landscape with visible brushwork and dramatic atmosphere.
+
+**Prompt:**
+```
+oil painting style, misty mountain valley, dramatic clouds, impressionist,
+thick brushstrokes, vibrant colors, atmospheric, fine art
+```
+
+**Settings:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Size | 768x512 | Wide aspect for landscapes |
+| Steps | 10 | Balanced quality |
+| CFG | 5.5 | Slightly loose for painterly freedom |
+
+**Post-Process:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Pixelate | OFF | Preserve brushstroke texture |
+| Colors | 128 | Slight reduction enhances painterly feel |
+| Palette | Auto | Unrestricted color palette |
+
+---
+
 ## Items and Icons
 
 ### Inventory Item
@@ -283,6 +461,64 @@ beveled edge, fantasy style, clean flat design
 
 ---
 
+### Modern UI Icon
+
+Clean, flat-design icons for apps or modern interfaces.
+
+**Prompt:**
+```
+flat design icon, minimalist, gradient background, app icon style,
+clean shapes, modern, centered, simple
+```
+
+**Settings:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Size | 256x256 | Standard icon canvas |
+| Steps | 8 | Clean shapes don't need many steps |
+| CFG | 7.0 | Strict for clean geometric shapes |
+
+**Post-Process:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Pixelate | OFF | Preserve smooth gradients and edges |
+| Colors | 256 | Full color for gradients |
+| Remove BG | Optional | Depends on icon use |
+| Palette | Auto | Unrestricted color palette |
+
+---
+
+### Illustrated Item
+
+Detailed hand-drawn style items for RPG inventories or game marketing.
+
+**Prompt:**
+```
+detailed illustration, magical glowing sword, fantasy RPG, ornate,
+intricate details, dramatic lighting, centered, high quality
+```
+
+**Settings:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Size | 512x512 | Room for intricate detail |
+| Steps | 12 | Extra steps for fine rendering |
+| CFG | 7.0 | Precise adherence to item description |
+
+**Post-Process:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Pixelate | OFF | Preserve illustration detail |
+| Colors | 256 | Full color range for glow effects |
+| Remove BG | Yes | Clean extraction for compositing |
+| Palette | Auto | Unrestricted color palette |
+
+---
+
 ## Portraits
 
 ### Character Portrait from Sketch
@@ -316,6 +552,97 @@ pointed ears, green eyes, pixel art style, sharp pixels
 2. If you like the direction, lower strength to 0.3-0.4
 3. Make manual edits in Aseprite on the result
 4. Run img2img again at 0.2-0.3 to polish
+
+---
+
+### Anime Portrait
+
+Expressive anime-style portrait with detailed eyes and soft coloring.
+
+**Prompt:**
+```
+anime portrait, detailed eyes, soft shading, pastel colors,
+beautiful face, clean linework, high quality
+```
+
+**Settings:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Mode | txt2img | Full generation for best quality |
+| Size | 512x512 | Room for facial detail |
+| Steps | 10 | Smooth shading needs slightly more steps |
+| CFG | 6.0 | Clean prompt following |
+| Clip Skip | 2 | Standard for anime style |
+
+**Post-Process:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Pixelate | OFF | Preserve soft anime shading |
+| Colors | 256 | Full color for skin tones and pastels |
+| Palette | Auto | Unrestricted color palette |
+
+---
+
+### Realistic Portrait
+
+A cinematic, photorealistic portrait with dramatic lighting.
+
+**Prompt:**
+```
+photorealistic portrait, dramatic side lighting, cinematic, detailed skin,
+sharp focus, professional photography, high quality
+```
+
+**Settings:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Mode | txt2img | Full generation |
+| Size | 512x512 | Standard resolution |
+| Steps | 15 | More steps for realistic detail |
+| CFG | 7.5 | Tight adherence for realism |
+| Clip Skip | 1 | Better for photorealistic styles |
+
+**Post-Process:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Pixelate | OFF | Preserve photorealistic detail |
+| Colors | 256 | Full color range for skin tones |
+| Palette | Auto | Unrestricted color palette |
+
+**Negative prompt additions:** cartoon, anime, pixel art, illustration, painting
+
+---
+
+### Painterly Portrait
+
+An expressive digital painting portrait with visible brushwork.
+
+**Prompt:**
+```
+digital painting portrait, thick brushstrokes, vibrant palette, expressive,
+artistic, dramatic lighting, bold colors
+```
+
+**Settings:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Mode | txt2img | Full generation |
+| Size | 512x512 | Standard resolution |
+| Steps | 10 | Balanced quality |
+| CFG | 5.5 | Slightly loose for painterly expression |
+
+**Post-Process:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Pixelate | OFF | Preserve brushstroke texture |
+| Colors | 256 | Full color range |
+| Palette | Auto | Unrestricted color palette |
 
 ---
 
@@ -435,6 +762,97 @@ orange yellow, game effect, pixel art style
 | Frames | 8-12 | Loopable |
 | Strength | 0.35-0.50 | More variation for effects |
 | Remove BG | Yes | Overlay on game scenes |
+
+---
+
+### Anime Walk Cycle (Chain)
+
+Smooth anime-style walk animation without pixel art processing.
+
+**Prompt:**
+```
+anime character walking, side view, smooth animation,
+consistent style, clean linework, detailed
+```
+
+**Settings:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Method | chain | Frame-by-frame control |
+| Frames | 4-8 | Standard walk cycle |
+| Duration | 100-120ms | Natural walking speed |
+| Steps | 10 | Slightly more for smooth anime shading |
+| Strength | 0.35 | Consistent between frames |
+| Seed Mode | increment | Slight variation per frame |
+
+**Post-Process:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Pixelate | OFF | Preserve smooth anime lines |
+| Colors | 256 | Full color range |
+| Palette | Auto | Unrestricted color palette |
+
+---
+
+### Abstract Motion (AnimateDiff)
+
+Psychedelic, flowing abstract animation — great for backgrounds or VJ content.
+
+**Prompt:**
+```
+abstract flowing shapes, morphing colors, psychedelic,
+smooth motion, vibrant, trippy, fluid
+```
+
+**Settings:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Method | animatediff | Temporal consistency for fluid motion |
+| Frames | 16 | Longer loops for smooth morphing |
+| Steps | 8 | Standard quality |
+| CFG | 4.0 | Loose = more creative, abstract results |
+| FreeInit | On | Better temporal consistency |
+
+**Post-Process:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Pixelate | OFF | Preserve fluid motion |
+| Colors | 256 | Full color range |
+| Palette | Auto | Unrestricted color palette |
+
+---
+
+### Illustration Morph (Chain)
+
+Watercolor landscape transitioning between states — great for seasonal or time-of-day changes.
+
+**Prompt:**
+```
+watercolor landscape transitioning seasons, spring to winter,
+soft brushstrokes, atmospheric, painted, beautiful scenery
+```
+
+**Settings:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Method | chain | Frame-by-frame control for gradual change |
+| Frames | 8-12 | Enough for smooth transition |
+| Steps | 10 | Balanced quality |
+| Strength | 0.40 | Higher strength for visible transformation |
+| Seed Mode | increment | Gradual evolution per frame |
+
+**Post-Process:**
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| Pixelate | OFF | Preserve watercolor texture |
+| Colors | 128 | Slight reduction enhances painterly feel |
+| Palette | Auto | Unrestricted color palette |
 
 ---
 
@@ -664,9 +1082,12 @@ pixel art, colored version, vibrant colors, flat shading,
 
 ---
 
-## Palette Craft
+## Color Control
 
 ### Using Built-in Palettes
+
+> [!NOTE]
+> For non-pixel-art styles, **palette_mode=Auto** lets the model choose colors freely. Palette presets are primarily useful for retro-gaming aesthetics.
 
 Set **Palette** to **Preset** in the Post-Process tab. Available palettes:
 
@@ -720,6 +1141,12 @@ Quick reference: recommended settings by creative intention.
 | **Retro (PICO-8)** | 8 | 5.0 | 1.0 | 64-128 | 16 | kmeans | none |
 | **Hi-fi pixel art** | 10-12 | 5.0 | 1.0 | 192-256 | 48-64 | kmeans | floyd_steinberg |
 | **Loop + sequence** | 8 | 5.0 | 0.3-0.5 | 64-128 | 16-32 | kmeans | none |
+| **Anime** | 10 | 6.0 | 1.0 | OFF | 256 | — | — |
+| **Illustration** | 12 | 7.0 | 1.0 | OFF | 256 | — | — |
+| **Concept Art** | 12 | 6.5 | 0.95 | OFF | 256 | — | — |
+| **Watercolor** | 10 | 5.5 | 1.0 | OFF | 128 | — | — |
+| **Realistic** | 15 | 7.5 | 1.0 | OFF | 256 | — | — |
+| **Abstract** | 8 | 4.0 | 1.0 | OFF | 256 | — | — |
 
 ---
 
@@ -818,6 +1245,30 @@ This shouldn't happen with the default configuration (Hyper-SD is always active)
 **Symptom:** Smooth gradients, anti-aliased edges, photorealistic elements leaking into pixel art.
 
 **Fix:** Always keep the default negative prompt. It specifically blocks anti-aliasing, smooth gradients, and photorealism — the three biggest enemies of pixel art generation.
+
+---
+
+### Image looks too stylized / cartoonish
+
+**Symptom:** You wanted a realistic or semi-realistic image, but it looks like a cartoon or anime.
+
+**Fix:** Lower CFG to 5.0-6.0, set clip_skip=1 (instead of 2), and add a realistic-focused negative prompt such as: `cartoon, anime, pixel art, illustration, painting, stylized`. Be explicit about photorealism in the positive prompt.
+
+---
+
+### Colors look washed out
+
+**Symptom:** Non-pixel-art output appears desaturated, flat, or lacking vibrancy.
+
+**Fix:** Increase CFG slightly (try 6.0-7.0) to push the model toward the prompt's color descriptors. Add explicit color language to the prompt (e.g., "vibrant colors", "rich tones", "saturated"). Try a different style keyword — some styles inherently produce muted palettes.
+
+---
+
+### Anime features look distorted
+
+**Symptom:** Anime-style faces have misshapen eyes, inconsistent proportions, or broken features.
+
+**Fix:** Use clip_skip=2 (the default), which works better for anime aesthetics. Ensure proper anime keywords in the prompt ("anime style", "detailed eyes", "clean linework"). Keep CFG at 5.0-6.0 — going too high causes distortion. If using img2img, lower strength to 0.4-0.5 to preserve structure.
 
 ---
 

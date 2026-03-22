@@ -61,6 +61,7 @@ function PT.start_gen_timeout(override_seconds)
         PT.state.animating = false
         PT.audio.generating = false
         PT.audio.analyzing = false
+        PT.state.pending_action = nil
         PT.state.cancel_pending = false
         PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
         PT.loop.mode = false
@@ -94,18 +95,12 @@ function PT.set_connected(is_connected)
 
   if is_connected then
     PT.dlg:modify{ id = "connect_btn", text = "Disconnect" }
-    PT.dlg:modify{ id = "generate_btn", enabled = true }
-    PT.dlg:modify{ id = "animate_btn", enabled = true }
-    PT.dlg:modify{ id = "live_btn", enabled = true }
-    PT.dlg:modify{ id = "audio_generate_btn", enabled = true }
+    PT.dlg:modify{ id = "action_btn", enabled = true }
   else
     PT.dlg:modify{ id = "connect_btn", text = "Connect" }
-    PT.dlg:modify{ id = "generate_btn", text = "GENERATE", enabled = false }
+    PT.update_action_button(PT.dlg.data.main_tabs or "tab_gen")
+    PT.dlg:modify{ id = "action_btn", enabled = false }
     PT.dlg:modify{ id = "cancel_btn", enabled = false }
-    PT.dlg:modify{ id = "animate_btn", enabled = false }
-    PT.dlg:modify{ id = "live_btn", enabled = false }
-    PT.dlg:modify{ id = "audio_generate_btn", enabled = false }
-    PT.dlg:modify{ id = "live_btn", text = "START LIVE" }
     PT.dlg:modify{ id = "live_accept_btn", visible = false }
     PT.dlg:modify{ id = "live_send_btn", visible = false }
     if PT.state.generating then PT.state.generating = false end
@@ -120,6 +115,7 @@ function PT.set_connected(is_connected)
     PT.loop.counter = 0
     PT.timers.loop = PT.stop_timer(PT.timers.loop)
     PT.state.cancel_pending = false
+    PT.state.pending_action = nil
     PT.state.last_pong = nil
     -- Reset animation state (prevent orphan layer references)
     PT.anim.layer = nil
@@ -268,10 +264,8 @@ function PT.reset_ui_buttons(opts)
   if not PT.dlg then return end
   opts = opts or {}
   local gen_enabled = opts.enabled ~= false and not PT.live.mode
-  PT.dlg:modify{ id = "generate_btn", text = "GENERATE", enabled = gen_enabled }
-  PT.dlg:modify{ id = "animate_btn", enabled = gen_enabled }
-  PT.dlg:modify{ id = "live_btn", enabled = gen_enabled }
-  PT.dlg:modify{ id = "audio_generate_btn", enabled = gen_enabled }
+  PT.update_action_button(PT.dlg.data.main_tabs or "tab_gen")
+  PT.dlg:modify{ id = "action_btn", enabled = gen_enabled }
   PT.dlg:modify{ id = "cancel_btn", enabled = opts.cancel or false }
 end
 

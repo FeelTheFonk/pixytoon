@@ -39,6 +39,7 @@ PT.state = {
   file_counter   = 0,
   session_id     = tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999)),
   last_pong      = nil,
+  pending_action = nil,  -- "generate" | "animate" | "audio" | nil
 }
 
 PT.anim = {

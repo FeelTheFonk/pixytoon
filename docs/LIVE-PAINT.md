@@ -192,14 +192,18 @@ Start rough, get detailed.
 
 Change the prompt mid-session without restarting. The model picks up the new style on the next frame.
 
-Paint a character, then try:
+Paint a character, then try different styles:
 
 ```
-pixel art, dark souls style, grim warrior, muted colors
+fantasy illustration, dark souls style, grim warrior, muted colors
 ```
 then switch to:
 ```
-pixel art, stardew valley style, cute farmer, warm colors
+anime style, cute farmer, warm colors, studio ghibli feel
+```
+or try pixel art:
+```
+pixel art, stardew valley style, cute farmer, retro colors
 ```
 
 Same drawing, completely different interpretations. This is one of the fastest ways to explore art direction.
@@ -268,7 +272,7 @@ flowchart TD
 
 ### Combining Live Paint with Post-Processing
 
-Live Paint output is a raw SD image — it's not pixelated or quantized yet. To turn it into final pixel art:
+Live Paint output is a raw SD image — it's not pixelated or quantized yet. To apply post-processing (optional — primarily useful for pixel art styles):
 
 1. **Accept** the Live Paint result (or **Stop** and keep the preview layer)
 2. Flatten or merge layers as desired
@@ -277,7 +281,7 @@ Live Paint output is a raw SD image — it's not pixelated or quantized yet. To 
 5. Enable all post-processing (pixelate, quantize, palette, dither)
 6. Click **GENERATE**
 
-This gives you the full pixel art pipeline on your live-painted result.
+This gives you the full post-processing pipeline on your live-painted result. For non-pixel-art styles, you can skip post-processing entirely and use the raw SD output.
 
 > [!TIP]
 > Alternatively, skip step 4-6 and manually downscale + color-reduce in Aseprite for maximum control.
@@ -347,9 +351,9 @@ If no canvas change is detected for **5 minutes** (configurable via `SDDJ_REALTI
 
 When auto-stop triggers:
 - The server sends a `realtime_stopped` notification
-- The Live button reverts to "START LIVE"
+- The action button reverts to "START LIVE"
 - The preview layer is cleaned up
-- Generate and Animate buttons are re-enabled
+- The action button is re-enabled for other pipelines
 
 Just click **START LIVE** again to resume.
 

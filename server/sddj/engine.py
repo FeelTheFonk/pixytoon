@@ -722,6 +722,18 @@ class DiffusionEngine:
             # 1. Analyze audio
             analysis = self.analyze_audio(req.audio_path, req.fps, req.enable_stems)
 
+            # 1b. Auto-generate prompt segments from audio structure
+            if getattr(req, 'randomness', 0) > 0 and not req.prompt_segments:
+                from .prompt_schedule import auto_generate_segments
+                from .prompt_generator import prompt_generator
+                auto_segs = auto_generate_segments(
+                    analysis, req.randomness, req.prompt, prompt_generator,
+                )
+                if auto_segs:
+                    req.prompt_segments = auto_segs
+                    log.info("Auto-generated %d prompt segments (randomness=%d)",
+                             len(auto_segs), req.randomness)
+
             # 2. Resolve modulation slots
             from .modulation_engine import ModulationSlot, ModulationEngine
             if req.modulation_preset:

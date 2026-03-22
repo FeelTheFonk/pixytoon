@@ -39,6 +39,24 @@ Connect to `ws://127.0.0.1:9876/ws`. All messages are JSON. Maximum 5 concurrent
 | `export_mp4`            | Export frames + audio to MP4 (requires ffmpeg) |
 | `shutdown`              | Graceful server shutdown              |
 
+## Generate Prompt Request
+
+```json
+{
+  "action": "generate_prompt",
+  "locked_fields": { "subject": "a pixel cat" },
+  "randomness": 10
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `locked_fields` | `object` | `{}` | Categories to keep fixed (e.g. `{"subject": "..."}`) |
+| `prompt_template` | `string` | `null` | Custom template with `{category}` placeholders |
+| `randomness` | `int 0-20` | `0` | Diversity level: 0=standard, 5=subtle, 10=moderate, 15=wild (rare items + random template), 20=chaos (combines multiple items per category) |
+
+**Response**: `prompt_result` with `prompt`, `negative_prompt`, and `components` dict.
+
 ## Generate Request
 
 ```json
@@ -222,10 +240,11 @@ Analyze audio first, then generate animation with per-frame parameter modulation
   "expressions": null,
   "modulation_preset": null,
   "prompt_segments": [
-    { "start_second": 0, "end_second": 10, "prompt": "pixel art forest" },
-    { "start_second": 10, "end_second": 20, "prompt": "pixel art castle" }
+    { "start_second": 0, "end_second": 10, "prompt": "forest at dawn" },
+    { "start_second": 10, "end_second": 20, "prompt": "castle in the sky" }
   ],
-  "prompt": "pixel art character",
+  "randomness": 0,
+  "prompt": "fantasy landscape",
   "mode": "txt2img",
   "width": 512,
   "height": 512,
@@ -271,6 +290,20 @@ Analyze audio first, then generate animation with per-frame parameter modulation
 | `motion_y`           | -5.0 - 5.0       | Vertical pan (pixels)      |
 | `motion_zoom`        | 0.95 - 1.05      | Zoom factor (1.0 = none)   |
 | `motion_rotation`    | -2.0 - 2.0       | Rotation (degrees)         |
+
+### Audio-Linked Randomness
+
+When `randomness` > 0 and no manual `prompt_segments` are provided, the server auto-generates varied prompt segments aligned to the audio's musical structure (onset peaks, BPM). Each segment receives a unique prompt variation derived from the base prompt's subject.
+
+| `randomness` | Segments | Description |
+|--------------|----------|-------------|
+| `0`          | 0        | Single prompt throughout (default) |
+| `1-5`        | 2        | Subtle: two variations |
+| `6-10`       | 3        | Moderate: three scenes |
+| `11-15`      | 4-5      | Wild: frequent changes |
+| `16-20`      | 6-8      | Chaos: rapid shifts |
+
+Longer audio increases segments proportionally (×1 per extra minute, capped at 12). Boundaries snap to the BPM beat grid when available.
 
 ## Export MP4 Request
 

@@ -60,6 +60,7 @@ sddj/
 │       ├── sddj_import.lua      # Import result, animation frame, live preview
 │       ├── sddj_live.lua        # Live paint system (event-driven, F5 hotkey, ROI)
 │       ├── sddj_handler.lua     # Response dispatch table
+│       ├── sddj_output.lua      # Output directory management + metadata
 │       └── sddj_dialog.lua      # Dialog construction (tabs + actions)
 ├── scripts/
 │   ├── build_extension.py       # Package -> .aseprite-extension
@@ -131,7 +132,7 @@ sddj/
 - **Textual Inversion** — EasyNegative for quality (auto-loaded from `server/models/embeddings/`)
 - **CLIP skip 2** — Skips last encoder layer for better stylized output
 - **Fast generation** — Hyper-SD (8 steps) + DeepCache + FreeU v2 + torch.compile (~2-5s on RTX 4060 after warmup)
-- **Post-processing** — Pixelate, K-Means/Octree/MedianCut quantize, CIELAB palette enforcement (KD-Tree), Floyd-Steinberg (Numba JIT) / Bayer dithering, bg removal (BiRefNet)
+- **Post-processing** (optional, primarily for pixel art) — Pixelate, K-Means/Octree/MedianCut quantize, CIELAB palette enforcement (KD-Tree), Floyd-Steinberg (Numba JIT) / Bayer dithering, bg removal (BiRefNet)
 - **Startup warmup** — Pre-compiles torch + Numba JIT on boot (first real generation is fast)
 - **Health check** — `GET /health` for readiness polling
 - **Concurrency safe** — GPU access serialized via asyncio lock
@@ -139,6 +140,11 @@ sddj/
 - **Cancellation** (v0.6.1, v0.7.3 fix) — Robust multi-layered cancel: immediate server ACK, 30s safety timer fallback, GPU cleanup on timeout; concurrent receive loop handles cancel during long-running generations (audio-reactive, AnimateDiff). Works across all modes.
 - **Auto-reconnect** (v0.6.1) — Exponential backoff reconnection (2s → 30s max) with heartbeat pong watchdog (3× interval unresponsive → disconnect + reconnect)
 - **Generation timeout** — Configurable max time per generation (default 10min, auto-scaled for animation); sends cancel to server to free the GPU
+- **Contextual Action Button** (v0.7.7) — Single action button that adapts to the active tab: GENERATE, ANIMATE, START LIVE, AUDIO GEN. Action bar moved to top for instant access.
+- **Universal Randomize** (v0.7.7) — Randomize checkbox works across all pipelines (Generate, Animation, Audio). Generates a random prompt before executing any pipeline action.
+- **Randomness Slider** (v0.7.7) — 0-20 scale controlling prompt diversity: Off (0), Subtle (5), Moderate (10), Wild (15), Chaos (20). Chaos mode combines multiple items per category; Wild mode favors rare items and random templates.
+- **Dedicated Pipeline Sliders** (v0.7.7) — Animation and Audio tabs have their own Steps, CFG, and Strength sliders, independent from the Generate tab. Fixes the shared-slider bug where changing Generate settings silently affected other pipelines.
+- **Audio-Linked Randomness** (v0.7.7) — When randomness > 0 in audio-reactive mode, auto-generates varied prompt segments aligned to musical onset peaks and BPM. Higher randomness = more scene variety synchronized to the music (2-12 segments, capped).
 
 ## Performance Stack
 
@@ -185,6 +191,8 @@ SageAttention (thu-ml) targets long-sequence attention and offers minimal gains 
 See **[API Reference](docs/API-REFERENCE.md)** for the complete WebSocket protocol specification.
 
 ## Post-Processing Pipeline
+
+> **Note**: Post-processing is optional and primarily designed for pixel art / retro-gaming styles. For anime, illustration, concept art, or realistic styles, you can disable pixelation and use raw SD output.
 
 Executed in strict order:
 

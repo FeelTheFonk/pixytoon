@@ -211,7 +211,7 @@ local function build_tab_generate()
       if PT.dlg.data.lock_subject and PT.dlg.data.fixed_subject ~= "" then
         locked.subject = PT.dlg.data.fixed_subject
       end
-      PT.send({ action = "generate_prompt", locked_fields = locked })
+      PT.send({ action = "generate_prompt", locked_fields = locked, randomness = PT.dlg.data.randomness })
       PT.update_status("Generating prompt...")
     end,
   }
@@ -404,6 +404,18 @@ local function build_tab_animation()
       dlg:modify{ id = "anim_freeinit", visible = ad }
       dlg:modify{ id = "anim_freeinit_iters", visible = ad }
     end,
+  }
+
+  dlg:slider{
+    id = "anim_steps",
+    label = "Steps",
+    min = 1, max = 50, value = 8,
+  }
+  dlg:slider{
+    id = "anim_cfg",
+    label = "CFG (5.0)",
+    min = 0, max = 200, value = 50,
+    onchange = slider_label("anim_cfg", "CFG (%.1f)", 10.0),
   }
 
   dlg:slider{
@@ -646,6 +658,23 @@ local function build_tab_audio()
     label = "FPS",
     options = { "8", "12", "15", "24", "30" },
     option = "24",
+  }
+  dlg:slider{
+    id = "audio_steps",
+    label = "Steps",
+    min = 1, max = 50, value = 8,
+  }
+  dlg:slider{
+    id = "audio_cfg",
+    label = "CFG (5.0)",
+    min = 0, max = 200, value = 50,
+    onchange = slider_label("audio_cfg", "CFG (%.1f)", 10.0),
+  }
+  dlg:slider{
+    id = "audio_denoise",
+    label = "Strength (0.50)",
+    min = 0, max = 100, value = 50,
+    onchange = slider_label("audio_denoise", "Strength (%.2f)", 100.0),
   }
   dlg:slider{
     id = "audio_frame_duration",
@@ -923,42 +952,6 @@ local function build_tab_audio()
     }
   end
 
-  dlg:button{
-    id = "audio_generate_btn",
-    text = "GENERATE AUDIO",
-    enabled = false,
-    hexpand = true,
-    onclick = function()
-      if PT.state.generating or PT.state.animating or PT.audio.generating then return end
-      local path = dlg.data.audio_file
-      if not path or path == "" then
-        app.alert("Select an audio file first.")
-        return
-      end
-      if not PT.audio.analyzed then
-        app.alert("Analyze the audio file first.")
-        return
-      end
-
-      local req = PT.build_audio_reactive_request()
-      if not PT.attach_source_image(req) then return end
-
-      PT.audio.generating = true
-      PT.state.animating = true
-      PT.state.gen_step_start = os.clock()
-      -- Dynamic timeout: 180s base + 15s per expected frame
-      local audio_timeout = 180 + (PT.audio.total_frames * 15)
-      PT.start_gen_timeout(math.max(PT.cfg.GEN_TIMEOUT, audio_timeout))
-      dlg:modify{ id = "audio_generate_btn", enabled = false }
-      dlg:modify{ id = "generate_btn", enabled = false }
-      dlg:modify{ id = "animate_btn", enabled = false }
-      dlg:modify{ id = "live_btn", enabled = false }
-      dlg:modify{ id = "cancel_btn", enabled = true }
-      PT.update_status("Generating audio animation...")
-      PT.send(req)
-    end,
-  }
-
   dlg:combobox{
     id = "mp4_quality",
     label = "MP4 Quality",
@@ -1002,89 +995,233 @@ end
 
 -- ─── Actions Panel ──────────────────────────────────────────
 
+-- ─── Trigger Functions (extracted for contextual button dispatch) ──────
+
+function PT.trigger_generate()
+  if PT.state.generating or PT.state.animating then return end
+  local dlg = PT.dlg
+  local d = dlg.data
+  -- Reset sequence for non-loop single gen (new sequence each click)
+  local is_loop = d.loop_check or d.random_loop_check
+  if not is_loop then
+    PT.finalize_sequence()
+  end
+  -- Initialize loop state
+  if is_loop then
+    PT.loop.mode = true
+    PT.loop.counter = 0
+    PT.loop.seed_mode = d.loop_seed_combo or "random"
+    PT.loop.random_mode = d.random_loop_check or false
+    PT.loop.locked_fields = {}
+    if d.lock_subject and d.fixed_subject ~= "" then
+      PT.loop.locked_fields.subject = d.fixed_subject
+    end
+  end
+
+  -- Random loop: first generate a random prompt, then generate image
+  if PT.loop.random_mode then
+    dlg:modify{ id = "action_btn", text = "LOOPING...", enabled = false }
+    dlg:modify{ id = "cancel_btn", enabled = true }
+    PT.loop.counter = PT.loop.counter + 1
+    PT.update_status("Random Loop #" .. PT.loop.counter .. " — Generating prompt...")
+    PT.send({ action = "generate_prompt", locked_fields = PT.loop.locked_fields, randomness = dlg.data.randomness })
+    return
+  end
+
+  local req = PT.build_generate_request()
+  if not PT.attach_source_image(req) then PT.loop.mode = false; PT.loop.random_mode = false; return end
+
+  PT.state.generating = true
+  PT.state.gen_step_start = os.clock()
+  PT.start_gen_timeout()
+  dlg:modify{ id = "action_btn", text = PT.loop.mode and "LOOPING..." or "GENERATE", enabled = false }
+  dlg:modify{ id = "cancel_btn", enabled = true }
+  if PT.loop.mode then
+    PT.loop.counter = PT.loop.counter + 1
+    PT.update_status("Loop #" .. PT.loop.counter .. " — Generating...")
+  else
+    PT.update_status("Generating...")
+  end
+  PT.send(req)
+end
+
+function PT.trigger_animate()
+  if PT.state.animating or PT.state.generating then return end
+  local dlg = PT.dlg
+  local d = dlg.data
+  local gw, gh = PT.parse_size()
+  local tag_name = d.anim_tag or ""
+  if tag_name == "" then tag_name = nil end
+
+  local req = {
+    action = "generate_animation",
+    method = d.anim_method,
+    prompt = d.prompt,
+    negative_prompt = d.negative_prompt,
+    mode = d.mode,
+    width = gw, height = gh,
+    seed = PT.parse_seed(),
+    steps = d.anim_steps,
+    cfg_scale = d.anim_cfg / 10.0,
+    clip_skip = d.clip_skip,
+    denoise_strength = d.anim_denoise / 100.0,
+    frame_count = d.anim_frames,
+    frame_duration_ms = d.anim_duration,
+    seed_strategy = d.anim_seed_strategy,
+    tag_name = tag_name,
+    enable_freeinit = d.anim_freeinit,
+    freeinit_iterations = d.anim_freeinit_iters,
+    post_process = PT.build_post_process(),
+  }
+  PT.attach_lora(req)
+  PT.attach_neg_ti(req)
+  PT.last_request = PT.deep_copy_request(req)
+  if not PT.attach_source_image(req) then return end
+
+  PT.state.animating = true
+  PT.state.gen_step_start = os.clock()
+  PT.start_gen_timeout()
+  dlg:modify{ id = "action_btn", enabled = false }
+  dlg:modify{ id = "cancel_btn", enabled = true }
+  PT.update_status("Animating...")
+  PT.send(req)
+end
+
+function PT.trigger_audio_generate()
+  if PT.state.generating or PT.state.animating or PT.audio.generating then return end
+  local dlg = PT.dlg
+  local d = dlg.data
+  local path = d.audio_file
+  if not path or path == "" then
+    app.alert("Select an audio file first.")
+    return
+  end
+  if not PT.audio.analyzed then
+    app.alert("Analyze the audio file first.")
+    return
+  end
+
+  local req = PT.build_audio_reactive_request()
+  if not PT.attach_source_image(req) then return end
+
+  PT.audio.generating = true
+  PT.state.animating = true
+  PT.state.gen_step_start = os.clock()
+  local audio_timeout = 180 + (PT.audio.total_frames * 15)
+  PT.start_gen_timeout(math.max(PT.cfg.GEN_TIMEOUT, audio_timeout))
+  dlg:modify{ id = "action_btn", enabled = false }
+  dlg:modify{ id = "cancel_btn", enabled = true }
+  PT.update_status("Generating audio animation...")
+  PT.send(req)
+end
+
+function PT.trigger_live_toggle()
+  local dlg = PT.dlg
+  if PT.live.mode then
+    PT.send({ action = "realtime_stop" })
+    PT.stop_live_mode()
+  else
+    if PT.state.generating or PT.state.animating then return end
+    local spr = app.sprite
+    if spr == nil then
+      app.alert("Open a sprite first to use Live mode.")
+      return
+    end
+    local d = dlg.data
+    local gw, gh = PT.parse_size()
+    local req = {
+      action = "realtime_start",
+      prompt = d.prompt,
+      negative_prompt = d.negative_prompt,
+      width = gw, height = gh,
+      seed = PT.parse_seed(),
+      steps = d.live_steps,
+      cfg_scale = d.live_cfg / 10.0,
+      denoise_strength = d.live_strength / 100.0,
+      clip_skip = d.clip_skip,
+      post_process = PT.build_post_process(),
+    }
+    PT.attach_lora(req)
+    PT.attach_neg_ti(req)
+    PT.live.frame_id = 0
+    PT.live.auto_mode = (d.live_mode == "Auto (stroke)")
+    PT.update_status("Starting live...")
+    PT.send(req)
+  end
+end
+
+function PT.update_action_button(tab)
+  if not PT.dlg then return end
+  if PT.live.mode then
+    PT.dlg:modify{ id = "action_btn", text = "STOP LIVE" }
+    return
+  end
+  local texts = {
+    tab_gen   = "GENERATE",
+    tab_pp    = "GENERATE",
+    tab_anim  = "ANIMATE",
+    tab_live  = "START LIVE",
+    tab_audio = "AUDIO GEN",
+  }
+  PT.dlg:modify{ id = "action_btn", text = texts[tab] or "GENERATE" }
+end
+
+-- ─── Actions Panel ─────────────────────────────────────────
+
 local function build_actions_panel()
   local dlg = PT.dlg
 
   dlg:separator{ text = "Actions", hexpand = true }
 
-  dlg:check{
-    id = "loop_check",
-    label = "Loop Mode",
-    selected = false,
-    onchange = function()
-      dlg:modify{ id = "loop_seed_combo", visible = dlg.data.loop_check or dlg.data.random_loop_check }
-    end,
-  }
-  dlg:check{
-    id = "random_loop_check",
-    label = "Random Loop",
-    selected = false,
-    onchange = function()
-      dlg:modify{ id = "loop_seed_combo", visible = dlg.data.loop_check or dlg.data.random_loop_check }
-    end,
-  }
-  dlg:combobox{
-    id = "loop_seed_combo",
-    label = "Loop Seed",
-    options = { "random", "increment" },
-    option = "random",
-    visible = false,
-  }
-
+  -- Contextual action button: text and behavior change based on active tab
   dlg:button{
-    id = "generate_btn",
+    id = "action_btn",
     text = "GENERATE",
     enabled = false,
     hexpand = true,
     onclick = function()
       if PT.state.generating or PT.state.animating then return end
-      -- Reset sequence for non-loop single gen (new sequence each click)
-      local is_loop = dlg.data.loop_check or dlg.data.random_loop_check
-      if not is_loop then
-        PT.finalize_sequence()
-      end
-      -- Initialize loop state
-      if is_loop then
-        PT.loop.mode = true
-        PT.loop.counter = 0
-        PT.loop.seed_mode = dlg.data.loop_seed_combo or "random"
-        PT.loop.random_mode = dlg.data.random_loop_check or false
-        -- Build locked_fields from UI
-        PT.loop.locked_fields = {}
-        if dlg.data.lock_subject and dlg.data.fixed_subject ~= "" then
-          PT.loop.locked_fields.subject = dlg.data.fixed_subject
-        end
-      end
+      local d = dlg.data
 
-      -- Random loop: first generate a random prompt, then generate image
-      if PT.loop.random_mode then
-        dlg:modify{ id = "generate_btn", text = "LOOPING...", enabled = false }
-        dlg:modify{ id = "animate_btn", enabled = false }
-        dlg:modify{ id = "live_btn", enabled = false }
+      -- If Randomize is enabled: first generate a random prompt, then dispatch
+      if d.randomize_before and not PT.loop.random_mode then
+        local tab = d.main_tabs
+        if tab == "tab_gen" or tab == "tab_pp" then
+          PT.state.pending_action = "generate"
+        elseif tab == "tab_anim" then
+          PT.state.pending_action = "animate"
+        elseif tab == "tab_audio" then
+          PT.state.pending_action = "audio"
+        elseif tab == "tab_live" then
+          PT.trigger_live_toggle()
+          return
+        end
+        local locked = {}
+        if d.lock_subject and d.fixed_subject ~= "" then
+          locked.subject = d.fixed_subject
+        end
+        PT.send({
+          action = "generate_prompt",
+          locked_fields = locked,
+          randomness = d.randomness,
+        })
+        dlg:modify{ id = "action_btn", enabled = false }
         dlg:modify{ id = "cancel_btn", enabled = true }
-        PT.loop.counter = PT.loop.counter + 1
-        PT.update_status("Random Loop #" .. PT.loop.counter .. " — Generating prompt...")
-        PT.send({ action = "generate_prompt", locked_fields = PT.loop.locked_fields })
+        PT.update_status("Randomizing prompt...")
         return
       end
 
-      local req = PT.build_generate_request()
-      if not PT.attach_source_image(req) then PT.loop.mode = false; PT.loop.random_mode = false; return end
-
-      PT.state.generating = true
-      PT.state.gen_step_start = os.clock()
-      PT.start_gen_timeout()
-      dlg:modify{ id = "generate_btn", text = PT.loop.mode and "LOOPING..." or "GENERATE", enabled = false }
-      dlg:modify{ id = "animate_btn", enabled = false }
-      dlg:modify{ id = "live_btn", enabled = false }
-      dlg:modify{ id = "cancel_btn", enabled = true }
-      if PT.loop.mode then
-        PT.loop.counter = PT.loop.counter + 1
-        PT.update_status("Loop #" .. PT.loop.counter .. " — Generating...")
-      else
-        PT.update_status("Generating...")
+      -- Direct dispatch based on active tab
+      local tab = d.main_tabs
+      if tab == "tab_gen" or tab == "tab_pp" then
+        PT.trigger_generate()
+      elseif tab == "tab_anim" then
+        PT.trigger_animate()
+      elseif tab == "tab_live" then
+        PT.trigger_live_toggle()
+      elseif tab == "tab_audio" then
+        PT.trigger_audio_generate()
       end
-      PT.send(req)
     end,
   }
 
@@ -1094,19 +1231,18 @@ local function build_actions_panel()
     enabled = false,
     hexpand = true,
     onclick = function()
+      PT.state.pending_action = nil
       PT.loop.mode = false
       PT.loop.random_mode = false
       PT.timers.loop = PT.stop_timer(PT.timers.loop)
       if PT.state.generating or PT.state.animating then
         PT.send({ action = "cancel" })
         PT.state.cancel_pending = true
-        dlg:modify{ id = "generate_btn", enabled = false }
+        dlg:modify{ id = "action_btn", enabled = false }
         PT.update_status("Cancelling...")
-        -- Re-enable audio analyze button if audio was active
         if PT.audio.generating or PT.audio.analyzing then
           dlg:modify{ id = "audio_analyze_btn", enabled = PT.state.connected }
         end
-        -- Safety timer: force UI unlock if server never responds
         PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
         PT.timers.cancel_safety = Timer{
           interval = PT.cfg.CANCEL_TIMEOUT,
@@ -1127,7 +1263,6 @@ local function build_actions_panel()
         }
         PT.timers.cancel_safety:start()
       else
-        -- Cancel random loop even if no generation is in flight yet
         PT.finalize_sequence()
         PT.reset_ui_buttons()
         PT.update_status("Cancelled")
@@ -1135,93 +1270,58 @@ local function build_actions_panel()
     end,
   }
 
-  dlg:button{
-    id = "animate_btn",
-    text = "ANIMATE",
-    enabled = false,
-    hexpand = true,
-    onclick = function()
-      if PT.state.animating or PT.state.generating then return end
-      local gw, gh = PT.parse_size()
-      local tag_name = dlg.data.anim_tag or ""
-      if tag_name == "" then tag_name = nil end
-
-      local req = {
-        action = "generate_animation",
-        method = dlg.data.anim_method,
-        prompt = dlg.data.prompt,
-        negative_prompt = dlg.data.negative_prompt,
-        mode = dlg.data.mode,
-        width = gw, height = gh,
-        seed = PT.parse_seed(),
-        steps = dlg.data.steps,
-        cfg_scale = dlg.data.cfg_scale / 10.0,
-        clip_skip = dlg.data.clip_skip,
-        denoise_strength = dlg.data.anim_denoise / 100.0,
-        frame_count = dlg.data.anim_frames,
-        frame_duration_ms = dlg.data.anim_duration,
-        seed_strategy = dlg.data.anim_seed_strategy,
-        tag_name = tag_name,
-        enable_freeinit = dlg.data.anim_freeinit,
-        freeinit_iterations = dlg.data.anim_freeinit_iters,
-        post_process = PT.build_post_process(),
-      }
-      PT.attach_lora(req)
-      PT.attach_neg_ti(req)
-      PT.last_request = PT.deep_copy_request(req)
-      if not PT.attach_source_image(req) then return end
-
-      PT.state.animating = true
-      PT.state.gen_step_start = os.clock()
-      PT.start_gen_timeout()
-      dlg:modify{ id = "animate_btn", enabled = false }
-      dlg:modify{ id = "generate_btn", enabled = false }
-      dlg:modify{ id = "live_btn", enabled = false }
-      dlg:modify{ id = "cancel_btn", enabled = true }
-      PT.update_status("Animating...")
-      PT.send(req)
+  -- Randomize + Loop options
+  dlg:check{
+    id = "randomize_before",
+    text = "Randomize",
+    selected = false,
+    onchange = function()
+      local show = dlg.data.randomize_before or dlg.data.random_loop_check
+      dlg:modify{ id = "randomness", visible = show }
+    end,
+  }
+  dlg:check{
+    id = "loop_check",
+    text = "Loop",
+    selected = false,
+    onchange = function()
+      dlg:modify{ id = "loop_seed_combo", visible = dlg.data.loop_check or dlg.data.random_loop_check }
+    end,
+  }
+  dlg:check{
+    id = "random_loop_check",
+    text = "Random Loop",
+    selected = false,
+    onchange = function()
+      dlg:modify{ id = "loop_seed_combo", visible = dlg.data.loop_check or dlg.data.random_loop_check }
+      local show = dlg.data.randomize_before or dlg.data.random_loop_check
+      dlg:modify{ id = "randomness", visible = show }
     end,
   }
 
-  dlg:button{
-    id = "live_btn",
-    text = "START LIVE",
-    enabled = false,
-    hexpand = true,
-    onclick = function()
-      if PT.live.mode then
-        PT.send({ action = "realtime_stop" })
-        PT.stop_live_mode()
-      else
-        if PT.state.generating or PT.state.animating then return end
-        local spr = app.sprite
-        if spr == nil then
-          app.alert("Open a sprite first to use Live mode.")
-          return
-        end
-        local gw, gh = PT.parse_size()
-        local req = {
-          action = "realtime_start",
-          prompt = dlg.data.prompt,
-          negative_prompt = dlg.data.negative_prompt,
-          width = gw, height = gh,
-          seed = PT.parse_seed(),
-          steps = dlg.data.live_steps,
-          cfg_scale = dlg.data.live_cfg / 10.0,
-          denoise_strength = dlg.data.live_strength / 100.0,
-          clip_skip = dlg.data.clip_skip,
-          post_process = PT.build_post_process(),
-        }
-        PT.attach_lora(req)
-        PT.attach_neg_ti(req)
-        PT.live.frame_id = 0
-        PT.live.auto_mode = (dlg.data.live_mode == "Auto (stroke)")
-        PT.update_status("Starting live...")
-        PT.send(req)
-      end
+  dlg:slider{
+    id = "randomness",
+    label = "Randomness (0 — Off)",
+    min = 0, max = 20, value = 0,
+    visible = false,
+    onchange = function()
+      local v = dlg.data.randomness
+      local names = { [0]="Off", [5]="Subtle", [10]="Moderate", [15]="Wild", [20]="Chaos" }
+      local name = names[v] or ""
+      local suffix = name ~= "" and (" — " .. name) or ""
+      dlg:modify{ id = "randomness", label = "Randomness (" .. v .. suffix .. ")" }
     end,
   }
 
+  dlg:combobox{
+    id = "loop_seed_combo",
+    label = "Loop Seed",
+    options = { "random", "increment" },
+    option = "random",
+    visible = false,
+  }
+
+  -- Live mode buttons (shown only during live)
   dlg:button{
     id = "live_send_btn",
     text = "SEND (F5)",
@@ -1270,6 +1370,7 @@ function PT.build_dialog()
   }
 
   build_connection_section()
+  build_actions_panel()
 
   PT.dlg:tab{ id = "tab_gen", text = "Generate" }
   build_tab_generate()
@@ -1286,9 +1387,13 @@ function PT.build_dialog()
   PT.dlg:tab{ id = "tab_audio", text = "Audio" }
   build_tab_audio()
 
-  PT.dlg:endtabs{ id = "main_tabs", selected = "tab_gen" }
-
-  build_actions_panel()
+  PT.dlg:endtabs{
+    id = "main_tabs",
+    selected = "tab_gen",
+    onchange = function()
+      PT.update_action_button(PT.dlg.data.main_tabs)
+    end,
+  }
 
   PT.dlg:show{ wait = false, autoscrollbars = true }
 end

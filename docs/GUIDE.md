@@ -108,7 +108,7 @@ SDDj is a bridge between Aseprite and a local Stable Diffusion server running on
 flowchart LR
     A[Aseprite<br>Lua extension] -->|WebSocket<br>JSON| B[SDDj Server<br>Python FastAPI]
     B --> C[Stable Diffusion 1.5<br>+ Hyper-SD acceleration]
-    C --> D[Post-Processing<br>Pixel art pipeline]
+    C --> D[Post-Processing<br>pipeline (optional)]
     D -->|base64 PNG| A
 ```
 
@@ -247,7 +247,7 @@ The generator combines quality tags, subjects, styles, lighting, moods,
 and camera angles for diverse results.
 
 **Lock Subject**: Check the "Lock Subject" checkbox and enter a subject
-(e.g., "pixel art cat") to keep it fixed while randomizing all other fields.
+(e.g., "armored knight" or "pixel art cat") to keep it fixed while randomizing all other fields.
 This is useful for exploring variations of the same character or object.
 
 ### Presets
@@ -268,19 +268,24 @@ These are the core parameters that control what the model generates.
 
 ### Prompt
 
-Describes what you want. Be specific and descriptive.
+Describes what you want. Be specific and descriptive. SDDj works with any style — pixel art, anime, illustration, concept art, realistic, watercolor, abstract, and more.
 
+**General example:**
 ```
-pixel art, game sprite, warrior character, sword, shield, sharp pixels
+a majestic dragon soaring over mountains, fantasy art, dramatic lighting
 ```
 
-Or for other styles:
-
+**Anime/illustration example:**
 ```
 anime illustration, magical forest, glowing mushrooms, ethereal lighting
 ```
 
-The default negative prompt already blocks common pixel art problems (blurry, antialiased, smooth gradients, photorealistic, 3D render). You can add to it but rarely need to replace it.
+**Pixel art style example:**
+```
+pixel art, game sprite, warrior character, sword, shield, sharp pixels
+```
+
+The default negative prompt blocks common quality issues (blurry, deformed, low quality, artifacts). You can add to it but rarely need to replace it. For pixel art specifically, consider adding `antialiased, smooth gradients` to the negative prompt.
 
 > [!TIP]
 > Start your prompt with a style keyword (e.g. `pixel art`, `anime`, `watercolor`) if you have a matching style LoRA. This anchors the style before adding subject details.
@@ -292,11 +297,12 @@ How many iterations the model performs. More steps = more detail, but slower.
 | Steps | Use case |
 |-------|----------|
 | 4 | Live Paint (real-time speed) |
-| 8 | Default — good balance with Hyper-SD acceleration |
-| 12-15 | Extra detail for complex scenes |
+| 6-8 | Pixel art — fast and effective with Hyper-SD |
+| 8-12 | Anime / illustration — good detail with stylized models |
+| 10-15 | Realistic / concept art — extra detail for complex scenes |
 | 20+ | Rarely needed with Hyper-SD — diminishing returns |
 
-With Hyper-SD enabled (default), 8 steps produces results comparable to 25+ steps on a standard pipeline.
+With Hyper-SD enabled (default), 8 steps produces results comparable to 25+ steps on a standard pipeline. The step counts above are guidelines — experiment to find what works best for your checkpoint and style LoRA.
 
 ### CFG Scale
 
@@ -328,11 +334,11 @@ Controls which CLIP encoder layer interprets your prompt.
 
 | Value | Best for |
 |-------|----------|
-| 1 | Photorealistic, detailed prompts |
-| **2** | **Stylized, anime, pixel art** (default) |
+| 1 | Realistic / photorealistic checkpoints, detailed literal prompts |
+| **2** | **Stylized, anime, illustration, pixel art** (default) — works well for most SD 1.5 models |
 | 3+ | Very abstract interpretation (experimental) |
 
-Most SD 1.5 models trained on anime/stylized content expect clip skip 2.
+Most SD 1.5 models trained on anime, illustration, or stylized content expect clip_skip=2. If you switch to a realistic checkpoint (e.g., Realistic Vision), try clip_skip=1 for better results.
 
 ### Seed
 
@@ -351,16 +357,16 @@ The generation resolution. Higher = more detail but slower and more VRAM.
 
 | Size | Use case |
 |------|----------|
-| 32x32 — 96x96 | Tiny sprites (below server minimum 64x64 — may be rejected) |
-| 128x128 | Small sprites |
-| 256x256 | Medium sprites |
-| 384x384 | Medium-large sprites |
-| **512x512** | **Default** — best quality/speed ratio for SD 1.5 |
+| 32x32 — 96x96 | Tiny assets (below server minimum 64x64 — may be rejected) |
+| 128x128 | Small assets |
+| 256x256 | Medium assets |
+| 384x384 | Medium-large assets |
+| **512x512** | **Default** — best quality/speed ratio for SD 1.5 (all styles) |
 | 512x768 / 768x512 | Rectangular formats (portraits / landscapes) |
 | 768x768 | Large scenes (needs more VRAM) |
 
 > [!NOTE]
-> The generation size is how large the generation canvas is. For small pixel art output (32x32, 48x48), generate at 512x512 and use the post-processing **Pixelate** to downscale to your target size.
+> 512x512 is the native resolution for SD 1.5 and works well for all styles — pixel art, anime, illustration, concept art, and realistic. For small pixel art output (32x32, 48x48), generate at 512x512 and use the post-processing **Pixelate** to downscale to your target size.
 
 > [!WARNING]
 > SD 1.5 was trained on 512x512. Going above 768 often produces duplicated compositions or artifacts. For large scenes, generate at 512x512 and upscale in Aseprite.
@@ -368,6 +374,8 @@ The generation resolution. Higher = more detail but slower and more VRAM.
 ---
 
 ## Post-Processing Pipeline
+
+> **Note**: Post-processing (pixelation, color quantization, dithering, palette mapping) is primarily designed for pixel art and retro-gaming styles. For other styles (anime, illustration, realistic, concept art), you can leave post-processing at defaults or disable pixelation entirely by setting the target size to 512 (same as input).
 
 After generation, the image passes through a 6-stage post-processing pipeline. Each stage is optional and configured in the **Post-Process** tab.
 
@@ -379,7 +387,7 @@ flowchart LR
     D --> E[Palette<br>Enforce]
     E --> F[Dithering]
     F --> G[Alpha<br>Cleanup]
-    G --> H[Final<br>Pixel Art]
+    G --> H[Final<br>Output]
 ```
 
 ### 1. Background Removal
@@ -441,6 +449,9 @@ Forces all colors to match a specific palette using CIELAB color distance (perce
 
 </details>
 
+> [!TIP]
+> Palette presets are designed for retro-gaming aesthetics. For non-pixel-art styles (anime, illustration, realistic, concept art), use **palette_mode=Auto** or disable palette mapping to preserve the model's full color range.
+
 ### 5. Dithering
 
 Simulates intermediate colors using dot patterns. Applied after palette enforcement.
@@ -458,7 +469,7 @@ Simulates intermediate colors using dot patterns. Applied after palette enforcem
 
 ### 6. Alpha Cleanup
 
-Automatically binarizes the alpha channel: pixels are either fully opaque or fully transparent. No semi-transparency in pixel art.
+Automatically binarizes the alpha channel: pixels are either fully opaque or fully transparent. This is essential for pixel art and useful for any style where clean edges are desired.
 
 Only applies when Remove BG is enabled.
 
@@ -472,9 +483,9 @@ A LoRA (Low-Rank Adaptation) is a small file that adjusts the SD model's style w
 
 SDDj uses two types of LoRAs:
 
-1. **Hyper-SD** (built-in, permanent) — Accelerates generation. It's what allows 8-step generation to look as good as 25+ steps. You don't need to manage this.
+1. **Hyper-SD** (built-in, permanent) — A **speed LoRA** that accelerates generation. It is style-neutral and does not bias toward any particular aesthetic. It's what allows 8-step generation to look as good as 25+ steps. You don't need to manage this.
 
-2. **Style LoRA** (user-configurable) — Steers the model toward a specific style (pixel art, anime, etc.). Placed in `server/models/loras/`.
+2. **Style LoRA** (user-configurable, optional) — Steers the model toward a specific visual style. Examples: pixel art LoRA, anime LoRA, watercolor LoRA, etc. Style LoRAs are **not required** — the base checkpoint already produces good results for many styles. Placed in `server/models/loras/`.
 
 ### Using LoRAs
 
@@ -512,10 +523,10 @@ ControlNet modes let you guide the model using a reference image from your activ
 
 | Mode | Input | Best for |
 |------|-------|----------|
-| **controlnet_canny** | Edge-detected image | Converting clean line art to pixel art |
-| **controlnet_scribble** | Rough sketch | Transforming quick sketches into detailed sprites |
+| **controlnet_canny** | Edge-detected image | Converting clean line art to finished artwork |
+| **controlnet_scribble** | Rough sketch | Transforming quick sketches into detailed images |
 | **controlnet_openpose** | Pose stick figure | Character poses (draw a simple skeleton) |
-| **controlnet_lineart** | Line drawing | Colorizing line drawings in pixel art style |
+| **controlnet_lineart** | Line drawing | Colorizing and rendering line drawings in any style |
 
 How to use:
 
@@ -589,14 +600,17 @@ To reproduce: enter that seed number in the Seed field, keep all other parameter
 
 ## Audio Reactivity
 
-> v0.7.0 — Synth-style modulation matrix. v0.7.1 — BPM detection, 20 presets, auto-calibration, prompt schedule. v0.7.3 — New bands (sub-bass, upper-mid, presence), new targets (palette shift, frame cadence), AnimateDiff + Audio mode, MP4 export, waveform preview. v0.7.4 — Audio-reactive motion/camera (smooth Deforum-like pan/zoom/rotate), frame limit control, 4 motion presets, 14 presets enriched with motion.
+> v0.7.0 — Synth-style modulation matrix. v0.7.1 — BPM detection, 20 presets, auto-calibration, prompt schedule. v0.7.3 — New bands (sub-bass, upper-mid, presence), new targets (palette shift, frame cadence), AnimateDiff + Audio mode, MP4 export, waveform preview. v0.7.4 — Audio-reactive motion/camera (smooth Deforum-like pan/zoom/rotate), frame limit control, 4 motion presets, 14 presets enriched with motion. v0.7.7 — Contextual action button, universal randomize, randomness slider (0-20), dedicated per-pipeline sliders, audio-linked randomness (auto-generates varied prompt segments from music structure).
 
-The **Audio** tab drives generation parameters from audio features. Select a file, click **Analyze** (auto-detects BPM, shows waveform preview, and recommends a preset), then **GENERATE AUDIO**. Supports all modes (txt2img, img2img, inpaint, ControlNet) and both animation methods:
+The **Audio** tab drives generation parameters from audio features. Select a file, click **Analyze** (auto-detects BPM, shows waveform preview, and recommends a preset), then click the action button (shows **AUDIO GEN** when the Audio tab is active). The Audio tab has its own dedicated Steps, CFG, and Strength sliders. Supports all modes (txt2img, img2img, inpaint, ControlNet) and both animation methods:
 
 - **Frame Chain**: Traditional img2img chaining — fast, per-frame control
 - **AnimateDiff + Audio**: 16-frame temporal batches with overlap blending — superior coherence for longer sequences
 
 After generating, click **Export MP4** to create a video with the audio track embedded (requires ffmpeg).
+
+> [!TIP]
+> **v0.7.7**: The new **randomness slider** (0-20) and **audio-linked randomness** let audio features drive prompt variation. The system auto-generates varied prompt segments from the music's structure, creating unique visuals that evolve with the song.
 
 For the complete guide — modulation matrix, all 24 presets, custom expressions, motion/camera, prompt scheduling, tips: see **[Audio Reactivity Guide](AUDIO-REACTIVITY.md)**.
 
@@ -611,8 +625,8 @@ Common Aseprite-specific issues:
 | Problem | Solution |
 |---------|----------|
 | **"Connection failed"** | Is the server running? Auto-reconnect will retry automatically |
-| **Black image** | Check your prompt. Try `pixel art, character` |
-| **Blurry / not pixelated** | Enable Pixelate in Post-Process, set target size to 64-128 |
+| **Black image** | Check your prompt. Try a simple test like `a red dragon, fantasy art` or `pixel art, character` |
+| **Blurry / not pixelated** | For pixel art: enable Pixelate in Post-Process, set target size to 64-128. For other styles, blurriness is normal at low step counts — try increasing Steps |
 
 ---
 

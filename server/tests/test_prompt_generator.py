@@ -97,6 +97,62 @@ class TestPromptGenerator:
         prompt, _, _ = gen.generate(template=template)
         # Should fallback to joining components
         assert isinstance(prompt, str)
+
+
+class TestRandomness:
+    """v0.7.7: randomness parameter in generate()."""
+
+    def test_zero_uses_standard_selection(self, tmp_prompts_dir: Path):
+        gen = PromptGenerator(tmp_prompts_dir)
+        prompt, neg, comp = gen.generate(randomness=0)
+        assert isinstance(prompt, str) and len(prompt) > 0
+        # Each component is a single item (no comma-combined chaos)
+        for cat, val in comp.items():
+            assert ", " not in val or cat in ("quality",)  # quality may naturally contain commas
+
+    def test_chaos_mode_combines_items(self, tmp_prompts_dir: Path):
+        gen = PromptGenerator(tmp_prompts_dir)
+        # Run multiple times — chaos (>=16) should combine 2 items with comma
+        found_combo = False
+        for _ in range(30):
+            _, _, comp = gen.generate(randomness=20)
+            for cat, val in comp.items():
+                if ", " in val:
+                    found_combo = True
+                    break
+            if found_combo:
+                break
+        assert found_combo, "Chaos mode should combine multiple items in at least one category"
+
+    def test_wild_mode_returns_valid(self, tmp_prompts_dir: Path):
+        gen = PromptGenerator(tmp_prompts_dir)
+        prompt, neg, comp = gen.generate(randomness=15)
+        assert isinstance(prompt, str) and len(prompt) > 0
+        assert len(comp) > 0
+
+    def test_clamped_above_20(self, tmp_prompts_dir: Path):
+        gen = PromptGenerator(tmp_prompts_dir)
+        # Should not raise, just clamp
+        prompt, _, _ = gen.generate(randomness=50)
+        assert isinstance(prompt, str) and len(prompt) > 0
+
+    def test_clamped_below_zero(self, tmp_prompts_dir: Path):
+        gen = PromptGenerator(tmp_prompts_dir)
+        prompt, _, _ = gen.generate(randomness=-10)
+        assert isinstance(prompt, str) and len(prompt) > 0
+
+    def test_explicit_template_overrides_randomness(self, tmp_prompts_dir: Path):
+        gen = PromptGenerator(tmp_prompts_dir)
+        template = "{subject}"
+        prompt, _, comp = gen.generate(template=template, randomness=20)
+        # The explicit template should be used, not a random one
+        assert prompt == comp.get("subject", "") or ", " in prompt  # chaos may combine subject
+
+    def test_backward_compat_no_randomness(self, tmp_prompts_dir: Path):
+        gen = PromptGenerator(tmp_prompts_dir)
+        # Calling without randomness should work (default=0)
+        prompt, neg, comp = gen.generate()
+        assert isinstance(prompt, str)
         assert len(prompt) > 0
 
     # ── New categories ──

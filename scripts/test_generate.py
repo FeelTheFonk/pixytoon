@@ -1,7 +1,7 @@
 """Standalone test: single-frame generation (txt2img + img2img).
 
 Usage:
-    cd C:\\Users\\CleS\\Desktop\\pixytoon\\server
+    cd C:\\Users\\CleS\\Desktop\\SDDj\\server
     uv run python ..\\scripts\\test_generate.py
 
 Requires the SDDj server to be running on ws://127.0.0.1:9876/ws.

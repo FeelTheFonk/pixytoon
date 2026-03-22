@@ -231,11 +231,10 @@ function PT.stop_live_mode()
   PT.live.pending_send = false
   if PT.dlg then
     PT.update_status("Live stopped")
-    PT.dlg:modify{ id = "live_btn", text = "START LIVE" }
+    PT.update_action_button(PT.dlg.data.main_tabs or "tab_gen")
+    PT.dlg:modify{ id = "action_btn", enabled = true }
     PT.dlg:modify{ id = "live_accept_btn", visible = false }
     PT.dlg:modify{ id = "live_send_btn", visible = false }
-    PT.dlg:modify{ id = "generate_btn", enabled = true }
-    PT.dlg:modify{ id = "animate_btn", enabled = true }
   end
 end
 

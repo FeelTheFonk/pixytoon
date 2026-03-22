@@ -424,6 +424,41 @@ class TestAudioRequestModels:
         req = AudioReactiveRequest(audio_path="/test.wav")
         assert req.max_frames is None
 
+
+class TestRandomnessField:
+    """v0.7.7: randomness field on Request model."""
+
+    def test_default_is_zero(self):
+        req = Request(action="generate_prompt")
+        assert req.randomness == 0
+
+    def test_valid_range(self):
+        for v in (0, 5, 10, 15, 20):
+            req = Request(action="generate_prompt", randomness=v)
+            assert req.randomness == v
+
+    def test_below_min_rejected(self):
+        with pytest.raises(ValidationError):
+            Request(action="generate_prompt", randomness=-1)
+
+    def test_above_max_rejected(self):
+        with pytest.raises(ValidationError):
+            Request(action="generate_prompt", randomness=21)
+
+    def test_excluded_from_generate_request(self):
+        req = Request(action="generate", prompt="test", randomness=15)
+        gen = req.to_generate_request()
+        assert isinstance(gen, GenerateRequest)
+        dumped = gen.model_dump()
+        assert "randomness" not in dumped
+
+    def test_excluded_from_animation_request(self):
+        req = Request(action="generate_animation", prompt="test", randomness=10, frame_count=8)
+        anim = req.to_animation_request()
+        assert isinstance(anim, AnimationRequest)
+        dumped = anim.model_dump()
+        assert "randomness" not in dumped
+
     def test_audio_reactive_max_frames_valid(self):
         """v0.7.4: max_frames accepts valid range 1-3600."""
         req = AudioReactiveRequest(audio_path="/test.wav", max_frames=100)
@@ -456,3 +491,40 @@ class TestAudioRequestModels:
         )
         ar = req.to_audio_reactive_request()
         assert ar.max_frames is None
+
+
+class TestAudioReactiveRandomness:
+    """v0.7.7: randomness forwarded to AudioReactiveRequest."""
+
+    def test_audio_reactive_randomness_default(self):
+        req = AudioReactiveRequest(audio_path="/test.wav")
+        assert req.randomness == 0
+
+    def test_audio_reactive_randomness_valid(self):
+        req = AudioReactiveRequest(audio_path="/test.wav", randomness=15)
+        assert req.randomness == 15
+
+    def test_audio_reactive_randomness_bounds(self):
+        with pytest.raises(ValidationError):
+            AudioReactiveRequest(audio_path="/test.wav", randomness=-1)
+        with pytest.raises(ValidationError):
+            AudioReactiveRequest(audio_path="/test.wav", randomness=21)
+
+    def test_forwarded_to_audio_reactive_request(self):
+        req = Request(
+            action="generate_audio_reactive",
+            audio_path="/test.wav", prompt="test",
+            randomness=12,
+        )
+        ar = req.to_audio_reactive_request()
+        assert ar.randomness == 12
+
+    def test_zero_randomness_forwarded(self):
+        """randomness=0 should still be forwarded (it has a default)."""
+        req = Request(
+            action="generate_audio_reactive",
+            audio_path="/test.wav", prompt="test",
+            randomness=0,
+        )
+        ar = req.to_audio_reactive_request()
+        assert ar.randomness == 0

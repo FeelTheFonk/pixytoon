@@ -90,7 +90,7 @@ handlers.result = function(resp)
         -- Random loop: generate new prompt first, then auto-generate in prompt_result handler
         if PT.loop.random_mode then
           PT.update_status("Random Loop #" .. PT.loop.counter .. " — Generating prompt...")
-          PT.send({ action = "generate_prompt", locked_fields = PT.loop.locked_fields })
+          PT.send({ action = "generate_prompt", locked_fields = PT.loop.locked_fields, randomness = PT.dlg and PT.dlg.data.randomness or 0 })
           return
         end
 
@@ -107,7 +107,7 @@ handlers.result = function(resp)
         PT.state.generating = true
         PT.state.gen_step_start = os.clock()
         PT.start_gen_timeout()
-        PT.dlg:modify{ id = "generate_btn", enabled = false }
+        PT.dlg:modify{ id = "action_btn", enabled = false }
         PT.dlg:modify{ id = "cancel_btn", enabled = true }
         PT.update_status("Loop #" .. PT.loop.counter .. " — Generating...")
         PT.send(req)
@@ -200,6 +200,7 @@ handlers.error = function(resp)
   PT.loop.random_mode = false
   PT.timers.loop = PT.stop_timer(PT.timers.loop)
   PT.state.gen_step_start = nil
+  PT.state.pending_action = nil
   PT.stop_gen_timeout()
   PT.state.cancel_pending = false
   PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
@@ -296,11 +297,9 @@ handlers.realtime_ready = function(resp)
   if PT.dlg then
     local mode_str = PT.live.auto_mode and "auto (stroke)" or "manual (F5)"
     PT.update_status("Live mode active — " .. mode_str)
-    PT.dlg:modify{ id = "live_btn", text = "STOP LIVE" }
+    PT.dlg:modify{ id = "action_btn", text = "STOP LIVE", enabled = true }
     PT.dlg:modify{ id = "live_accept_btn", visible = true }
     PT.dlg:modify{ id = "live_send_btn", visible = true }
-    PT.dlg:modify{ id = "generate_btn", enabled = false }
-    PT.dlg:modify{ id = "animate_btn", enabled = false }
   end
   PT.start_live_timer()
 end
@@ -363,8 +362,18 @@ handlers.prompt_result = function(resp)
     PT.dlg:modify{ id = "fixed_subject", text = resp.components.subject }
   end
 
-  -- Random loop: auto-trigger generation after prompt is set
-  if PT.loop.random_mode and PT.loop.mode and PT.dlg and PT.state.connected then
+  -- Dispatch via pending_action (universal random) or random loop
+  local action = PT.state.pending_action
+  PT.state.pending_action = nil
+
+  if action == "generate" then
+    PT.trigger_generate()
+  elseif action == "animate" then
+    PT.trigger_animate()
+  elseif action == "audio" then
+    PT.trigger_audio_generate()
+  elseif PT.loop.random_mode and PT.loop.mode and PT.dlg and PT.state.connected then
+    -- Random loop: auto-trigger generation after prompt is set
     local req = PT.build_generate_request()
     if not PT.attach_source_image(req) then
       PT.loop.mode = false
@@ -533,7 +542,7 @@ handlers.audio_reactive_complete = function(resp)
     PT.update_status("Audio animation done (" .. tostring(resp.total_frames or "?") .. " frames, "
       .. tostring(resp.total_time_ms or "?") .. "ms" .. tag_str .. ")")
     PT.reset_ui_buttons()
-    PT.dlg:modify{ id = "audio_generate_btn", enabled = PT.state.connected }
+    PT.dlg:modify{ id = "action_btn", enabled = PT.state.connected }
     -- Enable MP4 export (output dir preserved in audio.last_output_dir after reset)
     PT.dlg:modify{ id = "export_mp4_btn", enabled = true }
   end

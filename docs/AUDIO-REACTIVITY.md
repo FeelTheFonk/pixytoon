@@ -1,6 +1,6 @@
 # Audio Reactivity Guide
 
-Generate SD-driven animations where inference parameters are modulated in real-time by audio features. This system is inspired by Deforum's audio-reactive workflows, brought to pixel art.
+Generate SD-driven animations where inference parameters are modulated in real-time by audio features. This system is inspired by Deforum's audio-reactive workflows, brought to Aseprite.
 
 **[README](../README.md)** | **[Guide](GUIDE.md)** | **[Cookbook](COOKBOOK.md)** | **[Live Paint](LIVE-PAINT.md)** | **[Audio Reactivity](AUDIO-REACTIVITY.md)** | **[API Reference](API-REFERENCE.md)** | **[Configuration](CONFIGURATION.md)** | **[Troubleshooting](TROUBLESHOOTING.md)**
 
@@ -55,7 +55,7 @@ MP4 Export (ffmpeg, nearest-neighbor scaling, audio mux)
 3. **Select** an audio file (.wav, .mp3, .flac, .ogg)
 4. Click **Analyze** — displays duration, frame count, BPM, available features, and auto-selects the recommended preset
 5. Optionally set **Max Frames** to limit the number of generated frames (0 = all)
-6. Click **GENERATE AUDIO** — generates an animation frame-by-frame
+6. Click **AUDIO GEN** — generates an animation frame-by-frame
 
 That's it. The auto-calibration system picks the best preset for your audio.
 
@@ -79,7 +79,7 @@ After analysis, the system auto-selects the recommended preset based on audio ch
 
 ### 3. Generation
 
-Click **GENERATE AUDIO**. Each frame:
+Click **AUDIO GEN**. Each frame:
 1. Reads modulated parameters from the schedule
 2. Resolves the prompt (static or from prompt schedule)
 3. Generates via img2img from the previous frame (or txt2img for frame 0)
@@ -312,7 +312,7 @@ Frame Chain generates each frame independently from the previous one — no temp
 
 1. In the **Audio** tab, set **Method** to `animatediff`
 2. Optionally enable **FreeInit** for the first chunk
-3. Click **GENERATE AUDIO** as usual
+3. Click **AUDIO GEN** as usual
 
 ### Limitations
 
@@ -350,11 +350,35 @@ Enable **Advanced > Prompt Schedule** to use different prompts for different tim
 Format: `start-end` in seconds (e.g., `0-10`) paired with a prompt.
 
 **Example workflow:**
-- T1: `0-8` / `pixel art serene forest, green canopy`
-- T2: `8-16` / `pixel art dark cave, glowing crystals`
-- T3: `16-24` / `pixel art volcanic landscape, lava`
+- T1: `0-8` / `serene forest, green canopy, morning light`
+- T2: `8-16` / `dark cave, glowing crystals, underground`
+- T3: `16-24` / `volcanic landscape, flowing lava, dramatic sky`
 
 The default prompt (from the Generate tab) is used for any time not covered by segments. Overlapping segments use the highest-weight segment.
+
+### Audio-Linked Randomness (v0.7.7)
+
+When the **Randomness** slider (0-20) is set above 0 and no manual prompt segments are defined, SDDj auto-generates varied prompt segments aligned to the music's structure:
+
+- **Onset detection**: Segment boundaries are placed at musical onset peaks (transients, beats)
+- **BPM snapping**: Boundaries snap to the nearest beat grid position
+- **Subject preservation**: The subject from your base prompt is locked; surrounding descriptors vary
+
+| Randomness | Segments | Effect |
+|------------|----------|--------|
+| 0          | 0        | Single prompt throughout |
+| 1-5        | 2        | Subtle variation between sections |
+| 6-10       | 3        | Moderate: three distinct scenes |
+| 11-15      | 4-5      | Wild: frequent visual shifts |
+| 16-20      | 6-8      | Chaos: rapid scene changes |
+
+Longer audio gets more segments (capped at 12). This creates a "music video" effect where scenes change in sync with the music — without requiring manual prompt scheduling.
+
+**Example**: Base prompt `a fox in a magical forest` with randomness=12 on a 30s track might produce:
+- 0-7s: `masterpiece, a fox in a magical forest, ethereal lighting, misty`
+- 7-15s: `masterpiece, a fox in a magical forest, neon glow, cyberpunk style`
+- 15-22s: `masterpiece, a fox in a magical forest, watercolor, soft pastels`
+- 22-30s: `masterpiece, a fox in a magical forest, dramatic storm, dark atmosphere`
 
 ## Seed Control
 
