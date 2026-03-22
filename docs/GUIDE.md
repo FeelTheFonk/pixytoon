@@ -424,7 +424,7 @@ PixyToon uses two types of LoRAs:
 
 ### Textual Inversion Embeddings
 
-Embeddings like **EasyNegative** or **FastNegativeV2** improve quality by encoding complex "what to avoid" concepts in a single token.
+Embeddings like **EasyNegative** improve quality by encoding complex "what to avoid" concepts in a single token.
 
 - Drop `.safetensors` or `.pt` files in `server/models/embeddings/`
 - Enable via **Neg. Embeddings** checkbox

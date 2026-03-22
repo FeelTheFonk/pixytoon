@@ -71,12 +71,6 @@ def download_embeddings() -> None:
             "local": "EasyNegative.safetensors",
             "repo_type": "dataset",
         },
-        {
-            "repo": "navmesh/Embeddings",
-            "file": "FastNegativeV2.pt",
-            "local": "FastNegativeV2.pt",
-            "repo_type": "model",
-        },
     ]
 
     for emb in embeddings:

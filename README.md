@@ -108,7 +108,7 @@ pixytoon/
 - **Animation** — Dual-method: Frame Chain (img2img chaining) + AnimateDiff (motion module temporal consistency)
 - **AnimateDiff** — Motion adapter v1-5-3, FreeInit support, auto DeepCache disable/re-enable, ControlNet compatible
 - **LoRA stacking** — Hyper-SD (speed) + pixel art LoRA (style, ±2.0 weight range)
-- **Textual Inversion** — EasyNegative / FastNegativeV2 for quality (auto-loaded from `server/models/embeddings/`)
+- **Textual Inversion** — EasyNegative for quality (auto-loaded from `server/models/embeddings/`)
 - **CLIP skip 2** — Skips last encoder layer for better stylized output
 - **Fast generation** — Hyper-SD (8 steps) + DeepCache + FreeU v2 + torch.compile (~2-5s on RTX 4060 after warmup)
 - **Post-processing** — Pixelate, K-Means/Octree/MedianCut quantize, CIELAB palette enforcement (KD-Tree), Floyd-Steinberg (Numba JIT) / Bayer dithering, bg removal (BiRefNet)
