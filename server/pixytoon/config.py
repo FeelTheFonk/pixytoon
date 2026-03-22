@@ -78,15 +78,21 @@ class Settings(BaseSettings):
     rembg_on_cpu: bool = True  # Keep GPU free for diffusion
 
     # ── Animation ────────────────────────────────────────────
-    default_anim_frames: int = 8
-    default_anim_duration_ms: int = 100
-    default_anim_denoise: float = 0.30
     max_animation_frames: int = 120
 
     # ── AnimateDiff ──────────────────────────────────────────
     animatediff_model: str = "guoyww/animatediff-motion-adapter-v1-5-3"
     enable_freeinit: bool = False
     freeinit_iterations: int = 2
+
+    # ── Audio Reactivity ──────────────────────────────────────
+    audio_cache_dir: str = ""  # empty = system temp dir
+    audio_max_file_size_mb: int = 500
+    audio_max_frames: int = 3600  # ~2.5 min at 24fps
+    audio_default_attack: int = 2
+    audio_default_release: int = 8
+    stem_model: str = "htdemucs"
+    stem_device: str = "cpu"  # always CPU — keep GPU free for diffusion
 
     # ── Real-Time Paint Mode ──────────────────────────────────
     realtime_timeout: float = Field(300.0, gt=0.0)  # auto-stop if no frame for N seconds

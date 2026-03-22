@@ -2,7 +2,7 @@
   "name": "pixytoon",
   "displayName": "PixyToon - SD Pixel Art Generator & Animator",
   "description": "Generate SOTA pixel art and animations using local Stable Diffusion + AnimateDiff from within Aseprite",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "author": "PixyToon",
   "license": "MIT",
   "minimumAsepriteVersion": "1.3",

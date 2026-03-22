@@ -91,12 +91,14 @@ function PT.set_connected(is_connected)
     PT.dlg:modify{ id = "generate_btn", enabled = true }
     PT.dlg:modify{ id = "animate_btn", enabled = true }
     PT.dlg:modify{ id = "live_btn", enabled = true }
+    PT.dlg:modify{ id = "audio_generate_btn", enabled = true }
   else
     PT.dlg:modify{ id = "connect_btn", text = "Connect" }
     PT.dlg:modify{ id = "generate_btn", text = "GENERATE", enabled = false }
     PT.dlg:modify{ id = "cancel_btn", enabled = false }
     PT.dlg:modify{ id = "animate_btn", enabled = false }
     PT.dlg:modify{ id = "live_btn", enabled = false }
+    PT.dlg:modify{ id = "audio_generate_btn", enabled = false }
     PT.dlg:modify{ id = "live_btn", text = "START LIVE" }
     PT.dlg:modify{ id = "live_accept_btn", visible = false }
     PT.dlg:modify{ id = "live_send_btn", visible = false }
@@ -120,6 +122,10 @@ function PT.set_connected(is_connected)
     PT.anim.base_seed = 0
     -- Reset sequence state
     PT.reset_sequence()
+    -- Reset audio state
+    PT.audio.analyzing = false
+    PT.audio.generating = false
+    PT.audio.analyzed = false
   end
 end
 
@@ -255,6 +261,7 @@ function PT.reset_ui_buttons(opts)
   PT.dlg:modify{ id = "generate_btn", text = "GENERATE", enabled = gen_enabled }
   PT.dlg:modify{ id = "animate_btn", enabled = gen_enabled }
   PT.dlg:modify{ id = "live_btn", enabled = gen_enabled }
+  PT.dlg:modify{ id = "audio_generate_btn", enabled = gen_enabled }
   PT.dlg:modify{ id = "cancel_btn", enabled = opts.cancel or false }
 end
 
@@ -303,6 +310,7 @@ function PT.request_resources()
   PT.send({ action = "list_loras" })
   PT.send({ action = "list_embeddings" })
   PT.send({ action = "list_presets" })
+  PT.send({ action = "list_modulation_presets" })
 end
 
 end

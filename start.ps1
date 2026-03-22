@@ -26,13 +26,14 @@ try {
     if ($resp.StatusCode -eq 200) { $running = $true }
 } catch {}
 
+$serverProc = $null
+
 if ($running) {
     Ok "Server already running"
 } else {
     # --- Start server --------------------------------------------------------
     Write-Host "  ${D}Starting server...${R}"
-    $serverScript = "$Root/server/run.py"
-    Start-Process pwsh -ArgumentList "-NoExit", "-Command", "`$Host.UI.RawUI.WindowTitle='PixyToon Server'; Set-Location '$Root/server'; uv run python run.py" -WindowStyle Minimized
+    $serverProc = Start-Process pwsh -ArgumentList "-NoExit", "-Command", "`$Host.UI.RawUI.WindowTitle='PixyToon Server'; Set-Location '$Root/server'; uv run python run.py" -WindowStyle Minimized -PassThru
 
     # --- Wait for ready ------------------------------------------------------
     Write-Host "  ${D}Waiting for engine to load...${R}"
@@ -80,9 +81,18 @@ Read-Host "  Press Enter to stop the server"
 # --- Shutdown ----------------------------------------------------------------
 Write-Host ""
 Write-Host "  ${D}Stopping server...${R}"
-Get-Process -Name "python*" -ErrorAction SilentlyContinue |
-    Where-Object { $_.MainWindowTitle -match "PixyToon" } |
-    Stop-Process -Force -ErrorAction SilentlyContinue
+if ($serverProc -and -not $serverProc.HasExited) {
+    # Kill the pwsh host and all its child processes (uv, python)
+    $id = $serverProc.Id
+    Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $id } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+} else {
+    # Fallback: find by window title (server was already running or PID lost)
+    Get-Process -Name "pwsh" -ErrorAction SilentlyContinue |
+        Where-Object { $_.MainWindowTitle -eq "PixyToon Server" } |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+}
 Start-Sleep -Seconds 1
 Ok "Server stopped"
 Write-Host ""

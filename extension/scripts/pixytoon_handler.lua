@@ -176,8 +176,11 @@ end
 
 handlers.error = function(resp)
   local was_animating = PT.state.animating
+  local was_audio_gen = PT.audio.generating
   PT.state.generating = false
   PT.state.animating = false
+  PT.audio.generating = false
+  PT.audio.analyzing = false
   PT.loop.mode = false
   PT.loop.random_mode = false
   PT.timers.loop = PT.stop_timer(PT.timers.loop)
@@ -190,7 +193,11 @@ handlers.error = function(resp)
   if was_animating and PT.anim.frame_count > 0 then
     local spr = app.sprite
     if spr then
-      local dur = (PT.dlg and PT.dlg.data.anim_duration or 100) / 1000.0
+      -- Use audio frame duration if this was an audio-reactive generation
+      local dur_ms = was_audio_gen
+        and (PT.dlg and PT.dlg.data.audio_frame_duration or 42)
+        or (PT.dlg and PT.dlg.data.anim_duration or 100)
+      local dur = dur_ms / 1000.0
       for i = 0, PT.anim.frame_count - 1 do
         local fn = PT.anim.start_frame + i
         if spr.frames[fn] then spr.frames[fn].duration = dur end
@@ -214,6 +221,8 @@ handlers.error = function(resp)
   if PT.dlg then
     PT.update_status("Error: " .. tostring(resp.message or "Unknown"))
     PT.reset_ui_buttons()
+    -- Re-enable analyze button (may have been disabled during analysis)
+    PT.dlg:modify{ id = "audio_analyze_btn", enabled = PT.state.connected }
   end
   if resp.code ~= "CANCELLED" then
     app.alert("PixyToon: " .. tostring(resp.message or "Unknown error"))
@@ -415,6 +424,113 @@ handlers.cleanup_done = function(resp)
   if PT.dlg then
     PT.update_status(tostring(resp.message or "Cleanup done")
       .. " (freed " .. string.format("%.1f", resp.freed_mb or 0) .. " MB)")
+  end
+end
+
+-- ─── Audio Reactivity ─────────────────────────────────────────
+
+handlers.audio_analysis = function(resp)
+  PT.audio.analyzed = true
+  PT.audio.analyzing = false
+  PT.audio.duration = resp.duration or 0
+  PT.audio.total_frames = resp.total_frames or 0
+  PT.audio.features = resp.features or {}
+  PT.audio.stems_available = resp.stems_available or false
+  PT.audio.stems = resp.stems or {}
+
+  if PT.dlg then
+    local dur_str = string.format("%.1fs", PT.audio.duration)
+    PT.dlg:modify{ id = "audio_status",
+      text = dur_str .. " — " .. PT.audio.total_frames .. " frames — "
+        .. #PT.audio.features .. " features" }
+    PT.dlg:modify{ id = "audio_total_frames",
+      text = "Frames: " .. PT.audio.total_frames }
+    PT.dlg:modify{ id = "audio_analyze_btn", enabled = true }
+
+    -- Update source dropdowns with available features
+    local src_opts = {}
+    for _, f in ipairs(PT.audio.features) do
+      src_opts[#src_opts + 1] = f
+    end
+    if #src_opts > 0 then
+      for i = 1, 4 do
+        PT.dlg:modify{ id = "mod" .. i .. "_source", options = src_opts }
+      end
+    end
+
+    PT.update_status("Audio analyzed: " .. dur_str .. ", " .. PT.audio.total_frames .. " frames")
+  end
+end
+
+handlers.audio_reactive_frame = function(resp)
+  if not resp.image then
+    PT.update_status("Error: missing image in audio_reactive_frame")
+    return
+  end
+  if resp.frame_index ~= nil then
+    -- Reuse the animation frame import mechanism
+    PT.import_animation_frame(resp)
+  end
+end
+
+handlers.audio_reactive_complete = function(resp)
+  PT.state.animating = false
+  PT.audio.generating = false
+  PT.state.gen_step_start = nil
+  PT.stop_gen_timeout()
+  PT.state.cancel_pending = false
+  PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
+
+  if PT.dlg then
+    local tag_str = ""
+    if resp.tag_name and resp.tag_name ~= "" then tag_str = ", tag=" .. resp.tag_name end
+    PT.update_status("Audio animation done (" .. tostring(resp.total_frames or "?") .. " frames, "
+      .. tostring(resp.total_time_ms or "?") .. "ms" .. tag_str .. ")")
+    PT.reset_ui_buttons()
+    PT.dlg:modify{ id = "audio_generate_btn", enabled = PT.state.connected }
+  end
+
+  -- Finalize frames (set durations + tag)
+  local spr = app.sprite
+  if spr and PT.anim.frame_count > 0 then
+    app.transaction("PixyToon Audio Animation Finalize", function()
+      local dur_ms = (PT.dlg and PT.dlg.data.audio_frame_duration or 42)
+      local dur = dur_ms / 1000.0
+      for i = 0, PT.anim.frame_count - 1 do
+        local fn = PT.anim.start_frame + i
+        if spr.frames[fn] then spr.frames[fn].duration = dur end
+      end
+      local tag_start = PT.anim.start_frame
+      local tag_end = PT.anim.start_frame + PT.anim.frame_count - 1
+      if resp.tag_name and resp.tag_name ~= "" and spr.frames[tag_start] and spr.frames[tag_end] then
+        local tag = spr:newTag(tag_start, tag_end)
+        tag.name = resp.tag_name
+      end
+    end)
+    app.refresh()
+  end
+  PT.anim.layer = nil
+  PT.anim.start_frame = 0
+  PT.anim.frame_count = 0
+  PT.anim.base_seed = 0
+end
+
+handlers.stems_available = function(resp)
+  PT.audio.stems_available = resp.available
+  if PT.dlg then
+    PT.dlg:modify{ id = "audio_stems_status",
+      text = resp.available and "Stems ready" or resp.message or "Not available" }
+  end
+end
+
+handlers.modulation_presets = function(resp)
+  PT.audio.mod_presets = resp.presets or {}
+  if PT.dlg and #PT.audio.mod_presets > 0 then
+    local opts = { "(custom)" }
+    for _, p in ipairs(PT.audio.mod_presets) do
+      opts[#opts + 1] = p
+    end
+    PT.dlg:modify{ id = "audio_mod_preset", options = opts }
   end
 end
 

@@ -507,6 +507,294 @@ local function build_tab_live()
   }
 end
 
+-- ─── Tab: Audio ───────────────────────────────────────────
+
+local GLOBAL_SOURCES = {
+  "global_rms", "global_onset", "global_centroid",
+  "global_low", "global_mid", "global_high",
+}
+
+local MOD_TARGETS = {
+  "denoise_strength", "cfg_scale", "noise_amplitude",
+  "controlnet_scale", "seed_offset",
+}
+
+local function build_tab_audio()
+  local dlg = PT.dlg
+
+  -- File
+  dlg:separator{ text = "Audio File" }
+  dlg:file{
+    id = "audio_file",
+    label = "File",
+    filetypes = { "wav", "mp3", "flac", "ogg" },
+    open = true,
+  }
+  dlg:button{
+    id = "audio_analyze_btn",
+    text = "Analyze",
+    onclick = function()
+      if not PT.state.connected then
+        app.alert("Connect to the server first.")
+        return
+      end
+      local path = dlg.data.audio_file
+      if not path or path == "" then
+        app.alert("Select an audio file first.")
+        return
+      end
+      PT.audio.analyzing = true
+      PT.audio.analyzed = false
+      dlg:modify{ id = "audio_analyze_btn", enabled = false }
+      dlg:modify{ id = "audio_status", text = "Analyzing..." }
+      PT.update_status("Analyzing audio...")
+      PT.send(PT.build_analyze_audio_request())
+    end,
+  }
+  dlg:label{ id = "audio_status", text = "No audio loaded" }
+
+  -- Stems
+  dlg:separator{ text = "Stem Separation" }
+  dlg:check{
+    id = "audio_stems_enable",
+    text = "Enable Stems (CPU)",
+    selected = false,
+    onchange = function()
+      if dlg.data.audio_stems_enable and PT.state.connected then
+        PT.send({ action = "check_stems" })
+      end
+    end,
+  }
+  dlg:label{ id = "audio_stems_status", text = "" }
+
+  -- Timing
+  dlg:separator{ text = "Timing" }
+  dlg:combobox{
+    id = "audio_fps",
+    label = "FPS",
+    options = { "8", "12", "15", "24", "30" },
+    option = "24",
+  }
+  dlg:label{ id = "audio_total_frames", text = "Frames: --" }
+  dlg:slider{
+    id = "audio_frame_duration",
+    label = "Frame (42ms)",
+    min = 30, max = 200, value = 42,
+    onchange = function()
+      dlg:modify{ id = "audio_frame_duration",
+        label = "Frame (" .. dlg.data.audio_frame_duration .. "ms)" }
+    end,
+  }
+
+  -- Preset
+  dlg:separator{ text = "Modulation Preset" }
+  dlg:combobox{
+    id = "audio_mod_preset",
+    label = "Preset",
+    options = { "(custom)", "energetic", "ambient", "bass_driven" },
+    option = "(custom)",
+    onchange = function()
+      local sel = dlg.data.audio_mod_preset
+      if sel == "(custom)" then return end
+      -- Pre-fill slots from preset defaults
+      if sel == "energetic" then
+        dlg:modify{ id = "mod1_source", option = "global_rms" }
+        dlg:modify{ id = "mod1_target", option = "denoise_strength" }
+        dlg:modify{ id = "mod1_min", value = 20 }
+        dlg:modify{ id = "mod1_max", value = 70 }
+        dlg:modify{ id = "mod2_source", option = "global_onset" }
+        dlg:modify{ id = "mod2_target", option = "cfg_scale" }
+        dlg:modify{ id = "mod2_min", value = 10 }
+        dlg:modify{ id = "mod2_max", value = 30 }
+      elseif sel == "ambient" then
+        dlg:modify{ id = "mod1_source", option = "global_rms" }
+        dlg:modify{ id = "mod1_target", option = "denoise_strength" }
+        dlg:modify{ id = "mod1_min", value = 10 }
+        dlg:modify{ id = "mod1_max", value = 30 }
+        dlg:modify{ id = "mod2_source", option = "global_centroid" }
+        dlg:modify{ id = "mod2_target", option = "cfg_scale" }
+        dlg:modify{ id = "mod2_min", value = 10 }
+        dlg:modify{ id = "mod2_max", value = 20 }
+      elseif sel == "bass_driven" then
+        dlg:modify{ id = "mod1_source", option = "global_low" }
+        dlg:modify{ id = "mod1_target", option = "denoise_strength" }
+        dlg:modify{ id = "mod1_min", value = 15 }
+        dlg:modify{ id = "mod1_max", value = 60 }
+        dlg:modify{ id = "mod2_source", option = "global_high" }
+        dlg:modify{ id = "mod2_target", option = "cfg_scale" }
+        dlg:modify{ id = "mod2_min", value = 13 }
+        dlg:modify{ id = "mod2_max", value = 27 }
+      end
+      -- Enable the configured slots and set slot count
+      dlg:modify{ id = "mod1_enable", selected = true }
+      dlg:modify{ id = "mod2_enable", selected = true }
+      dlg:modify{ id = "mod_slot_count", value = 2 }
+      -- Manually trigger visibility sync (dlg:modify doesn't fire onchange)
+      for i = 1, 4 do
+        local vis = (i <= 2)
+        dlg:modify{ id = "mod" .. i .. "_enable",  visible = vis }
+        dlg:modify{ id = "mod" .. i .. "_source",  visible = vis }
+        dlg:modify{ id = "mod" .. i .. "_target",  visible = vis }
+        dlg:modify{ id = "mod" .. i .. "_min",     visible = vis }
+        dlg:modify{ id = "mod" .. i .. "_max",     visible = vis }
+        dlg:modify{ id = "mod" .. i .. "_attack",  visible = vis }
+        dlg:modify{ id = "mod" .. i .. "_release", visible = vis }
+      end
+    end,
+  }
+
+  -- Modulation Matrix
+  dlg:separator{ text = "Modulation Matrix" }
+
+  dlg:slider{
+    id = "mod_slot_count",
+    label = "Slots",
+    min = 1, max = 4, value = 2,
+    onchange = function()
+      local n = dlg.data.mod_slot_count
+      for i = 1, 4 do
+        local vis = (i <= n)
+        dlg:modify{ id = "mod" .. i .. "_enable",  visible = vis }
+        dlg:modify{ id = "mod" .. i .. "_source",  visible = vis }
+        dlg:modify{ id = "mod" .. i .. "_target",  visible = vis }
+        dlg:modify{ id = "mod" .. i .. "_min",     visible = vis }
+        dlg:modify{ id = "mod" .. i .. "_max",     visible = vis }
+        dlg:modify{ id = "mod" .. i .. "_attack",  visible = vis }
+        dlg:modify{ id = "mod" .. i .. "_release", visible = vis }
+      end
+    end,
+  }
+
+  -- Slot defaults: [source, target, min, max, attack, release, visible]
+  local slot_defaults = {
+    { "global_rms",    "denoise_strength",  15, 65, 2, 8,  true },
+    { "global_onset",  "cfg_scale",         30, 80, 2, 8,  true },
+    { "global_low",    "noise_amplitude",    0, 30, 2, 8,  false },
+    { "global_high",   "seed_offset",        0, 50, 2, 8,  false },
+  }
+
+  for i, def in ipairs(slot_defaults) do
+    local prefix = "mod" .. i .. "_"
+    local vis = def[7]
+
+    dlg:check{
+      id = prefix .. "enable",
+      text = "Slot " .. i,
+      selected = true,
+      visible = vis,
+    }
+    dlg:combobox{
+      id = prefix .. "source",
+      label = "Source",
+      options = GLOBAL_SOURCES,
+      option = def[1],
+      visible = vis,
+    }
+    dlg:combobox{
+      id = prefix .. "target",
+      label = "Target",
+      options = MOD_TARGETS,
+      option = def[2],
+      visible = vis,
+    }
+    dlg:slider{
+      id = prefix .. "min",
+      label = "Min (%)",
+      min = 0, max = 100, value = def[3],
+      visible = vis,
+    }
+    dlg:slider{
+      id = prefix .. "max",
+      label = "Max (%)",
+      min = 0, max = 100, value = def[4],
+      visible = vis,
+    }
+    dlg:slider{
+      id = prefix .. "attack",
+      label = "Attack",
+      min = 1, max = 30, value = def[5],
+      visible = vis,
+    }
+    dlg:slider{
+      id = prefix .. "release",
+      label = "Release",
+      min = 1, max = 60, value = def[6],
+      visible = vis,
+    }
+  end
+
+  -- Expressions
+  dlg:separator{ text = "Expressions" }
+  dlg:check{
+    id = "audio_use_expressions",
+    text = "Custom Expressions",
+    selected = false,
+    onchange = function()
+      local vis = dlg.data.audio_use_expressions
+      dlg:modify{ id = "expr_denoise", visible = vis }
+      dlg:modify{ id = "expr_cfg",     visible = vis }
+      dlg:modify{ id = "expr_noise",   visible = vis }
+    end,
+  }
+  dlg:entry{
+    id = "expr_denoise",
+    label = "denoise",
+    text = "",
+    visible = false,
+    hexpand = true,
+  }
+  dlg:entry{
+    id = "expr_cfg",
+    label = "cfg_scale",
+    text = "",
+    visible = false,
+    hexpand = true,
+  }
+  dlg:entry{
+    id = "expr_noise",
+    label = "noise_amp",
+    text = "",
+    visible = false,
+    hexpand = true,
+  }
+
+  -- Generate button
+  dlg:separator{}
+  dlg:button{
+    id = "audio_generate_btn",
+    text = "GENERATE AUDIO ANIMATION",
+    enabled = false,
+    hexpand = true,
+    onclick = function()
+      if PT.state.generating or PT.state.animating or PT.audio.generating then return end
+      local path = dlg.data.audio_file
+      if not path or path == "" then
+        app.alert("Select an audio file first.")
+        return
+      end
+      if not PT.audio.analyzed then
+        app.alert("Analyze the audio file first.")
+        return
+      end
+
+      local req = PT.build_audio_reactive_request()
+      if not PT.attach_source_image(req) then return end
+
+      PT.audio.generating = true
+      PT.state.animating = true
+      PT.state.gen_step_start = os.clock()
+      PT.start_gen_timeout()
+      dlg:modify{ id = "audio_generate_btn", enabled = false }
+      dlg:modify{ id = "generate_btn", enabled = false }
+      dlg:modify{ id = "animate_btn", enabled = false }
+      dlg:modify{ id = "live_btn", enabled = false }
+      dlg:modify{ id = "cancel_btn", enabled = true }
+      PT.update_status("Generating audio animation...")
+      PT.send(req)
+    end,
+  }
+end
+
 -- ─── Actions Panel ──────────────────────────────────────────
 
 local function build_actions_panel()
@@ -781,6 +1069,9 @@ function PT.build_dialog()
 
   PT.dlg:tab{ id = "tab_live", text = "Live" }
   build_tab_live()
+
+  PT.dlg:tab{ id = "tab_audio", text = "Audio" }
+  build_tab_audio()
 
   PT.dlg:endtabs{ id = "main_tabs", selected = "tab_gen" }
 

@@ -22,7 +22,11 @@ Aseprite (Lua WebSocket) <-> PixyToon Server (Python FastAPI)
                                   |
                             SD1.5 + Hyper-SD + DeepCache + FreeU v2 + torch.compile
                                   |
-                            AnimateDiff (motion module) + Frame Chain
+                    AnimateDiff + Frame Chain + Audio-Reactive Chain
+                                  |
+                   Audio Analyzer (librosa) + Stem Separator (demucs, CPU)
+                                  |
+                     Modulation Engine (synth matrix + expressions)
                                   |
                             Pixel Art Post-Processing Pipeline
 ```
@@ -93,7 +97,11 @@ pixytoon/
 │       ├── ti_manager.py        # Textual Inversion discovery
 │       ├── palette_manager.py   # Palette loading (path-validated)
 │       ├── presets_manager.py   # Preset save/load/delete
-│       └── prompt_generator.py  # Auto-prompt generation from templates
+│       ├── prompt_generator.py  # Auto-prompt generation from templates
+│       ├── audio_analyzer.py   # Audio feature extraction (librosa)
+│       ├── audio_cache.py      # Disk cache for audio analysis (NPZ)
+│       ├── stem_separator.py   # Optional stem separation (demucs, CPU)
+│       └── modulation_engine.py # Modulation matrix + expressions (simpleeval)
 ```
 
 ## Features
@@ -106,6 +114,7 @@ pixytoon/
 - **Auto-Prompt Generator** (v0.4.0) — Randomize creative prompts from curated templates with lockable fields
 - **Lock Subject** (v0.5.0) — Keep a fixed subject (character, object) while randomizing style, mood, lighting, etc.
 - **Presets** (v0.4.0) — Save/load generation settings; built-in presets for pixel art, anime, character, landscape, and more
+- **Audio Reactivity** (v0.7.0) — Synth-style modulation matrix: map audio features (RMS, onset, spectral bands, per-stem) to inference parameters (denoise, CFG, noise, ControlNet, seed). Deforum-inspired math expressions. Pre-computed offline analysis via librosa. Optional CPU stem separation (demucs). Built-in presets: energetic, ambient, bass_driven.
 - **Animation** — Dual-method: Frame Chain (img2img chaining) + AnimateDiff (motion module temporal consistency)
 - **AnimateDiff** — Motion adapter v1-5-3, FreeInit support, auto DeepCache disable/re-enable, ControlNet compatible
 - **LoRA stacking** — Hyper-SD (speed) + pixel art LoRA (style, ±2.0 weight range)
@@ -186,6 +195,10 @@ Connect to `ws://127.0.0.1:9876/ws`. All messages are JSON.
 | `save_preset`        | Save current settings as preset      |
 | `delete_preset`      | Delete a user preset                 |
 | `cleanup`            | Free GPU VRAM and run garbage collection |
+| `analyze_audio`      | Analyze audio file, extract per-frame features |
+| `generate_audio_reactive` | Generate audio-reactive animation   |
+| `check_stems`        | Check if stem separation (demucs) is available |
+| `list_modulation_presets` | List built-in modulation presets    |
 
 ### Generate Request
 
@@ -333,6 +346,71 @@ Stop the session:
 | `denoise_strength`  | 0.05 - 0.95                          | `0.5`         |
 | `clip_skip`         | 1 - 12                               | `2`           |
 
+### Audio-Reactive Request
+
+Analyze audio first, then generate animation with per-frame parameter modulation:
+
+```json
+{
+  "action": "analyze_audio",
+  "audio_path": "C:/path/to/audio.wav",
+  "fps": 24.0,
+  "enable_stems": false
+}
+```
+
+```json
+{
+  "action": "generate_audio_reactive",
+  "audio_path": "C:/path/to/audio.wav",
+  "fps": 24.0,
+  "enable_stems": false,
+  "modulation_slots": [
+    {
+      "source": "global_rms",
+      "target": "denoise_strength",
+      "min_val": 0.2,
+      "max_val": 0.7,
+      "attack": 2,
+      "release": 8,
+      "enabled": true
+    }
+  ],
+  "expressions": null,
+  "modulation_preset": null,
+  "prompt": "pixel art character",
+  "mode": "txt2img",
+  "width": 512,
+  "height": 512,
+  "steps": 8,
+  "cfg_scale": 5.0,
+  "denoise_strength": 0.30,
+  "frame_duration_ms": 42,
+  "post_process": { "..." }
+}
+```
+
+| Modulation Source    | Description                    |
+|----------------------|--------------------------------|
+| `global_rms`         | Overall energy                 |
+| `global_onset`       | Transient / attack strength    |
+| `global_centroid`    | Spectral brightness            |
+| `global_low`         | Low-frequency energy (20-300Hz)  |
+| `global_mid`         | Mid-frequency energy (300-2kHz)  |
+| `global_high`        | High-frequency energy (2k-16kHz) |
+| `drums_rms/onset`    | Per-stem (requires `enable_stems`) |
+| `bass_rms/onset`     | Per-stem (requires `enable_stems`) |
+| `vocals_rms/onset`   | Per-stem (requires `enable_stems`) |
+| `other_rms/onset`    | Per-stem (requires `enable_stems`) |
+
+| Modulation Target    | Range           | Description                |
+|----------------------|-----------------|----------------------------|
+| `denoise_strength`   | 0.05 – 0.95     | Frame-to-frame change      |
+| `cfg_scale`          | 1.0 – 30.0      | Prompt adherence           |
+| `noise_amplitude`    | 0.0 – 1.0       | Additive latent noise      |
+| `controlnet_scale`   | 0.0 – 2.0       | ControlNet influence       |
+| `seed_offset`        | 0 – 1000         | Per-frame seed variation   |
+
 ### Response Types
 
 | Type                 | Fields                                                              |
@@ -352,6 +430,11 @@ Stop the session:
 | `preset_saved`       | `name`                                                              |
 | `preset_deleted`     | `name`                                                              |
 | `cleanup_done`       | `message`, `freed_mb`                                               |
+| `audio_analysis`     | `duration`, `total_frames`, `features` (list), `stems_available`, `stems` (opt) |
+| `audio_reactive_frame` | `frame_index`, `total_frames`, `image` (b64), `seed`, `time_ms`, `width`, `height`, `params_used` |
+| `audio_reactive_complete` | `total_frames`, `total_time_ms`, `tag_name` (opt)               |
+| `stems_available`    | `available`, `message`                                              |
+| `modulation_presets` | `presets` (list of names)                                           |
 
 ### Input Validation
 
@@ -433,6 +516,14 @@ All prefixed with `PIXYTOON_`. Example: `PIXYTOON_PORT=8080`.
 | `REALTIME_DEFAULT_DENOISE` | `0.5`                                 | Default realtime denoise strength |
 | `REALTIME_ROI_PADDING`     | `32`                                  | Padding around ROI crop (pixels)  |
 | `REALTIME_ROI_MIN_SIZE`    | `64`                                  | Minimum ROI dimension (pixels)    |
+| `AUDIO_CACHE_DIR`          | `""` (temp dir)                       | Cache directory for audio analysis |
+| `AUDIO_MAX_FILE_SIZE_MB`   | `500`                                 | Max audio file size (MB)          |
+| `AUDIO_MAX_FRAMES`         | `3600`                                | Max frames per audio animation    |
+| `AUDIO_DEFAULT_FPS`        | `24.0`                                | Default audio analysis FPS        |
+| `AUDIO_DEFAULT_ATTACK`     | `2`                                   | Default EMA attack frames         |
+| `AUDIO_DEFAULT_RELEASE`    | `8`                                   | Default EMA release frames        |
+| `STEM_MODEL`               | `htdemucs`                            | Demucs model for stem separation  |
+| `STEM_DEVICE`              | `cpu`                                 | Stem separation device (always CPU) |
 
 ## HTTP Endpoints
 

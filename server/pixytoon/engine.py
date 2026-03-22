@@ -23,6 +23,7 @@ import time
 import warnings
 from typing import Callable, Optional
 
+import numpy as np
 import torch
 import torch.compiler
 from PIL import Image
@@ -46,6 +47,8 @@ from .protocol import (
     AnimationFrameResponse,
     AnimationMethod,
     AnimationRequest,
+    AudioReactiveFrameResponse,
+    AudioReactiveRequest,
     GenerateRequest,
     GenerationMode,
     PostProcessSpec,
@@ -134,6 +137,11 @@ class DiffusionEngine:
         self._loaded = False
         self._cancel_event = threading.Event()
         self._realtime = RealtimeState()
+        # Audio reactivity modules (lazy, no GPU)
+        self._audio_analyzer = None
+        self._audio_cache = None
+        self._stem_separator = None
+        self._modulation_engine = None
 
     @property
     def is_loaded(self) -> bool:
@@ -332,6 +340,10 @@ class DiffusionEngine:
             cleaned.append("AnimateDiff")
 
         rembg_wrapper.unload()
+
+        if self._stem_separator is not None:
+            self._stem_separator.unload()
+            cleaned.append("StemSeparator")
 
         gc.collect()
         if torch.cuda.is_available():
@@ -613,6 +625,348 @@ class DiffusionEngine:
             raise
         finally:
             self._cancel_event.clear()
+
+    # ── Audio Reactivity ──────────────────────────────────────
+
+    def _ensure_audio_modules(self):
+        """Lazy-init audio modules (no GPU required)."""
+        if self._audio_analyzer is None:
+            from .audio_analyzer import AudioAnalyzer
+            from .audio_cache import AudioCache
+            from .stem_separator import StemSeparator
+            from .modulation_engine import ModulationEngine
+            self._audio_analyzer = AudioAnalyzer()
+            self._audio_cache = AudioCache(cache_dir=settings.audio_cache_dir)
+            self._stem_separator = StemSeparator(
+                model_name=settings.stem_model,
+                device=settings.stem_device,
+            )
+            self._modulation_engine = ModulationEngine()
+
+    def stems_available(self) -> bool:
+        """Check if stem separation is available."""
+        from .stem_separator import is_available
+        return is_available()
+
+    def analyze_audio(self, audio_path: str, fps: float,
+                      enable_stems: bool = False):
+        """Analyze audio file, returning features. Uses cache when available."""
+        self._ensure_audio_modules()
+        # Check cache first
+        cached = self._audio_cache.get(audio_path, fps, enable_stems)
+        if cached is not None:
+            return cached
+
+        # Analyze with optional stem separation
+        stems = None
+        if enable_stems and self._stem_separator.is_available():
+            log.info("Separating stems for: %s", audio_path)
+            stems = self._stem_separator.separate(audio_path)
+
+        analysis = self._audio_analyzer.analyze(
+            audio_path, fps, stems=stems,
+            attack_frames=settings.audio_default_attack,
+            release_frames=settings.audio_default_release,
+        )
+
+        # Enforce max frames
+        if analysis.total_frames > settings.audio_max_frames:
+            log.warning("Audio too long: %d frames (max %d). Truncating.",
+                       analysis.total_frames, settings.audio_max_frames)
+            analysis.total_frames = settings.audio_max_frames
+            for name in analysis.features:
+                analysis.features[name] = analysis.features[name][:settings.audio_max_frames]
+
+        self._audio_cache.put(audio_path, fps, analysis, enable_stems)
+        return analysis
+
+    def generate_audio_reactive(
+        self,
+        req: AudioReactiveRequest,
+        on_frame: Optional[Callable[[AudioReactiveFrameResponse], None]] = None,
+        on_progress: Optional[Callable[[ProgressResponse], None]] = None,
+    ) -> list[AudioReactiveFrameResponse]:
+        """Generate audio-reactive animation — chain animation with per-frame parameter modulation."""
+        if not self._loaded:
+            self.load()
+
+        self._cancel_event.clear()
+        self._ensure_audio_modules()
+
+        try:
+            # Handle LoRA
+            if req.lora is not None:
+                if (req.lora.name != self._lora_fuser.current_name
+                        or req.lora.weight != self._lora_fuser.current_weight):
+                    self.set_pixel_lora(req.lora.name, req.lora.weight)
+
+            # 1. Analyze audio
+            analysis = self.analyze_audio(req.audio_path, req.fps, req.enable_stems)
+
+            # 2. Resolve modulation slots
+            from .modulation_engine import ModulationSlot, ModulationEngine
+            if req.modulation_preset:
+                slots = ModulationEngine.get_preset(req.modulation_preset)
+            else:
+                slots = [
+                    ModulationSlot(
+                        source=s.source, target=s.target,
+                        min_val=s.min_val, max_val=s.max_val,
+                        attack=s.attack, release=s.release,
+                        enabled=s.enabled,
+                    )
+                    for s in req.modulation_slots
+                ]
+
+            # 3. Validate expressions if provided
+            if req.expressions:
+                errors = self._modulation_engine.validate_expressions(
+                    req.expressions, analysis.feature_names,
+                )
+                if errors:
+                    raise ValueError(f"Invalid expressions: {errors}")
+
+            # 4. Compute parameter schedule
+            schedule = self._modulation_engine.compute_schedule(
+                analysis, slots, req.expressions,
+            )
+
+            # 5. Run chain animation with per-frame params
+            return self._generate_audio_chain(req, schedule, on_frame, on_progress)
+
+        except torch.cuda.OutOfMemoryError:
+            log.error("CUDA OOM during audio-reactive generation — clearing VRAM cache")
+            gc.collect()
+            torch.cuda.empty_cache()
+            raise
+        finally:
+            self._cancel_event.clear()
+
+    def _generate_audio_chain(
+        self,
+        req: AudioReactiveRequest,
+        schedule,
+        on_frame: Optional[Callable[[AudioReactiveFrameResponse], None]],
+        on_progress: Optional[Callable[[ProgressResponse], None]],
+    ) -> list[AudioReactiveFrameResponse]:
+        """Audio-reactive chain animation — wraps raw UNet like _generate_chain."""
+        raw_unet = get_uncompiled_unet(self._pipe)
+        compiled_unet = self._pipe.unet
+
+        with deepcache_manager.suspended(self._deepcache_helper):
+            self._pipe.unet = raw_unet
+            self._img2img_pipe.unet = raw_unet
+            if self._controlnet_pipe is not None:
+                self._controlnet_pipe.unet = raw_unet
+            try:
+                torch._dynamo.reset()
+                return self._generate_audio_chain_inner(req, schedule, on_frame, on_progress)
+            finally:
+                try:
+                    torch._dynamo.reset()
+                except Exception:
+                    log.warning("torch._dynamo.reset() failed in audio chain cleanup")
+                self._pipe.unet = compiled_unet
+                self._img2img_pipe.unet = compiled_unet
+                if self._controlnet_pipe is not None:
+                    self._controlnet_pipe.unet = compiled_unet
+
+    @torch.compiler.disable
+    def _generate_audio_chain_inner(
+        self,
+        req: AudioReactiveRequest,
+        schedule,
+        on_frame: Optional[Callable[[AudioReactiveFrameResponse], None]],
+        on_progress: Optional[Callable[[ProgressResponse], None]],
+    ) -> list[AudioReactiveFrameResponse]:
+        """Core audio-reactive chain loop — per-frame parameter modulation."""
+        frames: list[AudioReactiveFrameResponse] = []
+        base_seed = req.seed if req.seed >= 0 else random.randint(0, 2**32 - 1)
+        base_seed = base_seed % (2**32)
+        chain_source: Optional[Image.Image] = None
+        total_frames = schedule.total_frames
+
+        effective_neg = self._build_effective_negative(req.negative_prompt, req.negative_ti)
+        target_w, target_h = round8(req.width), round8(req.height)
+
+        # Pre-decode base64 images
+        _source_img = None
+        if req.source_image is not None:
+            _source_img = decode_b64_image(req.source_image).convert("RGB")
+            _source_img = resize_to_target(_source_img, target_w, target_h)
+        _mask_img = None
+        if req.mask_image is not None:
+            _mask_img = decode_b64_mask(req.mask_image)
+            _mask_img = resize_to_target(_mask_img, target_w, target_h)
+        _control_img = None
+        if req.control_image is not None:
+            _control_img = decode_b64_image(req.control_image).convert("RGB")
+            _control_img = resize_to_target(_control_img, target_w, target_h)
+
+        log.info("Audio-reactive chain: %d frames, mode=%s, steps=%d, seed_base=%d",
+                 total_frames, req.mode.value, req.steps, base_seed)
+
+        with torch.inference_mode():
+            for frame_idx in range(total_frames):
+                if self._cancel_event.is_set():
+                    raise GenerationCancelled("Audio-reactive animation cancelled")
+
+                t0_frame = time.perf_counter()
+
+                # Get modulated parameters for this frame
+                frame_params = schedule.get_params(frame_idx)
+                eff_denoise = frame_params.get("denoise_strength", req.denoise_strength)
+                eff_cfg = frame_params.get("cfg_scale", req.cfg_scale)
+                seed_offset = int(frame_params.get("seed_offset", frame_idx))
+                frame_seed = (base_seed + seed_offset) % (2**32)
+
+                generator = torch.Generator("cuda").manual_seed(frame_seed)
+
+                # Progress callback
+                def step_callback(pipe, step_idx, timestep, callback_kwargs,
+                                  _fi=frame_idx, _fc=total_frames):
+                    if self._cancel_event.is_set():
+                        raise GenerationCancelled("Audio-reactive animation cancelled")
+                    if on_progress:
+                        on_progress(ProgressResponse(
+                            step=step_idx + 1, total=req.steps,
+                            frame_index=_fi, total_frames=_fc,
+                        ))
+                    return callback_kwargs
+
+                # Reset scheduler for frame 1+
+                if frame_idx > 0:
+                    self._img2img_pipe.scheduler = pipeline_factory.fresh_scheduler(self._pipe)
+
+                log.info("Audio frame %d/%d: seed=%d, denoise=%.3f, cfg=%.2f",
+                         frame_idx, total_frames, frame_seed, eff_denoise, eff_cfg)
+
+                # Frame 0: initial generation
+                if frame_idx == 0:
+                    if req.mode == GenerationMode.TXT2IMG:
+                        image = self._pipe(
+                            prompt=req.prompt,
+                            negative_prompt=effective_neg,
+                            num_inference_steps=req.steps,
+                            guidance_scale=eff_cfg,
+                            width=target_w,
+                            height=target_h,
+                            generator=generator,
+                            clip_skip=req.clip_skip,
+                            callback_on_step_end=step_callback,
+                            output_type="pil",
+                        ).images[0]
+                    elif req.mode == GenerationMode.IMG2IMG:
+                        if _source_img is None:
+                            raise ValueError("img2img requires source_image")
+                        image = self._img2img_pipe(
+                            prompt=req.prompt,
+                            negative_prompt=effective_neg,
+                            image=_source_img,
+                            num_inference_steps=req.steps,
+                            guidance_scale=eff_cfg,
+                            strength=eff_denoise,
+                            generator=generator,
+                            clip_skip=req.clip_skip,
+                            callback_on_step_end=step_callback,
+                            output_type="pil",
+                        ).images[0]
+                    elif req.mode == GenerationMode.INPAINT:
+                        if _source_img is None or _mask_img is None:
+                            raise ValueError("inpaint requires source_image and mask_image")
+                        inpainted = self._img2img_pipe(
+                            prompt=req.prompt,
+                            negative_prompt=effective_neg,
+                            image=_source_img,
+                            num_inference_steps=req.steps,
+                            guidance_scale=eff_cfg,
+                            strength=eff_denoise,
+                            generator=generator,
+                            clip_skip=req.clip_skip,
+                            callback_on_step_end=step_callback,
+                            output_type="pil",
+                        ).images[0]
+                        image = composite_with_mask(_source_img, inpainted, _mask_img)
+                    elif req.mode.value.startswith("controlnet_"):
+                        if _control_img is None:
+                            raise ValueError("controlnet requires control_image")
+                        self._ensure_controlnet(req.mode)
+                        cn_scale = frame_params.get("controlnet_scale", 1.0)
+                        image = self._controlnet_pipe(
+                            prompt=req.prompt,
+                            negative_prompt=effective_neg,
+                            image=_control_img,
+                            num_inference_steps=req.steps,
+                            guidance_scale=eff_cfg,
+                            width=target_w,
+                            height=target_h,
+                            generator=generator,
+                            clip_skip=req.clip_skip,
+                            controlnet_conditioning_scale=cn_scale,
+                            callback_on_step_end=step_callback,
+                            output_type="pil",
+                        ).images[0]
+                    else:
+                        raise ValueError(f"Unknown mode: {req.mode}")
+                else:
+                    # Frame 1+: img2img from previous frame
+                    if chain_source is None:
+                        raise RuntimeError("Audio chain failed: no previous frame")
+                    source = resize_to_target(chain_source, target_w, target_h)
+
+                    # Noise amplitude modulation: inject noise into source
+                    noise_amp = frame_params.get("noise_amplitude", 0.0)
+                    if noise_amp > 0:
+                        arr = np.array(source, dtype=np.float32) / 255.0
+                        noise = np.random.default_rng(frame_seed).standard_normal(
+                            arr.shape, dtype=np.float32) * noise_amp
+                        arr = np.clip(arr + noise, 0.0, 1.0)
+                        source = Image.fromarray((arr * 255).astype(np.uint8))
+
+                    if req.mode.value.startswith("controlnet_") and _control_img is not None:
+                        log.info("Audio frame %d: ControlNet mode uses img2img for frame coherence", frame_idx)
+
+                    image = self._img2img_pipe(
+                        prompt=req.prompt,
+                        negative_prompt=effective_neg,
+                        image=source,
+                        num_inference_steps=req.steps,
+                        guidance_scale=eff_cfg,
+                        strength=eff_denoise,
+                        generator=generator,
+                        clip_skip=req.clip_skip,
+                        callback_on_step_end=step_callback,
+                        output_type="pil",
+                    ).images[0]
+
+                # Store pre-postprocess for next frame
+                chain_source = image
+
+                # Post-process
+                image = postprocess_apply(image, req.post_process)
+
+                if self._cancel_event.is_set():
+                    raise GenerationCancelled("Audio-reactive cancelled during post-processing")
+
+                b64_image = encode_image_b64(image)
+                w, h = image.size
+                elapsed_ms = int((time.perf_counter() - t0_frame) * 1000)
+
+                frame_resp = AudioReactiveFrameResponse(
+                    frame_index=frame_idx,
+                    total_frames=total_frames,
+                    image=b64_image,
+                    seed=frame_seed,
+                    time_ms=elapsed_ms,
+                    width=w,
+                    height=h,
+                    params_used=frame_params,
+                )
+                frames.append(frame_resp)
+                if on_frame:
+                    on_frame(frame_resp)
+
+        return frames
 
     def _generate_chain(
         self,

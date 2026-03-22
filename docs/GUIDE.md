@@ -22,6 +22,7 @@
 - [Auto-Prompt Generator](#auto-prompt-generator)
 - [Presets](#presets)
 - [Seeds and Reproducibility](#seeds-and-reproducibility)
+- [Audio Reactivity](#audio-reactivity)
 - [Performance](#performance)
 - [Troubleshooting](#troubleshooting)
 
@@ -577,6 +578,70 @@ To reproduce: enter that seed number in the Seed field, keep all other parameter
 
 > [!WARNING]
 > If you hit OOM (Out of Memory), reduce resolution first. If that's not enough, disable `torch.compile` — it trades VRAM for speed.
+
+---
+
+## Audio Reactivity
+
+> New in v0.7.0 — Generate animations synchronized to audio files using a synth-style modulation matrix.
+
+### Overview
+
+The **Audio** tab lets you drive inference parameters (denoise strength, CFG scale, noise, ControlNet weight, seed offset) from audio features extracted from a music or sound file. The system works in two phases:
+
+1. **Analyze** — Extract per-frame audio features (RMS energy, onset strength, spectral bands) via librosa. Optional stem separation (drums/bass/vocals/other) via demucs on CPU.
+2. **Generate** — Run chain animation where each frame's inference parameters are modulated by the audio features according to your modulation matrix configuration.
+
+### Workflow
+
+1. Open the **Audio** tab in the PixyToon dialog
+2. Select an audio file (.wav, .mp3, .flac, .ogg)
+3. Choose FPS (8-30, default 24) and click **Analyze**
+4. Configure the **Modulation Matrix** — route audio features to inference parameters:
+   - **Source**: which audio feature drives the modulation (e.g., `global_rms`)
+   - **Target**: which inference parameter is modulated (e.g., `denoise_strength`)
+   - **Min/Max**: output range (as percentage, scaled to the target's valid range)
+   - **Attack/Release**: EMA smoothing speed in frames (fast attack for transients, slow release for smooth decay)
+5. Optionally enable **Stems** for per-instrument control (requires demucs: `pip install demucs`)
+6. Optionally write **Custom Expressions** using math syntax (e.g., `0.2 + 0.5 * sin(t * 0.1) * drums_rms`)
+7. Set your prompt, mode, and post-process settings in the Generate tab
+8. Click **GENERATE AUDIO ANIMATION**
+
+### Modulation Presets
+
+Three built-in presets provide ready-to-use configurations:
+
+- **energetic** — drums/onset drive denoise and CFG for punchy, beat-reactive visuals
+- **ambient** — gentle RMS and spectral modulation for flowing, atmospheric animations
+- **bass_driven** — low-frequency energy drives structural changes, highs drive detail
+
+### Expression Syntax
+
+Custom expressions use standard math with audio variables:
+
+- **Frame variables**: `t` (frame index), `max_f` (total frames), `fps`, `s` (seconds)
+- **Audio features**: `global_rms`, `global_onset`, `drums_rms`, etc. (all normalized 0-1)
+- **Functions**: `sin`, `cos`, `tan`, `abs`, `min`, `max`, `sqrt`, `exp`, `log`, `pow`, `clamp`, `lerp`, `smoothstep`, `where`, `floor`, `ceil`
+
+Example: `clamp(0.15 + 0.5 * global_rms + 0.2 * sin(s * 3.14), 0.1, 0.8)`
+
+### Stem Separation
+
+Enable **Stem Separation** to split audio into 4 tracks (drums, bass, vocals, other) on CPU. This adds per-stem features (`drums_rms`, `drums_onset`, `bass_rms`, etc.) to the modulation sources. Requires `demucs>=4.0` — install with:
+
+```
+pip install demucs
+```
+
+Stem separation runs entirely on CPU and does not compete with GPU inference. First separation takes ~20-60s per minute of audio; results are cached.
+
+### Tips
+
+- Start with a **preset** and adjust from there
+- Lower FPS (8-12) for faster generation with fewer frames
+- Use **denoise_strength** as your primary modulation target — it has the most visual impact
+- Keep **attack** low (1-3) for beat-reactive effects, high (10+) for smooth ambient changes
+- Use **release** to control decay speed — low for staccato, high for sustained effects
 
 ---
 

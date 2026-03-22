@@ -110,10 +110,6 @@ class PromptGenerator:
         """Return items for a specific category."""
         return list(self._data.get(category, []))
 
-    def get_negative_set(self, name: str) -> str:
-        """Return a specific negative prompt set by name."""
-        return self._negative_sets.get(name, "")
-
 
 # Module-level singleton (lazy — created on first import)
 prompt_generator = PromptGenerator(settings.prompts_data_dir)

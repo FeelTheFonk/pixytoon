@@ -23,9 +23,13 @@ from .protocol import (
     Action,
     AnimationCompleteResponse,
     AnimationFrameResponse,
+    AudioAnalysisResponse,
+    AudioReactiveCompleteResponse,
+    AudioReactiveFrameResponse,
     CleanupResponse,
     ErrorResponse,
     ListResponse,
+    ModulationPresetsResponse,
     PongResponse,
     PresetDeletedResponse,
     PresetResponse,
@@ -36,6 +40,7 @@ from .protocol import (
     RealtimeResultResponse,
     RealtimeStoppedResponse,
     Request,
+    StemsAvailableResponse,
 )
 from . import __version__
 from . import lora_manager, palette_manager, ti_manager
@@ -316,6 +321,18 @@ async def _handle(websocket: WebSocket, req: Request, ws_id: int) -> None:
         elif req.action == Action.CLEANUP:
             await _handle_cleanup(websocket)
 
+        elif req.action == Action.ANALYZE_AUDIO:
+            await _handle_analyze_audio(websocket, req)
+
+        elif req.action == Action.CHECK_STEMS:
+            await _handle_check_stems(websocket)
+
+        elif req.action == Action.LIST_MODULATION_PRESETS:
+            await _handle_list_modulation_presets(websocket)
+
+        elif req.action == Action.GENERATE_AUDIO_REACTIVE:
+            await _handle_generate_audio_reactive(websocket, req, ws_id)
+
         elif req.action == Action.REALTIME_START:
             await _handle_realtime_start(websocket, req, ws_id)
 
@@ -533,6 +550,162 @@ async def _handle_cleanup(websocket: WebSocket) -> None:
     await _send(websocket, CleanupResponse(
         message=result["message"],
         freed_mb=result["freed_mb"],
+    ))
+
+
+# ─────────────────────────────────────────────────────────────
+# AUDIO REACTIVITY HANDLERS
+# ─────────────────────────────────────────────────────────────
+
+async def _handle_analyze_audio(websocket: WebSocket, req: Request) -> None:
+    audio_req = req.to_analyze_audio_request()
+    if not audio_req.audio_path:
+        await _send(websocket, ErrorResponse(
+            code="INVALID_REQUEST", message="audio_path required"))
+        return
+    # Validate path security
+    import os
+    real_path = os.path.realpath(audio_req.audio_path)
+    if not os.path.isfile(real_path):
+        await _send(websocket, ErrorResponse(
+            code="INVALID_REQUEST", message=f"Audio file not found: {audio_req.audio_path}"))
+        return
+    ext = os.path.splitext(real_path)[1].lower()
+    if ext not in {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}:
+        await _send(websocket, ErrorResponse(
+            code="INVALID_REQUEST", message=f"Unsupported audio format: {ext}"))
+        return
+    # Check file size
+    size_mb = os.path.getsize(real_path) / (1024 * 1024)
+    if size_mb > settings.audio_max_file_size_mb:
+        await _send(websocket, ErrorResponse(
+            code="INVALID_REQUEST",
+            message=f"Audio file too large: {size_mb:.0f}MB (max {settings.audio_max_file_size_mb}MB)"))
+        return
+
+    loop = asyncio.get_running_loop()
+    try:
+        analysis = await loop.run_in_executor(
+            None,
+            lambda: engine.analyze_audio(
+                real_path, audio_req.fps, audio_req.enable_stems,
+            ),
+        )
+        # Detect which stem features are present
+        stem_names = []
+        for feat in analysis.feature_names:
+            parts = feat.split("_", 1)
+            if parts[0] not in ("global",) and parts[0] not in stem_names:
+                stem_names.append(parts[0])
+
+        await _send(websocket, AudioAnalysisResponse(
+            duration=analysis.duration,
+            total_frames=analysis.total_frames,
+            features=analysis.feature_names,
+            stems_available=len(stem_names) > 0,
+            stems=stem_names if stem_names else None,
+        ))
+    except FileNotFoundError as e:
+        await _send(websocket, ErrorResponse(code="INVALID_REQUEST", message=str(e)))
+    except Exception as e:
+        log.exception("Audio analysis failed: %s", e)
+        await _send(websocket, ErrorResponse(code="ENGINE_ERROR", message=str(e)))
+
+
+async def _handle_check_stems(websocket: WebSocket) -> None:
+    available = engine.stems_available()
+    msg = "Stem separation ready" if available else (
+        "Stem separation requires demucs. Install with: pip install demucs>=4.0"
+    )
+    await _send(websocket, StemsAvailableResponse(available=available, message=msg))
+
+
+async def _handle_list_modulation_presets(websocket: WebSocket) -> None:
+    from .modulation_engine import ModulationEngine
+    presets = ModulationEngine.list_presets()
+    await _send(websocket, ModulationPresetsResponse(presets=presets))
+
+
+async def _handle_generate_audio_reactive(
+    websocket: WebSocket, req: Request, ws_id: int,
+) -> None:
+    # Block if realtime mode is active
+    async with _realtime_lock:
+        rt_busy = _realtime_owner is not None
+    if rt_busy:
+        await _send(websocket, ErrorResponse(
+            code="REALTIME_BUSY",
+            message="Cannot generate while real-time mode is active"))
+        return
+
+    audio_req = req.to_audio_reactive_request()
+    if not audio_req.audio_path:
+        await _send(websocket, ErrorResponse(
+            code="INVALID_REQUEST", message="audio_path required"))
+        return
+
+    # Validate audio path (same checks as analyze_audio)
+    import os
+    real_path = os.path.realpath(audio_req.audio_path)
+    if not os.path.isfile(real_path):
+        await _send(websocket, ErrorResponse(
+            code="INVALID_REQUEST", message=f"Audio file not found: {audio_req.audio_path}"))
+        return
+    ext = os.path.splitext(real_path)[1].lower()
+    if ext not in {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}:
+        await _send(websocket, ErrorResponse(
+            code="INVALID_REQUEST", message=f"Unsupported audio format: {ext}"))
+        return
+    size_mb = os.path.getsize(real_path) / (1024 * 1024)
+    if size_mb > settings.audio_max_file_size_mb:
+        await _send(websocket, ErrorResponse(
+            code="INVALID_REQUEST",
+            message=f"Audio file too large: {size_mb:.0f}MB (max {settings.audio_max_file_size_mb}MB)"))
+        return
+    audio_req.audio_path = real_path
+
+    loop = asyncio.get_running_loop()
+    on_progress = _make_thread_callback(websocket, loop, timeout=1.0)
+    on_frame = _make_thread_callback(websocket, loop, timeout=2.0)
+
+    if _generate_lock is None:
+        raise RuntimeError("Server not fully initialized")
+
+    # Auto-scale timeout: base + 10s per frame (actual) + analysis overhead
+    actual_frames = audio_req.fps * 300  # 5 min max audio at given fps
+    anim_timeout = max(
+        settings.generation_timeout,
+        120 + actual_frames * 10,  # 2 min base + 10s/frame
+    )
+
+    async with _generate_lock:
+        _generating[ws_id].set()
+        try:
+            t0 = time.perf_counter()
+            frames = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: engine.generate_audio_reactive(
+                        audio_req,
+                        on_frame=on_frame,
+                        on_progress=on_progress,
+                    ),
+                ),
+                timeout=anim_timeout,
+            )
+            total_ms = int((time.perf_counter() - t0) * 1000)
+        except asyncio.TimeoutError:
+            engine.cancel()
+            raise RuntimeError(
+                f"Audio-reactive generation timed out after {anim_timeout:.0f}s"
+            )
+        finally:
+            _generating[ws_id].clear()
+
+    await _send(websocket, AudioReactiveCompleteResponse(
+        total_frames=len(frames),
+        total_time_ms=total_ms,
+        tag_name=audio_req.tag_name,
     ))
 
 

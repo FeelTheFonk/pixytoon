@@ -106,4 +106,16 @@ PT.reconnect = {
   manual_disconnect = false,
 }
 
+PT.audio = {
+  analyzing        = false,
+  analyzed         = false,
+  generating       = false,
+  duration         = 0,
+  total_frames     = 0,
+  features         = {},
+  stems_available  = false,
+  stems            = {},
+  mod_presets       = {},
+}
+
 end
