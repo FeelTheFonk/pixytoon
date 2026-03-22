@@ -440,11 +440,10 @@ handlers.audio_analysis = function(resp)
 
   if PT.dlg then
     local dur_str = string.format("%.1fs", PT.audio.duration)
+    local stems_str = PT.audio.stems_available and " | Stems" or ""
     PT.dlg:modify{ id = "audio_status",
-      text = dur_str .. " — " .. PT.audio.total_frames .. " frames — "
-        .. #PT.audio.features .. " features" }
-    PT.dlg:modify{ id = "audio_total_frames",
-      text = "Frames: " .. PT.audio.total_frames }
+      text = dur_str .. " | " .. PT.audio.total_frames .. " frames | "
+        .. #PT.audio.features .. " features" .. stems_str }
     PT.dlg:modify{ id = "audio_analyze_btn", enabled = true }
 
     -- Update source dropdowns with available features
@@ -518,8 +517,7 @@ end
 handlers.stems_available = function(resp)
   PT.audio.stems_available = resp.available
   if PT.dlg then
-    PT.dlg:modify{ id = "audio_stems_status",
-      text = resp.available and "Stems ready" or resp.message or "Not available" }
+    PT.update_status(resp.available and "Stems: ready" or "Stems: " .. (resp.message or "not available"))
   end
 end
 

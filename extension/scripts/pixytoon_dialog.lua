@@ -519,11 +519,32 @@ local MOD_TARGETS = {
   "controlnet_scale", "seed_offset",
 }
 
+-- Syncs slot widget visibility based on slot count and advanced toggle
+local function sync_slot_visibility()
+  local dlg = PT.dlg
+  if not dlg then return end
+  local n = dlg.data.mod_slot_count
+  local adv = dlg.data.audio_advanced
+  for i = 1, 4 do
+    local vis = (i <= n)
+    dlg:modify{ id = "mod" .. i .. "_enable",  visible = vis }
+    dlg:modify{ id = "mod" .. i .. "_source",  visible = vis }
+    dlg:modify{ id = "mod" .. i .. "_target",  visible = vis }
+    dlg:modify{ id = "mod" .. i .. "_min",     visible = vis }
+    dlg:modify{ id = "mod" .. i .. "_max",     visible = vis }
+    dlg:modify{ id = "mod" .. i .. "_attack",  visible = vis and adv }
+    dlg:modify{ id = "mod" .. i .. "_release", visible = vis and adv }
+  end
+  dlg:modify{ id = "audio_use_expressions", visible = adv }
+  dlg:modify{ id = "expr_denoise", visible = adv and dlg.data.audio_use_expressions }
+  dlg:modify{ id = "expr_cfg",     visible = adv and dlg.data.audio_use_expressions }
+  dlg:modify{ id = "expr_noise",   visible = adv and dlg.data.audio_use_expressions }
+end
+
 local function build_tab_audio()
   local dlg = PT.dlg
 
   -- File
-  dlg:separator{ text = "Audio File" }
   dlg:file{
     id = "audio_file",
     label = "File",
@@ -551,10 +572,8 @@ local function build_tab_audio()
       PT.send(PT.build_analyze_audio_request())
     end,
   }
-  dlg:label{ id = "audio_status", text = "No audio loaded" }
+  dlg:label{ id = "audio_status", text = "No file | Frames: --" }
 
-  -- Stems
-  dlg:separator{ text = "Stem Separation" }
   dlg:check{
     id = "audio_stems_enable",
     text = "Enable Stems (CPU)",
@@ -565,17 +584,13 @@ local function build_tab_audio()
       end
     end,
   }
-  dlg:label{ id = "audio_stems_status", text = "" }
 
-  -- Timing
-  dlg:separator{ text = "Timing" }
   dlg:combobox{
     id = "audio_fps",
     label = "FPS",
     options = { "8", "12", "15", "24", "30" },
     option = "24",
   }
-  dlg:label{ id = "audio_total_frames", text = "Frames: --" }
   dlg:slider{
     id = "audio_frame_duration",
     label = "Frame (42ms)",
@@ -586,8 +601,8 @@ local function build_tab_audio()
     end,
   }
 
-  -- Preset
-  dlg:separator{ text = "Modulation Preset" }
+  -- Modulation
+  dlg:separator{ text = "Modulation" }
   dlg:combobox{
     id = "audio_mod_preset",
     label = "Preset",
@@ -629,46 +644,21 @@ local function build_tab_audio()
       dlg:modify{ id = "mod1_enable", selected = true }
       dlg:modify{ id = "mod2_enable", selected = true }
       dlg:modify{ id = "mod_slot_count", value = 2 }
-      -- Manually trigger visibility sync (dlg:modify doesn't fire onchange)
-      for i = 1, 4 do
-        local vis = (i <= 2)
-        dlg:modify{ id = "mod" .. i .. "_enable",  visible = vis }
-        dlg:modify{ id = "mod" .. i .. "_source",  visible = vis }
-        dlg:modify{ id = "mod" .. i .. "_target",  visible = vis }
-        dlg:modify{ id = "mod" .. i .. "_min",     visible = vis }
-        dlg:modify{ id = "mod" .. i .. "_max",     visible = vis }
-        dlg:modify{ id = "mod" .. i .. "_attack",  visible = vis }
-        dlg:modify{ id = "mod" .. i .. "_release", visible = vis }
-      end
+      sync_slot_visibility()
     end,
   }
-
-  -- Modulation Matrix
-  dlg:separator{ text = "Modulation Matrix" }
 
   dlg:slider{
     id = "mod_slot_count",
     label = "Slots",
-    min = 1, max = 4, value = 2,
-    onchange = function()
-      local n = dlg.data.mod_slot_count
-      for i = 1, 4 do
-        local vis = (i <= n)
-        dlg:modify{ id = "mod" .. i .. "_enable",  visible = vis }
-        dlg:modify{ id = "mod" .. i .. "_source",  visible = vis }
-        dlg:modify{ id = "mod" .. i .. "_target",  visible = vis }
-        dlg:modify{ id = "mod" .. i .. "_min",     visible = vis }
-        dlg:modify{ id = "mod" .. i .. "_max",     visible = vis }
-        dlg:modify{ id = "mod" .. i .. "_attack",  visible = vis }
-        dlg:modify{ id = "mod" .. i .. "_release", visible = vis }
-      end
-    end,
+    min = 1, max = 4, value = 1,
+    onchange = function() sync_slot_visibility() end,
   }
 
   -- Slot defaults: [source, target, min, max, attack, release, visible]
   local slot_defaults = {
     { "global_rms",    "denoise_strength",  15, 65, 2, 8,  true },
-    { "global_onset",  "cfg_scale",         30, 80, 2, 8,  true },
+    { "global_onset",  "cfg_scale",         30, 80, 2, 8,  false },
     { "global_low",    "noise_amplitude",    0, 30, 2, 8,  false },
     { "global_high",   "seed_offset",        0, 50, 2, 8,  false },
   }
@@ -713,28 +703,30 @@ local function build_tab_audio()
       id = prefix .. "attack",
       label = "Attack",
       min = 1, max = 30, value = def[5],
-      visible = vis,
+      visible = false,
     }
     dlg:slider{
       id = prefix .. "release",
       label = "Release",
       min = 1, max = 60, value = def[6],
-      visible = vis,
+      visible = false,
     }
   end
 
-  -- Expressions
-  dlg:separator{ text = "Expressions" }
+  -- Advanced toggle (controls attack/release + expressions)
+  dlg:check{
+    id = "audio_advanced",
+    text = "Advanced",
+    selected = false,
+    onchange = function() sync_slot_visibility() end,
+  }
+
   dlg:check{
     id = "audio_use_expressions",
     text = "Custom Expressions",
     selected = false,
-    onchange = function()
-      local vis = dlg.data.audio_use_expressions
-      dlg:modify{ id = "expr_denoise", visible = vis }
-      dlg:modify{ id = "expr_cfg",     visible = vis }
-      dlg:modify{ id = "expr_noise",   visible = vis }
-    end,
+    visible = false,
+    onchange = function() sync_slot_visibility() end,
   }
   dlg:entry{
     id = "expr_denoise",
@@ -758,11 +750,9 @@ local function build_tab_audio()
     hexpand = true,
   }
 
-  -- Generate button
-  dlg:separator{}
   dlg:button{
     id = "audio_generate_btn",
-    text = "GENERATE AUDIO ANIMATION",
+    text = "GENERATE AUDIO",
     enabled = false,
     hexpand = true,
     onclick = function()
