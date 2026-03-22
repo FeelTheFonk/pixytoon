@@ -23,7 +23,11 @@ function PT.start_heartbeat()
     ontick = function()
       if not PT.state.connected or not PT.ws_handle then return end
       -- Pong watchdog: detect unresponsive server
-      if PT.state.last_pong and (os.clock() - PT.state.last_pong) > PT.cfg.HEARTBEAT_INTERVAL * 3 then
+      if PT.state.last_pong
+         and not PT.state.generating
+         and not PT.state.animating
+         and not PT.audio.generating
+         and (os.clock() - PT.state.last_pong) > PT.cfg.HEARTBEAT_INTERVAL * 3 then
         PT.set_connected(false)
         PT.update_status("Server unresponsive — disconnected")
         if PT.ws_handle then pcall(function() PT.ws_handle:close() end); PT.ws_handle = nil end
@@ -44,10 +48,10 @@ function PT.stop_gen_timeout()
   PT.timers.gen_timeout = PT.stop_timer(PT.timers.gen_timeout)
 end
 
-function PT.start_gen_timeout()
+function PT.start_gen_timeout(override_seconds)
   PT.stop_gen_timeout()
   PT.timers.gen_timeout = Timer{
-    interval = PT.cfg.GEN_TIMEOUT,
+    interval = override_seconds or PT.cfg.GEN_TIMEOUT,
     ontick = function()
       PT.stop_gen_timeout()
       if PT.state.generating or PT.state.animating then
@@ -55,6 +59,8 @@ function PT.start_gen_timeout()
         pcall(function() PT.send({ action = "cancel" }) end)
         PT.state.generating = false
         PT.state.animating = false
+        PT.audio.generating = false
+        PT.audio.analyzing = false
         PT.state.cancel_pending = false
         PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
         PT.loop.mode = false
@@ -170,6 +176,8 @@ function PT.connect()
           PT.update_status("JSON error: " .. tostring(response))
           return
         end
+        -- Any valid JSON from server proves it's alive — reset watchdog
+        PT.state.last_pong = os.clock()
         local hok, herr = pcall(PT.handle_response, response)
         if not hok then PT.update_status("Error: " .. tostring(herr)) end
       end

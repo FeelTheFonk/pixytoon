@@ -11,7 +11,7 @@ PT.cfg = {
   SETTINGS_FILE           = app.fs.joinPath(app.fs.userConfigPath, "pixytoon_settings.json"),
   CONNECT_TIMEOUT         = 5.0,
   HEARTBEAT_INTERVAL      = 30.0,
-  GEN_TIMEOUT             = 300,
+  GEN_TIMEOUT             = 660,
   CANCEL_TIMEOUT          = 30,
   LIVE_WATCHDOG_INTERVAL  = 0.5,
   LIVE_STROKE_DEBOUNCE    = 0.3,
@@ -116,6 +116,8 @@ PT.audio = {
   stems_available  = false,
   stems            = {},
   mod_presets       = {},
+  bpm              = 0,
+  recommended_preset = "",
 }
 
 end

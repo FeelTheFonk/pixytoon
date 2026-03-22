@@ -160,6 +160,33 @@ function PT.build_audio_reactive_request()
     mod_preset = preset_sel
   end
 
+  -- Random seed per frame: inject seed_offset expression
+  if d.audio_random_seed then
+    expressions = expressions or {}
+    if not expressions["seed_offset"] then
+      expressions["seed_offset"] = "t * 7 + floor(global_rms * 500)"
+    end
+  end
+
+  -- Prompt schedule segments
+  local prompt_segments = {}
+  if d.audio_prompt_schedule then
+    for i = 1, 3 do
+      local time_str = d["ps" .. i .. "_time"] or ""
+      local prompt_str = d["ps" .. i .. "_prompt"] or ""
+      if time_str ~= "" and prompt_str ~= "" then
+        local s, e = time_str:match("(%d+%.?%d*)-(%d+%.?%d*)")
+        if s and e then
+          prompt_segments[#prompt_segments + 1] = {
+            start_second = tonumber(s),
+            end_second = tonumber(e),
+            prompt = prompt_str,
+          }
+        end
+      end
+    end
+  end
+
   local req = {
     action            = "generate_audio_reactive",
     audio_path        = d.audio_file,
@@ -168,6 +195,7 @@ function PT.build_audio_reactive_request()
     modulation_slots  = slots,
     expressions       = expressions,
     modulation_preset = mod_preset,
+    prompt_segments   = #prompt_segments > 0 and prompt_segments or nil,
     prompt            = d.prompt,
     negative_prompt   = d.negative_prompt,
     mode              = d.mode,

@@ -2,7 +2,7 @@
 
 > Paint in Aseprite. The model interprets your strokes in real-time. Iterate at the speed of thought.
 
-**[README](../README.md)** · **[Guide](GUIDE.md)** · **[Cookbook](COOKBOOK.md)** · **Live Paint**
+**[README](../README.md)** | **[Guide](GUIDE.md)** | **[Cookbook](COOKBOOK.md)** | **[Live Paint](LIVE-PAINT.md)** | **[Audio Reactivity](AUDIO-REACTIVITY.md)** | **[API Reference](API-REFERENCE.md)** | **[Configuration](CONFIGURATION.md)** | **[Troubleshooting](TROUBLESHOOTING.md)**
 
 ---
 
@@ -415,4 +415,4 @@ Check the server terminal for error messages. Common causes:
 
 ---
 
-**[README](../README.md)** · **[Guide](GUIDE.md)** · **[Cookbook](COOKBOOK.md)** · **Live Paint**
+**[README](../README.md)** | **[Guide](GUIDE.md)** | **[Cookbook](COOKBOOK.md)** | **[Live Paint](LIVE-PAINT.md)** | **[Audio Reactivity](AUDIO-REACTIVITY.md)** | **[API Reference](API-REFERENCE.md)** | **[Configuration](CONFIGURATION.md)** | **[Troubleshooting](TROUBLESHOOTING.md)**

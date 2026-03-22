@@ -45,6 +45,7 @@ from .protocol import (
 from . import __version__
 from . import lora_manager, palette_manager, ti_manager
 from .postprocess import warmup_numba
+from .auto_calibrate import recommend_preset
 
 logging.basicConfig(
     level=logging.INFO,
@@ -598,10 +599,14 @@ async def _handle_analyze_audio(websocket: WebSocket, req: Request) -> None:
             if parts[0] not in ("global",) and parts[0] not in stem_names:
                 stem_names.append(parts[0])
 
+        recommended = recommend_preset(analysis)
+
         await _send(websocket, AudioAnalysisResponse(
             duration=analysis.duration,
             total_frames=analysis.total_frames,
             features=analysis.feature_names,
+            bpm=analysis.bpm,
+            recommended_preset=recommended,
             stems_available=len(stem_names) > 0,
             stems=stem_names if stem_names else None,
         ))

@@ -803,6 +803,12 @@ class DiffusionEngine:
             _control_img = decode_b64_image(req.control_image).convert("RGB")
             _control_img = resize_to_target(_control_img, target_w, target_h)
 
+        # Build prompt schedule (if segments provided)
+        from .prompt_schedule import PromptSchedule
+        prompt_sched = PromptSchedule.from_dicts(
+            getattr(req, "prompt_segments", []), req.prompt,
+        )
+
         log.info("Audio-reactive chain: %d frames, mode=%s, steps=%d, seed_base=%d",
                  total_frames, req.mode.value, req.steps, base_seed)
 
@@ -821,6 +827,12 @@ class DiffusionEngine:
                 frame_seed = (base_seed + seed_offset) % (2**32)
 
                 generator = torch.Generator("cuda").manual_seed(frame_seed)
+
+                # Resolve prompt for this frame (may vary with prompt schedule)
+                frame_prompt = (
+                    prompt_sched.get_prompt(frame_idx / analysis.fps)
+                    if prompt_sched else req.prompt
+                )
 
                 # Progress callback
                 def step_callback(pipe, step_idx, timestep, callback_kwargs,
@@ -845,7 +857,7 @@ class DiffusionEngine:
                 if frame_idx == 0:
                     if req.mode == GenerationMode.TXT2IMG:
                         image = self._pipe(
-                            prompt=req.prompt,
+                            prompt=frame_prompt,
                             negative_prompt=effective_neg,
                             num_inference_steps=req.steps,
                             guidance_scale=eff_cfg,
@@ -860,7 +872,7 @@ class DiffusionEngine:
                         if _source_img is None:
                             raise ValueError("img2img requires source_image")
                         image = self._img2img_pipe(
-                            prompt=req.prompt,
+                            prompt=frame_prompt,
                             negative_prompt=effective_neg,
                             image=_source_img,
                             num_inference_steps=req.steps,
@@ -875,7 +887,7 @@ class DiffusionEngine:
                         if _source_img is None or _mask_img is None:
                             raise ValueError("inpaint requires source_image and mask_image")
                         inpainted = self._img2img_pipe(
-                            prompt=req.prompt,
+                            prompt=frame_prompt,
                             negative_prompt=effective_neg,
                             image=_source_img,
                             num_inference_steps=req.steps,
@@ -893,7 +905,7 @@ class DiffusionEngine:
                         self._ensure_controlnet(req.mode)
                         cn_scale = frame_params.get("controlnet_scale", 1.0)
                         image = self._controlnet_pipe(
-                            prompt=req.prompt,
+                            prompt=frame_prompt,
                             negative_prompt=effective_neg,
                             image=_control_img,
                             num_inference_steps=req.steps,
@@ -927,7 +939,7 @@ class DiffusionEngine:
                         log.info("Audio frame %d: ControlNet mode uses img2img for frame coherence", frame_idx)
 
                     image = self._img2img_pipe(
-                        prompt=req.prompt,
+                        prompt=frame_prompt,
                         negative_prompt=effective_neg,
                         image=source,
                         num_inference_steps=req.steps,

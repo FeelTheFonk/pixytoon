@@ -391,6 +391,7 @@ class AudioReactiveRequest(BaseModel):
     modulation_slots: list[ModulationSlotSpec] = Field(default_factory=list)
     expressions: Optional[dict[str, str]] = None
     modulation_preset: Optional[str] = None
+    prompt_segments: list[dict] = Field(default_factory=list)
     # Generation parameters (same as AnimationRequest)
     prompt: str = ""
     negative_prompt: str = _DEFAULT_NEGATIVE
@@ -534,6 +535,8 @@ class AudioAnalysisResponse(BaseModel):
     duration: float
     total_frames: int
     features: list[str]
+    bpm: float = 0.0
+    recommended_preset: str = ""
     stems_available: bool = False
     stems: Optional[list[str]] = None
 

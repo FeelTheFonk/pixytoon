@@ -2,7 +2,7 @@
 
 > Tested recipes by creative intention. No theory — just settings that work.
 
-**[README](../README.md)** · **[Guide](GUIDE.md)** · **Cookbook** · **[Live Paint](LIVE-PAINT.md)**
+**[README](../README.md)** | **[Guide](GUIDE.md)** | **[Cookbook](COOKBOOK.md)** | **[Live Paint](LIVE-PAINT.md)** | **[Audio Reactivity](AUDIO-REACTIVITY.md)** | **[API Reference](API-REFERENCE.md)** | **[Configuration](CONFIGURATION.md)** | **[Troubleshooting](TROUBLESHOOTING.md)**
 
 ---
 
@@ -821,4 +821,4 @@ This shouldn't happen with the default configuration (Hyper-SD is always active)
 
 ---
 
-**[README](../README.md)** · **[Guide](GUIDE.md)** · **Cookbook** · **[Live Paint](LIVE-PAINT.md)**
+**[README](../README.md)** | **[Guide](GUIDE.md)** | **[Cookbook](COOKBOOK.md)** | **[Live Paint](LIVE-PAINT.md)** | **[Audio Reactivity](AUDIO-REACTIVITY.md)** | **[API Reference](API-REFERENCE.md)** | **[Configuration](CONFIGURATION.md)** | **[Troubleshooting](TROUBLESHOOTING.md)**

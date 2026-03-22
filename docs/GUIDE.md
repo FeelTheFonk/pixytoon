@@ -2,7 +2,7 @@
 
 > From first launch to advanced generation — everything you need to create pixel art with Stable Diffusion in Aseprite.
 
-**[README](../README.md)** · **Guide** · **[Cookbook](COOKBOOK.md)** · **[Live Paint](LIVE-PAINT.md)**
+**[README](../README.md)** | **[Guide](GUIDE.md)** | **[Cookbook](COOKBOOK.md)** | **[Live Paint](LIVE-PAINT.md)** | **[Audio Reactivity](AUDIO-REACTIVITY.md)** | **[API Reference](API-REFERENCE.md)** | **[Configuration](CONFIGURATION.md)** | **[Troubleshooting](TROUBLESHOOTING.md)**
 
 ---
 
@@ -583,100 +583,26 @@ To reproduce: enter that seed number in the Seed field, keep all other parameter
 
 ## Audio Reactivity
 
-> New in v0.7.0 — Generate animations synchronized to audio files using a synth-style modulation matrix.
+> v0.7.0 — Synth-style modulation matrix: map audio features to inference parameters. v0.7.1 — BPM detection, 20 presets, auto-calibration, prompt schedule.
 
-### Overview
+The **Audio** tab drives generation parameters from audio features. Select a file, click **Analyze** (auto-detects BPM and recommends a preset), then **GENERATE AUDIO**. Supports all modes (txt2img, img2img, inpaint, ControlNet).
 
-The **Audio** tab lets you drive inference parameters (denoise strength, CFG scale, noise, ControlNet weight, seed offset) from audio features extracted from a music or sound file. The system works in two phases:
-
-1. **Analyze** — Extract per-frame audio features (RMS energy, onset strength, spectral bands) via librosa. Optional stem separation (drums/bass/vocals/other) via demucs on CPU.
-2. **Generate** — Run chain animation where each frame's inference parameters are modulated by the audio features according to your modulation matrix configuration.
-
-### Workflow
-
-1. Open the **Audio** tab in the PixyToon dialog
-2. Select an audio file (.wav, .mp3, .flac, .ogg)
-3. Choose FPS (8-30, default 24) and click **Analyze**
-4. Configure the **Modulation Matrix** — route audio features to inference parameters:
-   - **Source**: which audio feature drives the modulation (e.g., `global_rms`)
-   - **Target**: which inference parameter is modulated (e.g., `denoise_strength`)
-   - **Min/Max**: output range (as percentage, scaled to the target's valid range)
-   - **Attack/Release**: EMA smoothing speed in frames (fast attack for transients, slow release for smooth decay)
-5. Optionally enable **Stems** for per-instrument control (requires demucs: `pip install demucs`)
-6. Optionally write **Custom Expressions** using math syntax (e.g., `0.2 + 0.5 * sin(t * 0.1) * drums_rms`)
-7. Set your prompt, mode, and post-process settings in the Generate tab
-8. Click **GENERATE AUDIO ANIMATION**
-
-### Modulation Presets
-
-Three built-in presets provide ready-to-use configurations:
-
-- **energetic** — drums/onset drive denoise and CFG for punchy, beat-reactive visuals
-- **ambient** — gentle RMS and spectral modulation for flowing, atmospheric animations
-- **bass_driven** — low-frequency energy drives structural changes, highs drive detail
-
-### Expression Syntax
-
-Custom expressions use standard math with audio variables:
-
-- **Frame variables**: `t` (frame index), `max_f` (total frames), `fps`, `s` (seconds)
-- **Audio features**: `global_rms`, `global_onset`, `drums_rms`, etc. (all normalized 0-1)
-- **Functions**: `sin`, `cos`, `tan`, `abs`, `min`, `max`, `sqrt`, `exp`, `log`, `pow`, `clamp`, `lerp`, `smoothstep`, `where`, `floor`, `ceil`
-
-Example: `clamp(0.15 + 0.5 * global_rms + 0.2 * sin(s * 3.14), 0.1, 0.8)`
-
-### Stem Separation
-
-Enable **Stem Separation** to split audio into 4 tracks (drums, bass, vocals, other) on CPU. This adds per-stem features (`drums_rms`, `drums_onset`, `bass_rms`, etc.) to the modulation sources. Requires `demucs>=4.0` — install with:
-
-```
-pip install demucs
-```
-
-Stem separation runs entirely on CPU and does not compete with GPU inference. First separation takes ~20-60s per minute of audio; results are cached.
-
-### Tips
-
-- Start with a **preset** and adjust from there
-- Lower FPS (8-12) for faster generation with fewer frames
-- Use **denoise_strength** as your primary modulation target — it has the most visual impact
-- Keep **attack** low (1-3) for beat-reactive effects, high (10+) for smooth ambient changes
-- Use **release** to control decay speed — low for staccato, high for sustained effects
+For the complete guide — modulation matrix, all 20 presets, custom expressions, prompt scheduling, tips: see **[Audio Reactivity Guide](AUDIO-REACTIVITY.md)**.
 
 ---
 
 ## Troubleshooting
 
+For the complete troubleshooting reference, see **[Troubleshooting](TROUBLESHOOTING.md)**.
+
+Common Aseprite-specific issues:
+
 | Problem | Solution |
 |---------|----------|
-| **"Connection failed"** | Is the server running? Check the terminal window for errors. Auto-reconnect will retry automatically |
-| **"Reconnecting in Xs"** | Normal: the server is unreachable. Exponential backoff retries (2s→30s). Check if the server crashed |
-| **"Server unresponsive"** | Heartbeat watchdog detected no response for 90s. Auto-reconnect triggers. Restart server if persistent |
-| **"GPU_BUSY"** | Another generation is running — wait for it to finish or cancel |
-| **Black image** | Check your prompt. Try a simple one like `pixel art, character` |
-| **Blurry / not pixelated** | Enable Pixelate in Post-Process tab, set target size to 64-128 |
-| **Colors too flat / wrong** | Try different quantize method, increase color count |
-| **Palette doesn't match** | Palette enforcement uses perceptual distance — some colors may shift. Try reducing source colors first |
-| **Slow first generation** | Normal: torch.compile + Numba JIT warmup on first run (~30s extra) |
-| **"CUDA out of memory"** | Reduce resolution, disable torch.compile, or close other GPU apps |
-| **LoRA switch is slow** | Expected: triggers model recompilation (~30-60s once per LoRA change) |
-| **AnimateDiff OOM** | Needs ~10 GB VRAM — reduce frame count or resolution |
-| **Cancel doesn't stop generation** | Server-side cancel is acknowledged immediately. A 30s safety timer auto-unlocks the UI if no response is received |
-| **Live Paint not starting** | GPU must be idle. Cancel any running generation first |
-| **Server crashed** | Restart via `start.ps1`. Auto-reconnect will retry until the server is back |
-| **torch.compile fails** | Install Visual Studio 2022 with C++ Desktop Development workload |
-
-<details>
-<summary>Server logs location</summary>
-
-The server logs are printed directly in the terminal window opened by `start.ps1`. Look for `[WARNING]` and `[ERROR]` lines. Common patterns:
-
-- `CUDA error`: GPU issue — restart the server, check VRAM
-- `KeyError` / `ValueError`: Protocol mismatch — make sure extension and server versions match
-- `Connection reset`: Aseprite disconnected (closed dialog or crashed)
-
-</details>
+| **"Connection failed"** | Is the server running? Auto-reconnect will retry automatically |
+| **Black image** | Check your prompt. Try `pixel art, character` |
+| **Blurry / not pixelated** | Enable Pixelate in Post-Process, set target size to 64-128 |
 
 ---
 
-**[README](../README.md)** · **Guide** · **[Cookbook](COOKBOOK.md)** · **[Live Paint](LIVE-PAINT.md)**
+**[README](../README.md)** | **[Guide](GUIDE.md)** | **[Cookbook](COOKBOOK.md)** | **[Live Paint](LIVE-PAINT.md)** | **[Audio Reactivity](AUDIO-REACTIVITY.md)** | **[API Reference](API-REFERENCE.md)** | **[Configuration](CONFIGURATION.md)** | **[Troubleshooting](TROUBLESHOOTING.md)**

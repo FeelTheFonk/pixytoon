@@ -34,6 +34,7 @@ class AudioAnalysis:
     sample_rate: int
     audio_path: str
     features: dict[str, np.ndarray] = field(default_factory=dict)
+    bpm: float = 0.0
 
     @property
     def feature_names(self) -> list[str]:
@@ -156,6 +157,18 @@ class AudioAnalyzer:
         features["global_mid"] = _normalize(_resample_to_fps(mid_energy, librosa_fps, fps, total_frames))
         features["global_high"] = _normalize(_resample_to_fps(high_energy, librosa_fps, fps, total_frames))
 
+        # BPM detection + beat feature
+        tempo, beat_frames_idx = librosa.beat.beat_track(y=y, sr=sr, hop_length=hop_length)
+        bpm = float(np.atleast_1d(tempo)[0])
+        beat_signal = np.zeros_like(onset)
+        for bf in beat_frames_idx:
+            if bf < len(beat_signal):
+                beat_signal[bf] = 1.0
+        features["global_beat"] = _normalize(
+            _resample_to_fps(beat_signal, librosa_fps, fps, total_frames)
+        )
+        log.info("BPM detected: %.1f", bpm)
+
         # --- Per-stem features (if stems provided) ---
         if stems:
             for stem_name, stem_audio in stems.items():
@@ -187,4 +200,5 @@ class AudioAnalyzer:
             sample_rate=sr,
             audio_path=audio_path,
             features=features,
+            bpm=bpm,
         )

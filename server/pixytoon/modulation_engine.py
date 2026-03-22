@@ -26,8 +26,139 @@ TARGET_RANGES: dict[str, tuple[float, float]] = {
     "seed_offset": (0.0, 1000.0),
 }
 
-# Built-in modulation presets
+# Built-in modulation presets — organized by category
 PRESETS: dict[str, list[dict]] = {
+    # ─── Genre-Specific ──────────────────────────────────────────
+    "electronic_pulse": [
+        {"source": "global_beat", "target": "denoise_strength",
+         "min_val": 0.15, "max_val": 0.65, "attack": 1, "release": 4, "enabled": True},
+        {"source": "global_onset", "target": "cfg_scale",
+         "min_val": 4.0, "max_val": 10.0, "attack": 1, "release": 6, "enabled": True},
+        {"source": "global_high", "target": "noise_amplitude",
+         "min_val": 0.0, "max_val": 0.3, "attack": 1, "release": 3, "enabled": True},
+    ],
+    "rock_energy": [
+        {"source": "global_rms", "target": "denoise_strength",
+         "min_val": 0.20, "max_val": 0.70, "attack": 2, "release": 5, "enabled": True},
+        {"source": "global_onset", "target": "cfg_scale",
+         "min_val": 3.0, "max_val": 8.0, "attack": 1, "release": 8, "enabled": True},
+        {"source": "global_low", "target": "seed_offset",
+         "min_val": 0.0, "max_val": 200.0, "attack": 2, "release": 10, "enabled": True},
+    ],
+    "hiphop_bounce": [
+        {"source": "global_low", "target": "denoise_strength",
+         "min_val": 0.15, "max_val": 0.55, "attack": 1, "release": 6, "enabled": True},
+        {"source": "global_beat", "target": "cfg_scale",
+         "min_val": 4.0, "max_val": 9.0, "attack": 1, "release": 4, "enabled": True},
+        {"source": "global_onset", "target": "noise_amplitude",
+         "min_val": 0.0, "max_val": 0.2, "attack": 1, "release": 5, "enabled": True},
+    ],
+    "classical_flow": [
+        {"source": "global_rms", "target": "denoise_strength",
+         "min_val": 0.10, "max_val": 0.40, "attack": 5, "release": 20, "enabled": True},
+        {"source": "global_centroid", "target": "cfg_scale",
+         "min_val": 3.0, "max_val": 7.0, "attack": 4, "release": 15, "enabled": True},
+    ],
+    "ambient_drift": [
+        {"source": "global_rms", "target": "denoise_strength",
+         "min_val": 0.08, "max_val": 0.25, "attack": 8, "release": 30, "enabled": True},
+        {"source": "global_centroid", "target": "cfg_scale",
+         "min_val": 2.0, "max_val": 5.0, "attack": 6, "release": 25, "enabled": True},
+        {"source": "global_mid", "target": "noise_amplitude",
+         "min_val": 0.0, "max_val": 0.15, "attack": 5, "release": 20, "enabled": True},
+    ],
+    # ─── Style-Specific ──────────────────────────────────────────
+    "glitch_chaos": [
+        {"source": "global_onset", "target": "denoise_strength",
+         "min_val": 0.30, "max_val": 0.90, "attack": 1, "release": 2, "enabled": True},
+        {"source": "global_high", "target": "cfg_scale",
+         "min_val": 1.0, "max_val": 15.0, "attack": 1, "release": 2, "enabled": True},
+        {"source": "global_beat", "target": "seed_offset",
+         "min_val": 0.0, "max_val": 1000.0, "attack": 1, "release": 1, "enabled": True},
+        {"source": "global_rms", "target": "noise_amplitude",
+         "min_val": 0.0, "max_val": 0.8, "attack": 1, "release": 3, "enabled": True},
+    ],
+    "smooth_morph": [
+        {"source": "global_rms", "target": "denoise_strength",
+         "min_val": 0.10, "max_val": 0.35, "attack": 6, "release": 18, "enabled": True},
+        {"source": "global_centroid", "target": "cfg_scale",
+         "min_val": 4.0, "max_val": 6.0, "attack": 5, "release": 15, "enabled": True},
+    ],
+    "rhythmic_pulse": [
+        {"source": "global_beat", "target": "denoise_strength",
+         "min_val": 0.15, "max_val": 0.60, "attack": 1, "release": 8, "enabled": True},
+        {"source": "global_onset", "target": "cfg_scale",
+         "min_val": 3.0, "max_val": 9.0, "attack": 1, "release": 6, "enabled": True},
+    ],
+    "atmospheric": [
+        {"source": "global_rms", "target": "denoise_strength",
+         "min_val": 0.12, "max_val": 0.30, "attack": 4, "release": 25, "enabled": True},
+        {"source": "global_mid", "target": "cfg_scale",
+         "min_val": 3.0, "max_val": 6.5, "attack": 3, "release": 20, "enabled": True},
+        {"source": "global_high", "target": "noise_amplitude",
+         "min_val": 0.0, "max_val": 0.10, "attack": 4, "release": 15, "enabled": True},
+    ],
+    "abstract_noise": [
+        {"source": "global_rms", "target": "noise_amplitude",
+         "min_val": 0.05, "max_val": 0.60, "attack": 2, "release": 5, "enabled": True},
+        {"source": "global_onset", "target": "denoise_strength",
+         "min_val": 0.30, "max_val": 0.85, "attack": 1, "release": 4, "enabled": True},
+        {"source": "global_centroid", "target": "seed_offset",
+         "min_val": 0.0, "max_val": 500.0, "attack": 2, "release": 6, "enabled": True},
+        {"source": "global_high", "target": "cfg_scale",
+         "min_val": 2.0, "max_val": 12.0, "attack": 1, "release": 3, "enabled": True},
+    ],
+    # ─── Complexity Levels ───────────────────────────────────────
+    "one_click_easy": [
+        {"source": "global_rms", "target": "denoise_strength",
+         "min_val": 0.15, "max_val": 0.50, "attack": 3, "release": 10, "enabled": True},
+    ],
+    "beginner_balanced": [
+        {"source": "global_rms", "target": "denoise_strength",
+         "min_val": 0.15, "max_val": 0.50, "attack": 3, "release": 10, "enabled": True},
+        {"source": "global_onset", "target": "cfg_scale",
+         "min_val": 3.0, "max_val": 7.0, "attack": 2, "release": 8, "enabled": True},
+    ],
+    "intermediate_full": [
+        {"source": "global_rms", "target": "denoise_strength",
+         "min_val": 0.15, "max_val": 0.55, "attack": 2, "release": 8, "enabled": True},
+        {"source": "global_onset", "target": "cfg_scale",
+         "min_val": 3.0, "max_val": 8.0, "attack": 2, "release": 6, "enabled": True},
+        {"source": "global_low", "target": "noise_amplitude",
+         "min_val": 0.0, "max_val": 0.2, "attack": 2, "release": 8, "enabled": True},
+    ],
+    "advanced_max": [
+        {"source": "global_rms", "target": "denoise_strength",
+         "min_val": 0.10, "max_val": 0.65, "attack": 2, "release": 6, "enabled": True},
+        {"source": "global_onset", "target": "cfg_scale",
+         "min_val": 2.0, "max_val": 10.0, "attack": 1, "release": 5, "enabled": True},
+        {"source": "global_low", "target": "noise_amplitude",
+         "min_val": 0.0, "max_val": 0.3, "attack": 2, "release": 8, "enabled": True},
+        {"source": "global_beat", "target": "seed_offset",
+         "min_val": 0.0, "max_val": 300.0, "attack": 1, "release": 10, "enabled": True},
+    ],
+    # ─── Target-Specific ─────────────────────────────────────────
+    "controlnet_reactive": [
+        {"source": "global_rms", "target": "controlnet_scale",
+         "min_val": 0.3, "max_val": 1.5, "attack": 2, "release": 8, "enabled": True},
+        {"source": "global_onset", "target": "denoise_strength",
+         "min_val": 0.15, "max_val": 0.50, "attack": 2, "release": 6, "enabled": True},
+    ],
+    "seed_scatter": [
+        {"source": "global_onset", "target": "seed_offset",
+         "min_val": 0.0, "max_val": 800.0, "attack": 1, "release": 3, "enabled": True},
+        {"source": "global_rms", "target": "denoise_strength",
+         "min_val": 0.20, "max_val": 0.50, "attack": 2, "release": 8, "enabled": True},
+    ],
+    "noise_sculpt": [
+        {"source": "global_rms", "target": "noise_amplitude",
+         "min_val": 0.0, "max_val": 0.5, "attack": 2, "release": 6, "enabled": True},
+        {"source": "global_onset", "target": "denoise_strength",
+         "min_val": 0.20, "max_val": 0.60, "attack": 1, "release": 5, "enabled": True},
+        {"source": "global_centroid", "target": "cfg_scale",
+         "min_val": 3.0, "max_val": 8.0, "attack": 3, "release": 10, "enabled": True},
+    ],
+    # ─── Legacy (backward-compatible) ────────────────────────────
     "energetic": [
         {"source": "global_rms", "target": "denoise_strength",
          "min_val": 0.20, "max_val": 0.70, "attack": 2, "release": 6, "enabled": True},
@@ -213,6 +344,7 @@ class ModulationEngine:
                     "max_f": float(total),
                     "fps": analysis.fps,
                     "s": frame_idx / analysis.fps,  # seconds
+                    "bpm": analysis.bpm,
                 }
                 # Add all audio features as variables
                 for feat_name, feat_arr in analysis.features.items():

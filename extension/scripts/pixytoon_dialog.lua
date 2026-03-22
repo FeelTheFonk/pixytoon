@@ -512,6 +512,7 @@ end
 local GLOBAL_SOURCES = {
   "global_rms", "global_onset", "global_centroid",
   "global_low", "global_mid", "global_high",
+  "global_beat",
 }
 
 local MOD_TARGETS = {
@@ -539,6 +540,14 @@ local function sync_slot_visibility()
   dlg:modify{ id = "expr_denoise", visible = adv and dlg.data.audio_use_expressions }
   dlg:modify{ id = "expr_cfg",     visible = adv and dlg.data.audio_use_expressions }
   dlg:modify{ id = "expr_noise",   visible = adv and dlg.data.audio_use_expressions }
+  dlg:modify{ id = "audio_random_seed", visible = adv }
+  -- Prompt schedule visibility
+  dlg:modify{ id = "audio_prompt_schedule", visible = adv }
+  local ps_vis = adv and dlg.data.audio_prompt_schedule
+  for i = 1, 3 do
+    dlg:modify{ id = "ps" .. i .. "_time", visible = ps_vis }
+    dlg:modify{ id = "ps" .. i .. "_prompt", visible = ps_vis }
+  end
 end
 
 local function build_tab_audio()
@@ -611,40 +620,9 @@ local function build_tab_audio()
     onchange = function()
       local sel = dlg.data.audio_mod_preset
       if sel == "(custom)" then return end
-      -- Pre-fill slots from preset defaults
-      if sel == "energetic" then
-        dlg:modify{ id = "mod1_source", option = "global_rms" }
-        dlg:modify{ id = "mod1_target", option = "denoise_strength" }
-        dlg:modify{ id = "mod1_min", value = 20 }
-        dlg:modify{ id = "mod1_max", value = 70 }
-        dlg:modify{ id = "mod2_source", option = "global_onset" }
-        dlg:modify{ id = "mod2_target", option = "cfg_scale" }
-        dlg:modify{ id = "mod2_min", value = 10 }
-        dlg:modify{ id = "mod2_max", value = 30 }
-      elseif sel == "ambient" then
-        dlg:modify{ id = "mod1_source", option = "global_rms" }
-        dlg:modify{ id = "mod1_target", option = "denoise_strength" }
-        dlg:modify{ id = "mod1_min", value = 10 }
-        dlg:modify{ id = "mod1_max", value = 30 }
-        dlg:modify{ id = "mod2_source", option = "global_centroid" }
-        dlg:modify{ id = "mod2_target", option = "cfg_scale" }
-        dlg:modify{ id = "mod2_min", value = 10 }
-        dlg:modify{ id = "mod2_max", value = 20 }
-      elseif sel == "bass_driven" then
-        dlg:modify{ id = "mod1_source", option = "global_low" }
-        dlg:modify{ id = "mod1_target", option = "denoise_strength" }
-        dlg:modify{ id = "mod1_min", value = 15 }
-        dlg:modify{ id = "mod1_max", value = 60 }
-        dlg:modify{ id = "mod2_source", option = "global_high" }
-        dlg:modify{ id = "mod2_target", option = "cfg_scale" }
-        dlg:modify{ id = "mod2_min", value = 13 }
-        dlg:modify{ id = "mod2_max", value = 27 }
-      end
-      -- Enable the configured slots and set slot count
-      dlg:modify{ id = "mod1_enable", selected = true }
-      dlg:modify{ id = "mod2_enable", selected = true }
-      dlg:modify{ id = "mod_slot_count", value = 2 }
-      sync_slot_visibility()
+      -- Preset is applied server-side via modulation_preset field in request.
+      -- Status feedback so user knows the selection registered.
+      PT.update_status("Preset '" .. sel .. "' selected")
     end,
   }
 
@@ -750,6 +728,44 @@ local function build_tab_audio()
     hexpand = true,
   }
 
+  dlg:check{
+    id = "audio_random_seed",
+    text = "Random seed per frame",
+    selected = false,
+    visible = false,
+  }
+
+  -- Prompt Schedule (advanced only)
+  dlg:check{
+    id = "audio_prompt_schedule",
+    text = "Prompt Schedule",
+    selected = false,
+    visible = false,
+    onchange = function()
+      local vis = dlg.data.audio_prompt_schedule and dlg.data.audio_advanced
+      for i = 1, 3 do
+        dlg:modify{ id = "ps" .. i .. "_time", visible = vis }
+        dlg:modify{ id = "ps" .. i .. "_prompt", visible = vis }
+      end
+    end,
+  }
+  for i = 1, 3 do
+    dlg:entry{
+      id = "ps" .. i .. "_time",
+      label = "T" .. i .. " (s-s)",
+      text = "",
+      visible = false,
+      hexpand = true,
+    }
+    dlg:entry{
+      id = "ps" .. i .. "_prompt",
+      label = "P" .. i,
+      text = "",
+      visible = false,
+      hexpand = true,
+    }
+  end
+
   dlg:button{
     id = "audio_generate_btn",
     text = "GENERATE AUDIO",
@@ -773,7 +789,9 @@ local function build_tab_audio()
       PT.audio.generating = true
       PT.state.animating = true
       PT.state.gen_step_start = os.clock()
-      PT.start_gen_timeout()
+      -- Dynamic timeout: 180s base + 15s per expected frame
+      local audio_timeout = 180 + (PT.audio.total_frames * 15)
+      PT.start_gen_timeout(math.max(PT.cfg.GEN_TIMEOUT, audio_timeout))
       dlg:modify{ id = "audio_generate_btn", enabled = false }
       dlg:modify{ id = "generate_btn", enabled = false }
       dlg:modify{ id = "animate_btn", enabled = false }
@@ -887,6 +905,10 @@ local function build_actions_panel()
         PT.state.cancel_pending = true
         dlg:modify{ id = "generate_btn", enabled = false }
         PT.update_status("Cancelling...")
+        -- Re-enable audio analyze button if audio was active
+        if PT.audio.generating or PT.audio.analyzing then
+          dlg:modify{ id = "audio_analyze_btn", enabled = PT.state.connected }
+        end
         -- Safety timer: force UI unlock if server never responds
         PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
         PT.timers.cancel_safety = Timer{
@@ -897,6 +919,8 @@ local function build_actions_panel()
               PT.state.cancel_pending = false
               PT.state.generating = false
               PT.state.animating = false
+              PT.audio.generating = false
+              PT.audio.analyzing = false
               PT.stop_gen_timeout()
               PT.finalize_sequence()
               PT.update_status("Cancel timeout — UI reset")

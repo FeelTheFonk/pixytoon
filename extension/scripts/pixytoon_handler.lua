@@ -437,13 +437,16 @@ handlers.audio_analysis = function(resp)
   PT.audio.features = resp.features or {}
   PT.audio.stems_available = resp.stems_available or false
   PT.audio.stems = resp.stems or {}
+  PT.audio.bpm = resp.bpm or 0
+  PT.audio.recommended_preset = resp.recommended_preset or ""
 
   if PT.dlg then
     local dur_str = string.format("%.1fs", PT.audio.duration)
     local stems_str = PT.audio.stems_available and " | Stems" or ""
+    local bpm_str = PT.audio.bpm > 0 and string.format(" | %.0f BPM", PT.audio.bpm) or ""
     PT.dlg:modify{ id = "audio_status",
       text = dur_str .. " | " .. PT.audio.total_frames .. " frames | "
-        .. #PT.audio.features .. " features" .. stems_str }
+        .. #PT.audio.features .. " features" .. stems_str .. bpm_str }
     PT.dlg:modify{ id = "audio_analyze_btn", enabled = true }
 
     -- Update source dropdowns with available features
@@ -457,7 +460,15 @@ handlers.audio_analysis = function(resp)
       end
     end
 
-    PT.update_status("Audio analyzed: " .. dur_str .. ", " .. PT.audio.total_frames .. " frames")
+    -- Auto-select recommended preset
+    if PT.audio.recommended_preset ~= "" then
+      PT.dlg:modify{ id = "audio_mod_preset", option = PT.audio.recommended_preset }
+    end
+
+    local rec_str = PT.audio.recommended_preset ~= ""
+      and " — preset: " .. PT.audio.recommended_preset or ""
+    PT.update_status("Audio analyzed: " .. dur_str .. ", " .. PT.audio.total_frames
+      .. " frames" .. bpm_str .. rec_str)
   end
 end
 

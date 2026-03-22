@@ -78,6 +78,7 @@ class AudioCache:
                 sample_rate=int(meta_dict["sample_rate"]),
                 audio_path=meta_dict["audio_path"],
                 features=features,
+                bpm=float(meta_dict.get("bpm", 0.0)),
             )
             log.info("Cache hit for %s (%d features)", Path(audio_path).name, len(features))
             return analysis
@@ -102,6 +103,7 @@ class AudioCache:
                 f"total_frames={analysis.total_frames}\n"
                 f"sample_rate={analysis.sample_rate}\n"
                 f"audio_path={analysis.audio_path}\n"
+                f"bpm={analysis.bpm}\n"
             )
             log.info("Cached analysis for %s (%d features)", Path(audio_path).name, len(analysis.features))
         except Exception as e:
