@@ -10,7 +10,7 @@ def build() -> None:
     ext_dir = Path(__file__).resolve().parent.parent / "extension"
     out = Path(__file__).resolve().parent.parent / "dist"
     out.mkdir(exist_ok=True)
-    target = out / "pixytoon.aseprite-extension"
+    target = out / "sddj.aseprite-extension"
 
     _exclude = {".DS_Store", "Thumbs.db", ".gitkeep"}
     _exclude_dirs = {"__pycache__", ".git", "node_modules"}

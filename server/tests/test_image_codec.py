@@ -8,7 +8,7 @@ from io import BytesIO
 import pytest
 from PIL import Image
 
-from pixytoon.image_codec import (
+from sddj.image_codec import (
     apply_motion_warp,
     composite_with_mask,
     decode_b64_image,

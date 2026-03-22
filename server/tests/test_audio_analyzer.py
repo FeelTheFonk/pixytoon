@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from pixytoon.audio_analyzer import (
+from sddj.audio_analyzer import (
     AudioAnalysis,
     AudioAnalyzer,
     _normalize,

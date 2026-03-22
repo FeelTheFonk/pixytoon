@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from pixytoon.presets_manager import PresetsManager
+from sddj.presets_manager import PresetsManager
 
 
 class TestPresetsManager:

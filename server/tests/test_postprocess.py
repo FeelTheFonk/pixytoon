@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from pixytoon.postprocess import apply
-from pixytoon.protocol import (
+from sddj.postprocess import apply
+from sddj.protocol import (
     DitherMode,
     PaletteMode,
     PaletteSpec,
@@ -161,7 +161,7 @@ class TestPalette:
 
 
 class TestFullPipeline:
-    def test_complete_pixel_art_pipeline(self):
+    def test_complete_postprocess_pipeline(self):
         np.random.seed(42)
         img = _make_test_image(512, 512)
         spec = PostProcessSpec(

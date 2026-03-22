@@ -1,4 +1,4 @@
-# PixyToon Live Paint
+# SDDj Live Paint
 
 > Paint in Aseprite. The model interprets your strokes in real-time. Iterate at the speed of thought.
 
@@ -36,13 +36,13 @@ You keep full artistic control. The model is your assistant, not your replacemen
 
 ## Quick Start
 
-1. **Connect** to the server (the Connect button in the PixyToon dialog)
+1. **Connect** to the server (the Connect button in the SDDj dialog)
 2. **Open or create a sprite** in Aseprite (any size, but 512x512 works best)
 3. **Type a prompt** in the Generate tab — this tells the model what to make of your strokes
 4. **Switch to the Live tab**, choose **Auto (stroke)** or **Manual (F5)** trigger mode
 5. Click **START LIVE**
 6. **Start painting** — in Auto mode, each completed stroke triggers SD processing. In Manual mode, press **F5** when ready.
-7. The SD preview appears on a `_pixytoon_live` layer
+7. The SD preview appears on a `_sddj_live` layer
 
 To finish: click **STOP LIVE**. Use **Accept** anytime to copy the current SD preview to a permanent layer (the session keeps running). Use **SEND (F5)** anytime to manually trigger a new SD pass.
 
@@ -50,7 +50,7 @@ To finish: click **STOP LIVE**. Use **Accept** anytime to copy the current SD pr
 sequenceDiagram
     participant You as Artist
     participant Aseprite
-    participant Server as PixyToon Server
+    participant Server as SDDj Server
 
     You->>Aseprite: START LIVE
     Aseprite->>Server: realtime_start (prompt, settings)
@@ -82,7 +82,7 @@ sequenceDiagram
 
 ## The Interface
 
-The **Live** tab in the PixyToon dialog has these controls:
+The **Live** tab in the SDDj dialog has these controls:
 
 | Control | Default | What it does |
 |---------|---------|-------------|
@@ -153,7 +153,7 @@ Why lower than standard generation? In live mode, the model sees your actual can
 
 ### Preview Opacity
 
-The SD output appears on a separate `_pixytoon_live` layer. Opacity controls blending:
+The SD output appears on a separate `_sddj_live` layer. Opacity controls blending:
 
 | Opacity | Use case |
 |---------|----------|
@@ -332,18 +332,18 @@ Approximate latency per frame at 512x512, 4 steps, after torch.compile warmup:
 
 ### ROI Detection
 
-PixyToon automatically detects which region of the canvas changed
+SDDj automatically detects which region of the canvas changed
 (dirty-region detection). The full canvas is sent to the server with ROI
 coordinates, but only the modified region is processed through img2img,
 significantly reducing GPU processing time.
 
 Configure ROI behavior with environment variables:
-- `PIXYTOON_REALTIME_ROI_PADDING=32` — Padding around detected changes (pixels)
-- `PIXYTOON_REALTIME_ROI_MIN_SIZE=64` — Minimum ROI size (pixels)
+- `SDDJ_REALTIME_ROI_PADDING=32` — Padding around detected changes (pixels)
+- `SDDJ_REALTIME_ROI_MIN_SIZE=64` — Minimum ROI size (pixels)
 
 ### Timeout and Auto-Stop
 
-If no canvas change is detected for **5 minutes** (configurable via `PIXYTOON_REALTIME_TIMEOUT`, default 300 seconds), the session automatically stops. This prevents the GPU from being locked indefinitely.
+If no canvas change is detected for **5 minutes** (configurable via `SDDJ_REALTIME_TIMEOUT`, default 300 seconds), the session automatically stops. This prevents the GPU from being locked indefinitely.
 
 When auto-stop triggers:
 - The server sends a `realtime_stopped` notification
@@ -371,7 +371,7 @@ Another generation (or animation) is still running. Wait for it to finish or can
 
 ### Preview layer not showing
 
-- Check that `_pixytoon_live` layer exists and is visible
+- Check that `_sddj_live` layer exists and is visible
 - Make sure Preview Opacity is above 0%
 - If the layer is missing, stop and restart Live Paint
 

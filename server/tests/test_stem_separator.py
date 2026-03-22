@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pixytoon.stem_separator import STEM_NAMES, StemSeparator, is_available
+from sddj.stem_separator import STEM_NAMES, StemSeparator, is_available
 
 
 class TestIsAvailable:

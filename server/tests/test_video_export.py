@@ -6,10 +6,12 @@ import pytest
 from pathlib import Path
 from PIL import Image
 
-from pixytoon.video_export import (
+from sddj.video_export import (
     QUALITY_PRESETS,
     ExportResult,
+    _FRAME_NUM_RE,
     _SAFE_METADATA_RE,
+    _fill_frame_gaps,
     export_mp4,
     find_ffmpeg,
 )
@@ -47,6 +49,66 @@ class TestExportResult:
         assert r.path == "/tmp/video.mp4"
         assert r.size_mb == 12.5
         assert r.duration_s == 5.0
+
+
+class TestFrameNumRegex:
+    def test_matches_standard_frame(self):
+        m = _FRAME_NUM_RE.search("frame_001.png")
+        assert m and m.group(1) == "001"
+
+    def test_matches_high_number(self):
+        m = _FRAME_NUM_RE.search("frame_120.png")
+        assert m and m.group(1) == "120"
+
+    def test_no_match_non_frame(self):
+        assert _FRAME_NUM_RE.search("other_file.png") is None
+
+
+class TestFillFrameGaps:
+    def test_no_gaps_unchanged(self, tmp_path):
+        """Continuous sequence returns same files."""
+        frames = []
+        for i in range(1, 4):
+            p = tmp_path / f"frame_{i:03d}.png"
+            img = Image.new("RGB", (4, 4), (i * 50, 0, 0))
+            img.save(p)
+            frames.append(p)
+        result = _fill_frame_gaps(tmp_path, frames)
+        assert len(result) == 3
+
+    def test_fills_single_gap(self, tmp_path):
+        """Missing frame_002 between 001 and 003 is filled."""
+        for i in [1, 3]:
+            p = tmp_path / f"frame_{i:03d}.png"
+            img = Image.new("RGB", (4, 4), (i * 50, 0, 0))
+            img.save(p)
+        frames = [tmp_path / "frame_001.png", tmp_path / "frame_003.png"]
+        result = _fill_frame_gaps(tmp_path, frames)
+        assert len(result) == 3
+        assert (tmp_path / "frame_002.png").exists()
+
+    def test_fills_multiple_gaps(self, tmp_path):
+        """Gaps at 002 and 004 are both filled."""
+        for i in [1, 3, 5]:
+            p = tmp_path / f"frame_{i:03d}.png"
+            img = Image.new("RGB", (4, 4), (0, 0, 0))
+            img.save(p)
+        frames = [tmp_path / f"frame_{i:03d}.png" for i in [1, 3, 5]]
+        result = _fill_frame_gaps(tmp_path, frames)
+        assert len(result) == 5
+        assert (tmp_path / "frame_002.png").exists()
+        assert (tmp_path / "frame_004.png").exists()
+
+    def test_empty_list_returns_empty(self, tmp_path):
+        result = _fill_frame_gaps(tmp_path, [])
+        assert result == []
+
+    def test_single_frame_returns_single(self, tmp_path):
+        p = tmp_path / "frame_001.png"
+        img = Image.new("RGB", (4, 4), (0, 0, 0))
+        img.save(p)
+        result = _fill_frame_gaps(tmp_path, [p])
+        assert len(result) == 1
 
 
 class TestExportValidation:

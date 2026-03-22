@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pixytoon.validation import validate_resource_name
+from sddj.validation import validate_resource_name
 
 
 class TestValidateResourceName:

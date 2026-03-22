@@ -1,10 +1,10 @@
-# PixyToon
+# SDDj
 
 ![demo1](https://github.com/user-attachments/assets/0ca19204-fdcd-46fb-86d1-23a48226f9ef)
 
 ---
 
-Local SOTA pixel art generation and animation for Aseprite via Stable Diffusion 1.5 + AnimateDiff.
+Local SOTA generation and animation for Aseprite via Stable Diffusion 1.5 + AnimateDiff.
 
 ---
 
@@ -18,7 +18,7 @@ start.ps1         <- One-click: launch server + Aseprite
 ## Architecture
 
 ```
-Aseprite (Lua WebSocket) <-> PixyToon Server (Python FastAPI)
+Aseprite (Lua WebSocket) <-> SDDj Server (Python FastAPI)
                                   |
                             SD1.5 + Hyper-SD + DeepCache + FreeU v2 + torch.compile
                                   |
@@ -30,13 +30,13 @@ Aseprite (Lua WebSocket) <-> PixyToon Server (Python FastAPI)
                                   |
                      Motion Warp (Deforum-like smooth 2D affine, cv2)
                                   |
-                            Pixel Art Post-Processing Pipeline
+                            Post-Processing Pipeline
 ```
 
 ## Project Structure
 
 ```
-pixytoon/
+sddj/
 ├── setup.ps1                    # One-click setup (PowerShell 7)
 ├── start.ps1                    # One-click start (PowerShell 7)
 ├── bin/
@@ -46,21 +46,21 @@ pixytoon/
 ├── extension/
 │   ├── package.json             # Extension manifest
 │   ├── keys/
-│   │   └── pixytoon.aseprite-keys  # F5 hotkey for Live Send
+│   │   └── sddj.aseprite-keys  # F5 hotkey for Live Send
 │   └── scripts/
 │       ├── json.lua             # Pure Lua JSON parser
-│       ├── pixytoon.lua         # Plugin entry point (init/exit + module loader)
-│       ├── pixytoon_base64.lua  # Base64 encode/decode (pure Lua)
-│       ├── pixytoon_state.lua   # Constants + shared mutable state
-│       ├── pixytoon_utils.lua   # Temp files, image I/O, timer helper
-│       ├── pixytoon_settings.lua # Save/load/apply settings (JSON)
-│       ├── pixytoon_ws.lua      # WebSocket transport + connection mgmt
-│       ├── pixytoon_capture.lua # Image capture (active layer, flattened, mask)
-│       ├── pixytoon_request.lua # Request builders (parse, attach, build)
-│       ├── pixytoon_import.lua  # Import result, animation frame, live preview
-│       ├── pixytoon_live.lua    # Live paint system (event-driven, F5 hotkey, ROI)
-│       ├── pixytoon_handler.lua # Response dispatch table
-│       └── pixytoon_dialog.lua  # Dialog construction (tabs + actions)
+│       ├── sddj.lua             # Plugin entry point (init/exit + module loader)
+│       ├── sddj_base64.lua      # Base64 encode/decode (pure Lua)
+│       ├── sddj_state.lua       # Constants + shared mutable state
+│       ├── sddj_utils.lua       # Temp files, image I/O, timer helper
+│       ├── sddj_settings.lua    # Save/load/apply settings (JSON)
+│       ├── sddj_ws.lua          # WebSocket transport + connection mgmt
+│       ├── sddj_capture.lua     # Image capture (active layer, flattened, mask)
+│       ├── sddj_request.lua     # Request builders (parse, attach, build)
+│       ├── sddj_import.lua      # Import result, animation frame, live preview
+│       ├── sddj_live.lua        # Live paint system (event-driven, F5 hotkey, ROI)
+│       ├── sddj_handler.lua     # Response dispatch table
+│       └── sddj_dialog.lua      # Dialog construction (tabs + actions)
 ├── scripts/
 │   ├── build_extension.py       # Package -> .aseprite-extension
 │   ├── download_models.py       # Download all models from HuggingFace
@@ -84,7 +84,7 @@ pixytoon/
 │   ├── models/                  # Downloaded models (auto-populated)
 │   │   ├── loras/               # User LoRA files (.safetensors)
 │   │   └── embeddings/          # Textual Inversion embeddings
-│   └── pixytoon/                # Python package
+│   └── sddj/                   # Python package
 │       ├── __init__.py          # Package version
 │       ├── config.py            # Pydantic Settings (env vars)
 │       ├── protocol.py          # WebSocket schemas (Pydantic v2)
@@ -95,7 +95,7 @@ pixytoon/
 │       ├── deepcache_manager.py # DeepCache toggle + suspend/resume
 │       ├── lora_fuser.py        # LoRA fuse/unfuse with dynamo reset
 │       ├── freeu_applicator.py  # FreeU v2 application
-│       ├── postprocess.py       # 6-stage pixel art pipeline
+│       ├── postprocess.py       # 6-stage post-processing pipeline
 │       ├── image_codec.py       # Base64 encode/decode, resize, composite, motion warp
 │       ├── rembg_wrapper.py     # Background removal (CPU, lazy-load)
 │       ├── validation.py        # Shared input validation (path traversal guard)
@@ -127,7 +127,7 @@ pixytoon/
 - **Audio-Reactive Motion** (v0.7.4) — Smooth Deforum-like camera: pan, zoom, rotation driven by audio features. 2D affine warp with 7-layer anti-spaghetti protection (denoise correlation, conservative ranges, EMA smoothing, border reflection, Lanczos4, no 3D, warp-before-img2img). 4 dedicated motion presets + 14 existing presets enriched with subtle motion.
 - **Animation** — Dual-method: Frame Chain (img2img chaining) + AnimateDiff (motion module temporal consistency)
 - **AnimateDiff** — Motion adapter v1-5-3, FreeInit support, auto DeepCache disable/re-enable, ControlNet compatible
-- **LoRA stacking** — Hyper-SD (speed) + pixel art LoRA (style, ±2.0 weight range)
+- **LoRA stacking** — Hyper-SD (speed) + style LoRA (±2.0 weight range)
 - **Textual Inversion** — EasyNegative for quality (auto-loaded from `server/models/embeddings/`)
 - **CLIP skip 2** — Skips last encoder layer for better stylized output
 - **Fast generation** — Hyper-SD (8 steps) + DeepCache + FreeU v2 + torch.compile (~2-5s on RTX 4060 after warmup)
@@ -158,8 +158,8 @@ pixytoon/
 > **torch.compile modes:** `default` mode is used by default — fast compilation with Triton codegen.
 > `max-autotune` benchmarks every kernel candidate for peak throughput but adds minutes to startup.
 > `reduce-overhead` uses CUDAGraphs which is **incompatible** with DeepCache's dynamic
-> control flow (skip/compute branches). If you set `PIXYTOON_COMPILE_MODE=reduce-overhead`,
-> you must disable DeepCache (`PIXYTOON_ENABLE_DEEPCACHE=False`).
+> control flow (skip/compute branches). If you set `SDDJ_COMPILE_MODE=reduce-overhead`,
+> you must disable DeepCache (`SDDJ_ENABLE_DEEPCACHE=False`).
 
 ### Attention Mechanism
 
@@ -197,7 +197,7 @@ Executed in strict order:
 
 ## Configuration
 
-See **[Configuration](docs/CONFIGURATION.md)** for all `PIXYTOON_*` environment variables.
+See **[Configuration](docs/CONFIGURATION.md)** for all `SDDJ_*` environment variables.
 
 ## Troubleshooting
 

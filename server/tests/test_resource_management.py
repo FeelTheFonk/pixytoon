@@ -32,7 +32,7 @@ class TestModeTransitions(unittest.TestCase):
 
     def test_txt2img_does_not_require_source(self):
         """txt2img mode should not require source image."""
-        from pixytoon.protocol import GenerateRequest, GenerationMode
+        from sddj.protocol import GenerateRequest, GenerationMode
 
         req = GenerateRequest(
             prompt="test",
@@ -42,7 +42,7 @@ class TestModeTransitions(unittest.TestCase):
 
     def test_img2img_requires_source(self):
         """img2img mode should require source image."""
-        from pixytoon.protocol import GenerateRequest, GenerationMode
+        from sddj.protocol import GenerateRequest, GenerationMode
 
         with pytest.raises(ValidationError, match="source_image"):
             GenerateRequest(
@@ -52,7 +52,7 @@ class TestModeTransitions(unittest.TestCase):
 
     def test_img2img_valid_with_source(self):
         """img2img mode should succeed when source image is provided."""
-        from pixytoon.protocol import GenerateRequest, GenerationMode
+        from sddj.protocol import GenerateRequest, GenerationMode
 
         req = GenerateRequest(
             prompt="test",

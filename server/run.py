@@ -1,6 +1,6 @@
-"""PixyToon Server — entry point."""
+"""SDDj Server — entry point."""
 
-from pixytoon.server import main
+from sddj.server import main
 
 if __name__ == "__main__":
     main()

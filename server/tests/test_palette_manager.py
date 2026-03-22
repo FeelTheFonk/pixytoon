@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from pixytoon.palette_manager import _hex_to_rgb, hex_list_to_rgb, list_palettes, load_palette
+from sddj.palette_manager import _hex_to_rgb, hex_list_to_rgb, list_palettes, load_palette
 
 
 class TestHexToRgb:
@@ -34,13 +34,13 @@ class TestHexToRgb:
 
 class TestListPalettes:
     def test_list_with_palettes(self, tmp_palettes_dir: Path):
-        with patch("pixytoon.palette_manager.settings") as mock_s:
+        with patch("sddj.palette_manager.settings") as mock_s:
             mock_s.palettes_dir = tmp_palettes_dir
             result = list_palettes()
             assert "pico8" in result
 
     def test_list_nonexistent_dir(self, tmp_path: Path):
-        with patch("pixytoon.palette_manager.settings") as mock_s:
+        with patch("sddj.palette_manager.settings") as mock_s:
             mock_s.palettes_dir = tmp_path / "ghost"
             result = list_palettes()
             assert result == []
@@ -48,34 +48,34 @@ class TestListPalettes:
 
 class TestLoadPalette:
     def test_load_valid(self, tmp_palettes_dir: Path):
-        with patch("pixytoon.palette_manager.settings") as mock_s:
+        with patch("sddj.palette_manager.settings") as mock_s:
             mock_s.palettes_dir = tmp_palettes_dir
             colors = load_palette("pico8")
             assert len(colors) == 16
             assert colors[0] == (0, 0, 0)
 
     def test_load_nonexistent(self, tmp_palettes_dir: Path):
-        with patch("pixytoon.palette_manager.settings") as mock_s:
+        with patch("sddj.palette_manager.settings") as mock_s:
             mock_s.palettes_dir = tmp_palettes_dir
             with pytest.raises(FileNotFoundError):
                 load_palette("ghost_palette")
 
     def test_load_missing_colors_key(self, tmp_palettes_dir: Path):
         (tmp_palettes_dir / "bad.json").write_text(json.dumps({"name": "bad"}))
-        with patch("pixytoon.palette_manager.settings") as mock_s:
+        with patch("sddj.palette_manager.settings") as mock_s:
             mock_s.palettes_dir = tmp_palettes_dir
             with pytest.raises(ValueError, match="missing 'colors'"):
                 load_palette("bad")
 
     def test_load_empty_colors(self, tmp_palettes_dir: Path):
         (tmp_palettes_dir / "empty.json").write_text(json.dumps({"colors": []}))
-        with patch("pixytoon.palette_manager.settings") as mock_s:
+        with patch("sddj.palette_manager.settings") as mock_s:
             mock_s.palettes_dir = tmp_palettes_dir
             with pytest.raises(ValueError, match="no colors"):
                 load_palette("empty")
 
     def test_path_traversal_rejected(self, tmp_palettes_dir: Path):
-        with patch("pixytoon.palette_manager.settings") as mock_s:
+        with patch("sddj.palette_manager.settings") as mock_s:
             mock_s.palettes_dir = tmp_palettes_dir
             with pytest.raises(ValueError):
                 load_palette("../etc/passwd")

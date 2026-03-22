@@ -1,6 +1,6 @@
 # Configuration
 
-All environment variables are prefixed with `PIXYTOON_`. Example: `PIXYTOON_PORT=8080`.
+All environment variables are prefixed with `SDDJ_`. Example: `SDDJ_PORT=8080`.
 
 **[README](../README.md)** | **[Guide](GUIDE.md)** | **[Cookbook](COOKBOOK.md)** | **[Live Paint](LIVE-PAINT.md)** | **[Audio Reactivity](AUDIO-REACTIVITY.md)** | **[API Reference](API-REFERENCE.md)** | **[Configuration](CONFIGURATION.md)** | **[Troubleshooting](TROUBLESHOOTING.md)**
 
@@ -33,8 +33,8 @@ All environment variables are prefixed with `PIXYTOON_`. Example: `PIXYTOON_PORT
 | `HYPER_SD_REPO` | `ByteDance/Hyper-SD` | Hyper-SD HuggingFace repo |
 | `HYPER_SD_LORA_FILE` | `Hyper-SD15-8steps-CFG-lora.safetensors` | Hyper-SD LoRA filename |
 | `HYPER_SD_FUSE_SCALE` | `0.8` | Hyper-SD LoRA fusion scale |
-| `DEFAULT_PIXEL_LORA` | `auto` | Default pixel LoRA (`auto` = first found, `""` = none) |
-| `DEFAULT_PIXEL_LORA_WEIGHT` | `1.0` | Default LoRA fuse weight |
+| `DEFAULT_STYLE_LORA` | `auto` | Default style LoRA (`auto` = first found, `""` = none) |
+| `DEFAULT_STYLE_LORA_WEIGHT` | `1.0` | Default LoRA fuse weight |
 
 ## Generation Defaults
 
@@ -77,9 +77,6 @@ All environment variables are prefixed with `PIXYTOON_`. Example: `PIXYTOON_PORT
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DEFAULT_ANIM_FRAMES` | `8` | Default animation frame count |
-| `DEFAULT_ANIM_DURATION_MS` | `100` | Default frame duration (ms) |
-| `DEFAULT_ANIM_DENOISE` | `0.30` | Default animation denoise |
 | `MAX_ANIMATION_FRAMES` | `120` | Max frames per animation |
 | `ANIMATEDIFF_MODEL` | `guoyww/animatediff-motion-adapter-v1-5-3` | AnimateDiff motion adapter |
 | `ENABLE_FREEINIT` | `False` | FreeInit for AnimateDiff |
@@ -102,7 +99,6 @@ All environment variables are prefixed with `PIXYTOON_`. Example: `PIXYTOON_PORT
 | `AUDIO_CACHE_DIR` | `""` (temp dir) | Cache directory for audio analysis |
 | `AUDIO_MAX_FILE_SIZE_MB` | `500` | Max audio file size (MB) |
 | `AUDIO_MAX_FRAMES` | `3600` | Max frames per audio animation |
-| `AUDIO_DEFAULT_FPS` | `24.0` | Default audio analysis FPS |
 | `AUDIO_DEFAULT_ATTACK` | `2` | Default EMA attack frames |
 | `AUDIO_DEFAULT_RELEASE` | `8` | Default EMA release frames |
 | `STEM_MODEL` | `htdemucs` | Demucs model for stem separation |

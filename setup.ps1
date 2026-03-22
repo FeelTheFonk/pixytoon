@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 #Requires -Version 7.0
 $ErrorActionPreference = "Stop"
-$Host.UI.RawUI.WindowTitle = "PixyToon - Setup"
+$Host.UI.RawUI.WindowTitle = "SDDj - Setup"
 $PSStyle.OutputRendering = "Ansi"
 
 # --- Helpers -----------------------------------------------------------------
@@ -18,7 +18,7 @@ $Root = $PSScriptRoot
 Set-Location $Root
 
 Write-Host ""
-Write-Host "  ${B}${W}PixyToon${R}  ${D}Setup${R}"
+Write-Host "  ${B}${W}SDDj${R}  ${D}Setup${R}"
 Write-Host "  ${D}$('-' * 36)${R}"
 Write-Host ""
 
@@ -61,14 +61,18 @@ Ok "Extension built"
 
 # --- 5. Install extension ----------------------------------------------------
 Step 5 6 "Installing extension into Aseprite"
-$aseExt = "$env:APPDATA/Aseprite/extensions/pixytoon"
+$aseExt = "$env:APPDATA/Aseprite/extensions/sddj"
 $aseScripts = "$env:APPDATA/Aseprite/scripts"
 
-# Clean stale global scripts
-foreach ($f in "pixytoon.lua", "json.lua") {
+# Clean stale global scripts (current + legacy)
+foreach ($f in "sddj.lua", "pixytoon.lua", "json.lua") {
     $p = Join-Path $aseScripts $f
     if (Test-Path $p) { Remove-Item $p -Force }
 }
+
+# Remove legacy extension (pre-0.7.5 rename)
+$legacyExt = "$env:APPDATA/Aseprite/extensions/pixytoon"
+if (Test-Path $legacyExt) { Remove-Item $legacyExt -Recurse -Force }
 
 # Deploy extension
 if (Test-Path $aseExt) { Remove-Item $aseExt -Recurse -Force }
@@ -95,8 +99,8 @@ Write-Host ""
 Write-Host "  ${D}Verifying...${R}"
 Push-Location "$Root/server"
 try {
-    $ver = uv run python -c "import pixytoon; print(pixytoon.__version__)" 2>$null
-    Ok "PixyToon v$ver"
+    $ver = uv run python -c "import sddj; print(sddj.__version__)" 2>$null
+    Ok "SDDj v$ver"
 } catch { Warn "Package import check failed" }
 Pop-Location
 
@@ -105,7 +109,7 @@ Write-Host ""
 Write-Host "  ${D}$('-' * 36)${R}"
 Write-Host "  ${G}${B}Setup complete.${R}"
 Write-Host ""
-Write-Host "  ${W}Next:${R}  Run ${C}./start.ps1${R} to launch PixyToon"
+Write-Host "  ${W}Next:${R}  Run ${C}./start.ps1${R} to launch SDDj"
 Write-Host "  ${W}Edit:${R}  ${D}server/.env${R} to customize settings"
 Write-Host ""
 Write-Host "  ${D}Note: torch.compile requires VS 2022 C++ workload${R}"

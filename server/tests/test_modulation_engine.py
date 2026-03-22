@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from pixytoon.audio_analyzer import AudioAnalysis
-from pixytoon.modulation_engine import (
+from sddj.audio_analyzer import AudioAnalysis
+from sddj.modulation_engine import (
     ExpressionEvaluator,
     ModulationEngine,
     ModulationSlot,

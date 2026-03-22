@@ -1,4 +1,4 @@
-# PixyToon Cookbook
+# SDDj Cookbook
 
 > Tested recipes by creative intention. No theory — just settings that work.
 
@@ -727,7 +727,7 @@ Quick reference: recommended settings by creative intention.
 
 ### Using Built-in Presets
 
-PixyToon ships with built-in presets for common use cases. Select one from the dropdown to instantly load tuned settings.
+SDDj ships with built-in presets for common use cases. Select one from the dropdown to instantly load tuned settings.
 
 | Preset | Best for |
 |--------|----------|

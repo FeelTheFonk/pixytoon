@@ -1,4 +1,4 @@
-"""Shared test fixtures for PixyToon server tests."""
+"""Shared test fixtures for SDDj server tests."""
 
 from __future__ import annotations
 

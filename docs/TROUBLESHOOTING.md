@@ -11,7 +11,7 @@ Quick fixes for common issues. For detailed configuration, see [Configuration](C
 | Problem | Solution |
 |---------|----------|
 | Server won't start | Check `uv run python run.py` output for errors |
-| Port already in use | Change `PIXYTOON_PORT` or kill existing process |
+| Port already in use | Change `SDDJ_PORT` or kill existing process |
 | Aseprite can't connect | Ensure server is running, check firewall on 127.0.0.1:9876 |
 | "Server unresponsive" | Heartbeat watchdog detected no pong for 90s; auto-reconnect kicks in |
 | "Reconnecting in Xs" | Normal: exponential backoff (2s to 30s); server is unreachable, will auto-retry |
@@ -20,7 +20,7 @@ Quick fixes for common issues. For detailed configuration, see [Configuration](C
 
 | Problem | Solution |
 |---------|----------|
-| CUDA OOM | Reduce resolution, disable torch.compile (`PIXYTOON_ENABLE_TORCH_COMPILE=False`), enable VAE tiling, close other GPU apps |
+| CUDA OOM | Reduce resolution, disable torch.compile (`SDDJ_ENABLE_TORCH_COMPILE=False`), enable VAE tiling, close other GPU apps |
 | torch.compile fails | Install Visual Studio 2022 with C++ Desktop Development workload; ensure Triton installed |
 | "Not enough SMs" | Harmless Triton warning on consumer GPUs, can be ignored |
 | CUDAGraphs tensor overwrite | Uses `default` compile mode. If using `reduce-overhead`, disable DeepCache |
@@ -30,7 +30,7 @@ Quick fixes for common issues. For detailed configuration, see [Configuration](C
 
 | Problem | Solution |
 |---------|----------|
-| Generation timed out | Increase `PIXYTOON_GENERATION_TIMEOUT` or reduce steps/resolution |
+| Generation timed out | Increase `SDDJ_GENERATION_TIMEOUT` or reduce steps/resolution |
 | Cancel doesn't stop immediately | Server-side cancel ACK + 30s safety timer auto-unlocks UI; v0.7.3 concurrent receive handles cancel during long-running generations; check server terminal |
 | Blurry or non-pixel results | Ensure post-processing is enabled (pixelate + quantize). Check denoise_strength isn't too low |
 | Wrong colors | Try palette enforcement in CIELAB mode or adjust quantize_colors |
@@ -57,7 +57,7 @@ Quick fixes for common issues. For detailed configuration, see [Configuration](C
 |---------|----------|
 | Live Paint not starting | Ensure no generation is in progress (GPU_BUSY); check server logs |
 | Live Paint high latency | Reduce steps (2-3), reduce resolution, ensure no other GPU load |
-| Live Paint auto-stopped | Session times out after 5min of inactivity (configurable via `PIXYTOON_REALTIME_TIMEOUT`) |
+| Live Paint auto-stopped | Session times out after 5min of inactivity (configurable via `SDDJ_REALTIME_TIMEOUT`) |
 | Brush strokes not detected | Ensure Auto mode is enabled, or use F5 (Manual mode) |
 
 ## Audio Reactivity
@@ -67,7 +67,7 @@ Quick fixes for common issues. For detailed configuration, see [Configuration](C
 | Audio file not found | Use absolute path; supported: .wav, .mp3, .flac, .ogg, .m4a, .aac |
 | Stem separation unavailable | Install demucs: `pip install demucs>=4.0` (heavy dependency, CPU only) |
 | Modulation too subtle | Increase min/max range in slot, or try a preset with wider range (e.g., `glitch_chaos`) |
-| MP4 export fails | Install ffmpeg and ensure it's in PATH. Set `PIXYTOON_FFMPEG_PATH` if non-standard location |
+| MP4 export fails | Install ffmpeg and ensure it's in PATH. Set `SDDJ_FFMPEG_PATH` if non-standard location |
 | Modulation too aggressive | Increase release frames (smoother decay), decrease max range |
 | "Analysis failed" | Check server logs; ensure librosa installed, audio file not corrupted |
 

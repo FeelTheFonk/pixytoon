@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 #Requires -Version 7.0
 $ErrorActionPreference = "Stop"
-$Host.UI.RawUI.WindowTitle = "PixyToon"
+$Host.UI.RawUI.WindowTitle = "SDDj"
 $PSStyle.OutputRendering = "Ansi"
 
 # --- Helpers -----------------------------------------------------------------
@@ -15,7 +15,7 @@ function Warn($msg) { Write-Host "  ${Y}!${R}  $msg" }
 $Root = $PSScriptRoot
 
 Write-Host ""
-Write-Host "  ${B}${W}PixyToon${R}  ${D}Launch${R}"
+Write-Host "  ${B}${W}SDDj${R}  ${D}Launch${R}"
 Write-Host "  ${D}$('-' * 36)${R}"
 Write-Host ""
 
@@ -33,7 +33,7 @@ if ($running) {
 } else {
     # --- Start server --------------------------------------------------------
     Write-Host "  ${D}Starting server...${R}"
-    $serverProc = Start-Process pwsh -ArgumentList "-NoExit", "-Command", "`$Host.UI.RawUI.WindowTitle='PixyToon Server'; Set-Location '$Root/server'; uv run python run.py" -WindowStyle Minimized -PassThru
+    $serverProc = Start-Process pwsh -ArgumentList "-NoExit", "-Command", "`$Host.UI.RawUI.WindowTitle='SDDj Server'; Set-Location '$Root/server'; uv run python run.py" -WindowStyle Minimized -PassThru
 
     # --- Wait for ready ------------------------------------------------------
     Write-Host "  ${D}Waiting for engine to load...${R}"
@@ -65,14 +65,14 @@ if (Test-Path $asePath) {
     Ok "Aseprite launched"
 } else {
     Warn "Aseprite not found at bin/aseprite/"
-    Write-Host "  ${D}Launch Aseprite manually - PixyToon opens on startup.${R}"
+    Write-Host "  ${D}Launch Aseprite manually - SDDj opens on startup.${R}"
 }
 
 # --- Running -----------------------------------------------------------------
 Write-Host ""
 Write-Host "  ${D}$('-' * 36)${R}"
 Write-Host "  ${W}Server:${R}  ${C}ws://127.0.0.1:9876/ws${R}"
-Write-Host "  ${W}Action:${R}  Connect in PixyToon dialog"
+Write-Host "  ${W}Action:${R}  Connect in SDDj dialog"
 Write-Host "  ${D}$('-' * 36)${R}"
 Write-Host ""
 
@@ -110,9 +110,9 @@ if ($graceful) {
             taskkill /T /F /PID $pid 2>$null | Out-Null
         }
     }
-    # 4) Fallback: kill pwsh with PixyToon Server title
+    # 4) Fallback: kill pwsh with SDDj Server title
     Get-Process -Name "pwsh" -ErrorAction SilentlyContinue |
-        Where-Object { $_.MainWindowTitle -eq "PixyToon Server" } |
+        Where-Object { $_.MainWindowTitle -eq "SDDj Server" } |
         ForEach-Object { taskkill /T /F /PID $_.Id 2>$null | Out-Null }
     Start-Sleep -Seconds 1
     Ok "Server stopped (forced)"

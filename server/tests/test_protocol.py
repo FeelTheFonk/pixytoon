@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from pixytoon.protocol import (
+from sddj.protocol import (
     Action,
     AnalyzeAudioRequest,
     AnimationRequest,
@@ -345,7 +345,7 @@ class TestAudioRequestModels:
         assert req.method.value == "chain"
 
     def test_audio_reactive_animatediff_method(self):
-        from pixytoon.protocol import AnimationMethod
+        from sddj.protocol import AnimationMethod
         req = AudioReactiveRequest(
             audio_path="/test.wav",
             method="animatediff_audio",

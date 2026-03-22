@@ -4,7 +4,7 @@ Usage:
     cd C:\\Users\\CleS\\Desktop\\pixytoon\\server
     uv run python ..\\scripts\\test_animation.py
 
-Requires the PixyToon server to be running on ws://127.0.0.1:9876/ws.
+Requires the SDDj server to be running on ws://127.0.0.1:9876/ws.
 """
 
 from __future__ import annotations

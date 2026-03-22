@@ -1148,84 +1148,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pixytoon-server"
-version = "0.7.4"
-source = { editable = "." }
-dependencies = [
-    { name = "accelerate" },
-    { name = "deepcache" },
-    { name = "diffusers" },
-    { name = "fastapi" },
-    { name = "huggingface-hub" },
-    { name = "librosa" },
-    { name = "numba" },
-    { name = "numpy" },
-    { name = "onnxruntime" },
-    { name = "opencv-python-headless" },
-    { name = "peft" },
-    { name = "pillow" },
-    { name = "pydantic-settings" },
-    { name = "rembg" },
-    { name = "safetensors" },
-    { name = "scikit-image" },
-    { name = "scikit-learn" },
-    { name = "scipy" },
-    { name = "simpleeval" },
-    { name = "soundfile" },
-    { name = "torch" },
-    { name = "transformers" },
-    { name = "triton", marker = "sys_platform != 'win32'" },
-    { name = "triton-windows", marker = "sys_platform == 'win32'" },
-    { name = "uvicorn", extra = ["standard"] },
-    { name = "websockets" },
-]
-
-[package.optional-dependencies]
-audio-stems = [
-    { name = "demucs" },
-]
-dev = [
-    { name = "httpx" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "accelerate", specifier = ">=0.34,<2.0" },
-    { name = "deepcache", specifier = ">=0.1" },
-    { name = "demucs", marker = "extra == 'audio-stems'", specifier = ">=4.0,<5.0" },
-    { name = "diffusers", specifier = ">=0.31,<1.0" },
-    { name = "fastapi", specifier = ">=0.115" },
-    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
-    { name = "huggingface-hub", specifier = ">=0.25" },
-    { name = "librosa", specifier = ">=0.10,<1.0" },
-    { name = "numba", specifier = ">=0.60" },
-    { name = "numpy", specifier = ">=1.26,<3.0" },
-    { name = "onnxruntime", specifier = ">=1.17" },
-    { name = "opencv-python-headless", specifier = ">=4.8" },
-    { name = "peft", specifier = ">=0.13,<1.0" },
-    { name = "pillow", specifier = ">=10.0,<13.0" },
-    { name = "pydantic-settings", specifier = ">=2.5" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
-    { name = "rembg", specifier = ">=2.0,<3.0" },
-    { name = "safetensors", specifier = ">=0.4,<1.0" },
-    { name = "scikit-image", specifier = ">=0.24" },
-    { name = "scikit-learn", specifier = ">=1.5" },
-    { name = "scipy", specifier = ">=1.13" },
-    { name = "simpleeval", specifier = ">=1.0.5,<2.0" },
-    { name = "soundfile", specifier = ">=0.12" },
-    { name = "torch", specifier = ">=2.4,<3.0" },
-    { name = "transformers", specifier = ">=4.45,<6.0" },
-    { name = "triton", marker = "sys_platform != 'win32'", specifier = ">=3.2" },
-    { name = "triton-windows", marker = "sys_platform == 'win32'", specifier = ">=3.2,<3.7" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
-    { name = "websockets", specifier = ">=14" },
-]
-provides-extras = ["dev", "audio-stems"]
-
-[[package]]
 name = "platformdirs"
 version = "4.9.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1868,6 +1790,84 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/06/1c/1172a88d507a4baaf72c5a09bb6c018fe2ae0ab622e5830b703a46cc9e44/scipy-1.17.1-cp313-cp313t-win_amd64.whl", hash = "sha256:e30bdeaa5deed6bc27b4cc490823cd0347d7dae09119b8803ae576ea0ce52e4c", size = 36562980, upload-time = "2026-02-23T00:20:40.575Z" },
     { url = "https://files.pythonhosted.org/packages/70/b0/eb757336e5a76dfa7911f63252e3b7d1de00935d7705cf772db5b45ec238/scipy-1.17.1-cp313-cp313t-win_arm64.whl", hash = "sha256:a720477885a9d2411f94a93d16f9d89bad0f28ca23c3f8daa521e2dcc3f44d49", size = 24856543, upload-time = "2026-02-23T00:20:45.313Z" },
 ]
+
+[[package]]
+name = "sddj-server"
+version = "0.7.5"
+source = { editable = "." }
+dependencies = [
+    { name = "accelerate" },
+    { name = "deepcache" },
+    { name = "diffusers" },
+    { name = "fastapi" },
+    { name = "huggingface-hub" },
+    { name = "librosa" },
+    { name = "numba" },
+    { name = "numpy" },
+    { name = "onnxruntime" },
+    { name = "opencv-python-headless" },
+    { name = "peft" },
+    { name = "pillow" },
+    { name = "pydantic-settings" },
+    { name = "rembg" },
+    { name = "safetensors" },
+    { name = "scikit-image" },
+    { name = "scikit-learn" },
+    { name = "scipy" },
+    { name = "simpleeval" },
+    { name = "soundfile" },
+    { name = "torch" },
+    { name = "transformers" },
+    { name = "triton", marker = "sys_platform != 'win32'" },
+    { name = "triton-windows", marker = "sys_platform == 'win32'" },
+    { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
+]
+
+[package.optional-dependencies]
+audio-stems = [
+    { name = "demucs" },
+]
+dev = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "accelerate", specifier = ">=0.34,<2.0" },
+    { name = "deepcache", specifier = ">=0.1" },
+    { name = "demucs", marker = "extra == 'audio-stems'", specifier = ">=4.0,<5.0" },
+    { name = "diffusers", specifier = ">=0.31,<1.0" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
+    { name = "huggingface-hub", specifier = ">=0.25" },
+    { name = "librosa", specifier = ">=0.10,<1.0" },
+    { name = "numba", specifier = ">=0.60" },
+    { name = "numpy", specifier = ">=1.26,<3.0" },
+    { name = "onnxruntime", specifier = ">=1.17" },
+    { name = "opencv-python-headless", specifier = ">=4.8" },
+    { name = "peft", specifier = ">=0.13,<1.0" },
+    { name = "pillow", specifier = ">=10.0,<13.0" },
+    { name = "pydantic-settings", specifier = ">=2.5" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
+    { name = "rembg", specifier = ">=2.0,<3.0" },
+    { name = "safetensors", specifier = ">=0.4,<1.0" },
+    { name = "scikit-image", specifier = ">=0.24" },
+    { name = "scikit-learn", specifier = ">=1.5" },
+    { name = "scipy", specifier = ">=1.13" },
+    { name = "simpleeval", specifier = ">=1.0.5,<2.0" },
+    { name = "soundfile", specifier = ">=0.12" },
+    { name = "torch", specifier = ">=2.4,<3.0" },
+    { name = "transformers", specifier = ">=4.45,<6.0" },
+    { name = "triton", marker = "sys_platform != 'win32'", specifier = ">=3.2" },
+    { name = "triton-windows", marker = "sys_platform == 'win32'", specifier = ">=3.2,<3.7" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
+    { name = "websockets", specifier = ">=14" },
+]
+provides-extras = ["dev", "audio-stems"]
 
 [[package]]
 name = "setuptools"

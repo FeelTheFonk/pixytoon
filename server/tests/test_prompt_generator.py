@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from pixytoon.prompt_generator import PromptGenerator
+from sddj.prompt_generator import PromptGenerator
 
 
 class TestPromptGenerator:

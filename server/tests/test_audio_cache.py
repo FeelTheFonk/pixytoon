@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from pixytoon.audio_analyzer import AudioAnalysis
-from pixytoon.audio_cache import AudioCache, _cache_key
+from sddj.audio_analyzer import AudioAnalysis
+from sddj.audio_cache import AudioCache, _cache_key
 
 
 # ─── Helpers ────────────────────────────────────────────────

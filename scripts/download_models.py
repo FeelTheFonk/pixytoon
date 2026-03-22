@@ -118,7 +118,7 @@ def download_animatediff() -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Download PixyToon models")
+    parser = argparse.ArgumentParser(description="Download SDDj models")
     parser.add_argument("--all", action="store_true", help="Download everything")
     parser.add_argument("--checkpoint", action="store_true", help="SD1.5 base checkpoint")
     parser.add_argument("--hyper-sd", action="store_true", dest="hyper_sd", help="Hyper-SD acceleration LoRA")
