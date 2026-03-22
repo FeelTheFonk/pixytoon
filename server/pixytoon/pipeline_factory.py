@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import logging
+from pathlib import Path
 from typing import Optional
 
 import torch
@@ -33,14 +34,30 @@ CONTROLNET_IDS: dict[GenerationMode, str] = {
 
 
 def load_base_pipeline() -> StableDiffusionPipeline:
-    """Load the base SD1.5 pipeline onto CUDA with fp16."""
-    log.info("Loading SD1.5 pipeline: %s", settings.default_checkpoint)
-    pipe = StableDiffusionPipeline.from_pretrained(
-        settings.default_checkpoint,
-        torch_dtype=torch.float16,
-        safety_checker=None,
-        variant="fp16",
-    )
+    """Load the base SD1.5 pipeline onto CUDA with fp16.
+
+    Accepts three checkpoint formats via settings.default_checkpoint:
+      - HuggingFace repo ID:  "Lykon/dreamshaper-8"
+      - Local diffusers dir:  "/path/to/model_dir/"
+      - Single file (.safetensors/.ckpt): "/path/to/model.safetensors"
+    """
+    ckpt = settings.default_checkpoint
+    ckpt_path = Path(ckpt)
+    log.info("Loading base pipeline: %s", ckpt)
+
+    if ckpt_path.is_file() and ckpt_path.suffix in (".safetensors", ".ckpt"):
+        pipe = StableDiffusionPipeline.from_single_file(
+            str(ckpt_path),
+            torch_dtype=torch.float16,
+            safety_checker=None,
+        )
+    else:
+        pipe = StableDiffusionPipeline.from_pretrained(
+            ckpt,
+            torch_dtype=torch.float16,
+            safety_checker=None,
+            variant="fp16",
+        )
     pipe.to("cuda")
     return pipe
 

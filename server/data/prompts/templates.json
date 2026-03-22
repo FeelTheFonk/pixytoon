@@ -11,6 +11,25 @@
     "scene": "{quality}, {subject}, {style}, {mood}, {lighting}, {colors}, scene composition",
     "concept": "{quality}, concept art, {subject}, {style}, {details}, {lighting}",
     "cinematic": "{quality}, cinematic shot, {subject}, {style}, {camera}, {lighting}, {mood}",
-    "texture": "{quality}, {details}, {colors}, {style}, texture study, {lighting}"
+    "texture": "{quality}, {details}, {colors}, {style}, texture study, {lighting}",
+    "epic": "{quality}, epic grandiose scene, {subject}, {style}, massive scale, sweeping vista, {camera}, {lighting}, {mood}, {colors}, awe-inspiring, dramatic composition",
+    "horror": "{quality}, dark horror atmosphere, {subject}, {style}, eerie, unsettling, {lighting}, {mood}, deep shadows, ominous, {camera}, {details}",
+    "dreamy": "{quality}, dreamlike surreal scene, {subject}, {style}, ethereal glow, soft focus, {lighting}, {mood}, {colors}, floating elements, hazy atmosphere, otherworldly",
+    "action": "{quality}, dynamic action scene, {subject}, {style}, motion blur, intense movement, {camera}, {lighting}, {mood}, explosive energy, speed lines, {details}",
+    "macro": "{quality}, extreme close-up macro shot, {subject}, {style}, intricate details, shallow depth of field, {lighting}, {colors}, {details}, crystal clear focus",
+    "landscape": "{quality}, breathtaking landscape, {subject}, {style}, panoramic view, {lighting}, {mood}, {colors}, vast scenery, natural beauty, {camera}",
+    "character_sheet": "{quality}, character sheet, multiple poses, {subject}, {style}, front view, side view, back view, {details}, {colors}, white background, reference sheet, full body",
+    "item": "{quality}, item illustration, {subject}, {style}, centered composition, {lighting}, {details}, {colors}, isolated object, clean background, inventory art",
+    "environment": "{quality}, environment design, {subject}, {style}, wide establishing shot, {lighting}, {mood}, {colors}, architectural details, {details}, sense of depth, {camera}",
+    "vignette": "{quality}, intimate vignette, {subject}, {style}, soft edges, {lighting}, {mood}, {colors}, gentle composition, quiet moment, tender atmosphere",
+    "splash_art": "{quality}, splash art, {subject}, {style}, dynamic pose, {camera}, {lighting}, {mood}, {colors}, vibrant energy, bold composition, game art, key visual, {details}",
+    "poster": "{quality}, poster artwork, {subject}, {style}, bold typography space, {camera}, {lighting}, {mood}, {colors}, striking layout, graphic design composition, eye-catching",
+    "storybook": "{quality}, storybook illustration, {subject}, {style}, whimsical, hand-painted feel, {lighting}, {mood}, {colors}, fairy tale atmosphere, narrative scene, {details}",
+    "chibi": "{quality}, chibi style, {subject}, {style}, big head, small body, cute proportions, {colors}, {mood}, adorable, kawaii, simplified features",
+    "isometric": "{quality}, isometric view, {subject}, {style}, 30 degree angle, {details}, {colors}, {lighting}, clean lines, game asset style, diorama feel",
+    "dark_fantasy": "{quality}, dark fantasy, {subject}, {style}, gothic atmosphere, {camera}, {lighting}, {mood}, {colors}, brooding, arcane symbols, {details}, mythical",
+    "watercolor": "{quality}, watercolor painting, {subject}, {style}, wet on wet, soft color bleeding, {colors}, {lighting}, {mood}, paper texture, delicate brushstrokes",
+    "comic_panel": "{quality}, comic book panel, {subject}, {style}, bold outlines, {camera}, {lighting}, {mood}, {colors}, sequential art, ink lines, halftone dots",
+    "propaganda": "{quality}, propaganda poster style, {subject}, {style}, bold flat colors, strong perspective, {lighting}, {mood}, {colors}, heroic angle, {camera}, graphic impact"
   }
 }

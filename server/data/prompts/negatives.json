@@ -9,6 +9,11 @@
     "portrait": "bad anatomy, bad hands, missing fingers, extra fingers, deformed face, asymmetrical, cross-eyed, poorly drawn face, blurry face, multiple heads, clone, bad proportions, long neck, poorly drawn eyes, deformed iris",
     "detailed": "simple background, flat colors, minimal detail, rough sketch, unfinished, low effort, amateur, beginner, plain, boring, empty background, no detail, lazy, messy",
     "cinematic": "amateur, low budget, static, flat lighting, boring composition, snapshot, casual photo, low quality, grainy, shaky, handheld, overexposed, underexposed",
-    "fantasy": "modern objects, contemporary clothing, real-world brands, photorealistic, mundane, ordinary, plain background, modern architecture, cars, phones, computers, electronics"
+    "fantasy": "modern objects, contemporary clothing, real-world brands, photorealistic, mundane, ordinary, plain background, modern architecture, cars, phones, computers, electronics",
+    "horror": "explicit gore, intestines, excessive blood splatter, bright cheerful colors, happy mood, cute, kawaii, chibi, rainbow, sunshine, comedic, slapstick, cartoon violence, child-friendly, wholesome, smiling faces, pastel colors, clean pristine environment",
+    "cute": "horror, gore, blood, dark shadows, scary, creepy, unsettling, sinister, menacing, grotesque, monstrous, decayed, rotting, grimy, disturbing, nightmare, macabre, violent, aggressive, threatening, gloomy, depressing, dread, fearful, ominous",
+    "mechanical": "organic, flesh, skin, plants, leaves, flowers, fur, feathers, scales, bone, muscle, veins, roots, vines, grass, trees, natural textures, biological, living tissue, hair, wood grain, coral, moss, lichen, animal parts",
+    "nature": "buildings, concrete, asphalt, roads, cars, vehicles, power lines, skyscrapers, factories, pollution, plastic, metal structures, neon signs, billboards, streetlights, fences, walls, urban sprawl, industrial, machinery, electronics, cables, antennas, satellites, pavement",
+    "abstract": "realistic face, photorealistic, recognizable objects, figurative, literal depiction, human figure, portrait, landscape photo, architectural rendering, product photo, text, letters, numbers, logos, brands, identifiable person, named character, specific animal species, realism"
   }
 }
