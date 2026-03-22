@@ -36,6 +36,8 @@ Connect to `ws://127.0.0.1:9876/ws`. All messages are JSON. Maximum 5 concurrent
 | `generate_audio_reactive` | Generate audio-reactive animation   |
 | `check_stems`        | Check if stem separation (demucs) is available |
 | `list_modulation_presets` | List built-in modulation presets    |
+| `export_mp4`            | Export frames + audio to MP4 (requires ffmpeg) |
+| `shutdown`              | Graceful server shutdown              |
 
 ## Generate Request
 
@@ -113,7 +115,7 @@ For inpainting, set `mode` to `"inpaint"` and include `source_image` (base64 PNG
 
 | Field               | Values                               | Default       |
 |---------------------|--------------------------------------|---------------|
-| `method`            | `chain`, `animatediff`               | `chain`       |
+| `method`            | `chain`, `animatediff`, `animatediff_audio` | `chain` |
 | `frame_count`       | 2 - 120                              | `8`           |
 | `frame_duration_ms` | 50 - 2000                            | `100`         |
 | `seed_strategy`     | `fixed`, `increment`, `random`       | `increment`   |
@@ -202,6 +204,9 @@ Analyze audio first, then generate animation with per-frame parameter modulation
   "audio_path": "C:/path/to/audio.wav",
   "fps": 24.0,
   "enable_stems": false,
+  "method": "chain",
+  "enable_freeinit": false,
+  "freeinit_iterations": 2,
   "modulation_slots": [
     {
       "source": "global_rms",
@@ -241,6 +246,9 @@ Analyze audio first, then generate animation with per-frame parameter modulation
 | `global_low`         | Low-frequency energy (20-300Hz)  |
 | `global_mid`         | Mid-frequency energy (300-2kHz)  |
 | `global_high`        | High-frequency energy (2k-16kHz) |
+| `global_sub_bass`    | Sub-bass energy (20-60 Hz)     |
+| `global_upper_mid`   | Upper-mid energy (2-4 kHz)     |
+| `global_presence`    | Presence energy (4-8 kHz)      |
 | `global_beat`        | Beat impulse (BPM-aligned)     |
 | `drums_rms/onset`    | Per-stem (requires `enable_stems`) |
 | `bass_rms/onset`     | Per-stem (requires `enable_stems`) |
@@ -256,6 +264,31 @@ Analyze audio first, then generate animation with per-frame parameter modulation
 | `noise_amplitude`    | 0.0 - 1.0       | Additive latent noise      |
 | `controlnet_scale`   | 0.0 - 2.0       | ControlNet influence       |
 | `seed_offset`        | 0 - 1000         | Per-frame seed variation   |
+| `palette_shift`      | 0.0 - 1.0        | Audio-driven hue rotation  |
+| `frame_cadence`      | 1.0 - 8.0        | Frame skip cadence         |
+
+## Export MP4 Request
+
+Requires ffmpeg in PATH. Export animation frames + audio to a single MP4 file.
+
+```json
+{
+  "action": "export_mp4",
+  "output_dir": "C:/path/to/frames/",
+  "audio_path": "C:/path/to/audio.wav",
+  "fps": 24.0,
+  "scale_factor": 4,
+  "quality": "high"
+}
+```
+
+| Field           | Values                            | Default  |
+|-----------------|-----------------------------------|----------|
+| `output_dir`    | Path to directory with frame_*.png | required |
+| `audio_path`    | Path to audio file (optional)     | `null`   |
+| `fps`           | 1.0 - 120.0                      | `24.0`   |
+| `scale_factor`  | 1 - 8                            | `4`      |
+| `quality`       | `web`, `high`, `archive`, `raw`   | `high`   |
 
 ## Response Types
 
@@ -276,11 +309,14 @@ Analyze audio first, then generate animation with per-frame parameter modulation
 | `preset_saved`       | `name`                                                              |
 | `preset_deleted`     | `name`                                                              |
 | `cleanup_done`       | `message`, `freed_mb`                                               |
-| `audio_analysis`     | `duration`, `total_frames`, `features`, `bpm`, `recommended_preset`, `stems_available`, `stems` |
+| `audio_analysis`     | `duration`, `total_frames`, `features`, `bpm`, `recommended_preset`, `stems_available`, `stems`, `waveform` (opt) |
 | `audio_reactive_frame` | `frame_index`, `total_frames`, `image`, `seed`, `time_ms`, `width`, `height`, `params_used` |
 | `audio_reactive_complete` | `total_frames`, `total_time_ms`, `tag_name` (opt)               |
 | `stems_available`    | `available`, `message`                                              |
 | `modulation_presets` | `presets` (list of names)                                           |
+| `export_mp4_complete`| `path`, `size_mb`, `duration_s`                                     |
+| `export_mp4_error`   | `message`                                                           |
+| `shutdown_ack`       | `message`                                                           |
 
 ### Error Codes
 

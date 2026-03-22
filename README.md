@@ -22,7 +22,7 @@ Aseprite (Lua WebSocket) <-> PixyToon Server (Python FastAPI)
                                   |
                             SD1.5 + Hyper-SD + DeepCache + FreeU v2 + torch.compile
                                   |
-                    AnimateDiff + Frame Chain + Audio-Reactive Chain
+                    AnimateDiff + Frame Chain + Audio-Reactive (Chain/AnimateDiff)
                                   |
                    Audio Analyzer (librosa) + Stem Separator (demucs, CPU)
                                   |
@@ -107,7 +107,8 @@ pixytoon/
 │       ├── stem_separator.py   # Optional stem separation (demucs, CPU)
 │       ├── modulation_engine.py # Modulation matrix + expressions (simpleeval)
 │       ├── auto_calibrate.py   # Audio-based preset recommendation
-│       └── prompt_schedule.py  # Per-segment prompt resolution
+│       ├── prompt_schedule.py  # Per-segment prompt resolution
+│       └── video_export.py    # MP4 export via ffmpeg (nearest-neighbor, audio mux)
 ```
 
 ## Features
@@ -120,7 +121,7 @@ pixytoon/
 - **Auto-Prompt Generator** (v0.4.0) — Randomize creative prompts from curated templates with lockable fields
 - **Lock Subject** (v0.5.0) — Keep a fixed subject (character, object) while randomizing style, mood, lighting, etc.
 - **Presets** (v0.4.0) — Save/load generation settings; built-in presets for pixel art, anime, character, landscape, and more
-- **Audio Reactivity** (v0.7.0, v0.7.1 overhaul) — Synth-style modulation matrix: map audio features (RMS, onset, spectral, beat, per-stem) to inference parameters (denoise, CFG, noise, ControlNet, seed). BPM detection + auto-calibration recommends best preset. 20 built-in presets (genre/style/complexity/target). Prompt scheduling for per-segment prompts. Deforum-inspired math expressions with BPM variable. Optional CPU stem separation (demucs).
+- **Audio Reactivity** (v0.7.0-v0.7.3) — Synth-style modulation matrix: map audio features (RMS, onset, spectral, beat, per-stem, sub-bass, upper-mid, presence) to inference parameters (denoise, CFG, noise, ControlNet, seed, palette shift, frame cadence). BPM detection + auto-calibration recommends best preset. 20 built-in presets (genre/style/complexity/target). Prompt scheduling for per-segment prompts. Deforum-inspired math expressions with BPM variable. Optional CPU stem separation (demucs). AnimateDiff + Audio mode for temporal coherence (16-frame chunked batches with overlap blending).
 - **Animation** — Dual-method: Frame Chain (img2img chaining) + AnimateDiff (motion module temporal consistency)
 - **AnimateDiff** — Motion adapter v1-5-3, FreeInit support, auto DeepCache disable/re-enable, ControlNet compatible
 - **LoRA stacking** — Hyper-SD (speed) + pixel art LoRA (style, ±2.0 weight range)
@@ -131,7 +132,8 @@ pixytoon/
 - **Startup warmup** — Pre-compiles torch + Numba JIT on boot (first real generation is fast)
 - **Health check** — `GET /health` for readiness polling
 - **Concurrency safe** — GPU access serialized via asyncio lock
-- **Cancellation** (v0.6.1) — Robust multi-layered cancel: immediate server ACK, 30s safety timer fallback, GPU cleanup on timeout; works across all modes (txt2img, img2img, inpaint, ControlNet, animation, live)
+- **MP4 Export** (v0.7.3) — Export audio-reactive animations as MP4 with nearest-neighbor upscaling and embedded audio. Quality presets: web, high, archive, raw. Requires ffmpeg.
+- **Cancellation** (v0.6.1, v0.7.3 fix) — Robust multi-layered cancel: immediate server ACK, 30s safety timer fallback, GPU cleanup on timeout; concurrent receive loop handles cancel during long-running generations (audio-reactive, AnimateDiff). Works across all modes.
 - **Auto-reconnect** (v0.6.1) — Exponential backoff reconnection (2s → 30s max) with heartbeat pong watchdog (3× interval unresponsive → disconnect + reconnect)
 - **Generation timeout** — Configurable max time per generation (default 10min, auto-scaled for animation); sends cancel to server to free the GPU
 

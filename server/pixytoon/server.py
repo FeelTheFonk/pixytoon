@@ -46,6 +46,8 @@ from .protocol import (
     Request,
     ShutdownResponse,
     StemsAvailableResponse,
+    ExportMp4Response,
+    ExportMp4ErrorResponse,
 )
 from . import __version__
 from . import lora_manager, palette_manager, ti_manager
@@ -73,6 +75,15 @@ _ws_id_gen = itertools.count(1)  # thread-safe monotonic connection ID
 _realtime_owner: int | None = None  # ws_id that owns realtime mode (None = free)
 _realtime_ws: WebSocket | None = None  # WebSocket of the realtime owner (for auto-stop notify)
 _realtime_timeout_task: asyncio.Task | None = None  # auto-stop timer
+
+# Actions that run long enough to block the receive loop.
+# During these, we keep receiving cancel/ping messages concurrently.
+_LONG_RUNNING_ACTIONS: frozenset[str] = frozenset({
+    Action.GENERATE,
+    Action.GENERATE_ANIMATION,
+    Action.GENERATE_AUDIO_REACTIVE,
+    Action.ANALYZE_AUDIO,
+})
 
 
 _PID_FILE = Path(__file__).resolve().parent.parent / "pixytoon.pid"
@@ -161,42 +172,87 @@ async def ws_endpoint(websocket: WebSocket) -> None:
     _generating[ws_id] = threading.Event()
     log.info("Client connected: %s", websocket.client)
 
+    gen_task: asyncio.Task | None = None  # tracks the in-flight long-running handler
+
     try:
         while True:
-            msg = await websocket.receive()
+            # ── Concurrent receive: if a long-running task is in progress,
+            # we race between receiving new messages and the task completing.
+            # This allows cancel/ping messages to be processed during generation.
+            if gen_task is not None:
+                recv_future = asyncio.ensure_future(websocket.receive())
+                done, pending = await asyncio.wait(
+                    {gen_task, recv_future},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
 
-            if "text" in msg:
-                raw = msg["text"]
-                try:
-                    req = Request.model_validate_json(raw)
-                except Exception as e:
-                    await _send(websocket, ErrorResponse(
-                        code="INVALID_REQUEST",
-                        message=f"Malformed request: {e}",
-                    ))
+                # Handle received message (cancel/ping) during generation
+                if recv_future in done:
+                    msg = recv_future.result()
+                    await _handle_msg_during_gen(websocket, msg, ws_id)
+
+                # Check if the long-running task completed
+                if gen_task in done:
+                    # Propagate any exception from the handler task
+                    exc = gen_task.exception()
+                    gen_task = None
+                    if exc is not None:
+                        raise exc
+                    # Cancel the pending receive if the task finished first
+                    if recv_future in pending:
+                        recv_future.cancel()
+                        try:
+                            await recv_future
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                else:
+                    # Task still running, loop back to keep receiving
                     continue
-                try:
-                    await _handle(websocket, req, ws_id)
-                except Exception as e:
-                    log.exception("Handler error for action '%s': %s", req.action, e)
-                    await _send(websocket, ErrorResponse(
-                        code="ENGINE_ERROR",
-                        message=f"Handler error: {e}",
-                    ))
 
-            elif "bytes" in msg:
-                # P0-L4: Binary frame from live painting client
-                try:
-                    await _handle_binary_frame(websocket, msg["bytes"], ws_id)
-                except Exception as e:
-                    log.warning("Binary frame error: %s", e)
-                    await _send(websocket, ErrorResponse(
-                        code="INVALID_REQUEST",
-                        message=f"Binary frame error: {e}",
-                    ))
+            # ── Normal receive: no long-running task in progress
+            else:
+                msg = await websocket.receive()
 
-            elif msg.get("type") == "websocket.disconnect":
-                break
+                if "text" in msg:
+                    raw = msg["text"]
+                    try:
+                        req = Request.model_validate_json(raw)
+                    except Exception as e:
+                        await _send(websocket, ErrorResponse(
+                            code="INVALID_REQUEST",
+                            message=f"Malformed request: {e}",
+                        ))
+                        continue
+
+                    # Long-running actions: start as a background task so we
+                    # can keep receiving cancel/ping messages.
+                    if req.action in _LONG_RUNNING_ACTIONS:
+                        gen_task = asyncio.create_task(
+                            _handle(websocket, req, ws_id)
+                        )
+                    else:
+                        try:
+                            await _handle(websocket, req, ws_id)
+                        except Exception as e:
+                            log.exception("Handler error for action '%s': %s", req.action, e)
+                            await _send(websocket, ErrorResponse(
+                                code="ENGINE_ERROR",
+                                message=f"Handler error: {e}",
+                            ))
+
+                elif "bytes" in msg:
+                    # P0-L4: Binary frame from live painting client
+                    try:
+                        await _handle_binary_frame(websocket, msg["bytes"], ws_id)
+                    except Exception as e:
+                        log.warning("Binary frame error: %s", e)
+                        await _send(websocket, ErrorResponse(
+                            code="INVALID_REQUEST",
+                            message=f"Binary frame error: {e}",
+                        ))
+
+                elif msg.get("type") == "websocket.disconnect":
+                    break
 
     except WebSocketDisconnect:
         log.info("Client disconnected: %s", websocket.client)
@@ -207,10 +263,52 @@ async def ws_endpoint(websocket: WebSocket) -> None:
         if ws_id in _generating and _generating[ws_id].is_set():
             engine.cancel()
     finally:
+        # Cancel any in-flight generation task on disconnect
+        if gen_task is not None and not gen_task.done():
+            gen_task.cancel()
+            try:
+                await gen_task
+            except (asyncio.CancelledError, Exception):
+                pass
         _active_connections.discard(websocket)
         _generating.pop(ws_id, None)
         # Clean up realtime session if this client owned it
         await _cleanup_realtime(ws_id)
+
+
+async def _handle_msg_during_gen(
+    websocket: WebSocket, msg: dict, ws_id: int,
+) -> None:
+    """Handle messages received while a long-running generation task is active.
+
+    Only cancel, ping, and shutdown are processed — everything else is ignored
+    to prevent concurrent handler conflicts.
+    """
+    if msg.get("type") == "websocket.disconnect":
+        raise WebSocketDisconnect()
+
+    if "text" not in msg:
+        return  # Ignore binary frames during generation
+
+    try:
+        req = Request.model_validate_json(msg["text"])
+    except Exception:
+        return  # Ignore malformed messages during generation
+
+    if req.action == Action.CANCEL:
+        if ws_id in _generating and _generating[ws_id].is_set():
+            engine.cancel()
+            log.info("Cancel received during generation (ws_id=%d)", ws_id)
+            await _send(websocket, ProgressResponse(step=0, total=0))
+        else:
+            await _send(websocket, PongResponse())
+    elif req.action == Action.PING:
+        await _send(websocket, PongResponse())
+    elif req.action == Action.SHUTDOWN:
+        # Cancel current generation then shut down
+        if ws_id in _generating and _generating[ws_id].is_set():
+            engine.cancel()
+        await _handle_shutdown(websocket, ws_id)
 
 
 def _make_thread_callback(websocket: WebSocket, loop: asyncio.AbstractEventLoop, timeout: float = 1.0):
@@ -364,6 +462,9 @@ async def _handle(websocket: WebSocket, req: Request, ws_id: int) -> None:
 
         elif req.action == Action.GENERATE_AUDIO_REACTIVE:
             await _handle_generate_audio_reactive(websocket, req, ws_id)
+
+        elif req.action == Action.EXPORT_MP4:
+            await _handle_export_mp4(websocket, req)
 
         elif req.action == Action.REALTIME_START:
             await _handle_realtime_start(websocket, req, ws_id)
@@ -681,6 +782,7 @@ async def _handle_analyze_audio(websocket: WebSocket, req: Request) -> None:
             recommended_preset=recommended,
             stems_available=len(stem_names) > 0,
             stems=stem_names if stem_names else None,
+            waveform=analysis.get_waveform_preview(100),
         ))
     except FileNotFoundError as e:
         await _send(websocket, ErrorResponse(code="INVALID_REQUEST", message=str(e)))
@@ -701,6 +803,66 @@ async def _handle_list_modulation_presets(websocket: WebSocket) -> None:
     from .modulation_engine import ModulationEngine
     presets = ModulationEngine.list_presets()
     await _send(websocket, ModulationPresetsResponse(presets=presets))
+
+
+async def _handle_export_mp4(websocket: WebSocket, req: Request) -> None:
+    """Export animation frames + audio to MP4 via ffmpeg."""
+    from .video_export import export_mp4, find_ffmpeg
+
+    # Validate ffmpeg availability
+    ffmpeg = settings.ffmpeg_path or find_ffmpeg()
+    if not ffmpeg:
+        await _send(websocket, ExportMp4ErrorResponse(
+            message="ffmpeg not found. Install ffmpeg and ensure it is in PATH."))
+        return
+
+    # Extract parameters from request
+    output_dir = getattr(req, "output_dir", None)
+    audio_path = getattr(req, "audio_path", None)
+    fps = getattr(req, "fps", None) or 24.0
+    scale_factor = getattr(req, "scale_factor", None) or 4
+    quality = getattr(req, "quality", None) or "high"
+
+    if not output_dir:
+        await _send(websocket, ExportMp4ErrorResponse(
+            message="output_dir is required"))
+        return
+
+    # Security: validate output_dir is within the project
+    real_dir = os.path.realpath(output_dir)
+    if not os.path.isdir(real_dir):
+        await _send(websocket, ExportMp4ErrorResponse(
+            message=f"Output directory not found: {output_dir}"))
+        return
+
+    # Build metadata from request
+    export_meta: dict[str, str] = {}
+    if hasattr(req, "prompt") and req.prompt:
+        export_meta["comment"] = req.prompt[:256]
+    export_meta["tool"] = "PixyToon"
+
+    try:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: export_mp4(
+                frame_dir=real_dir,
+                audio_path=audio_path,
+                fps=fps,
+                scale_factor=scale_factor,
+                quality=quality,
+                metadata=export_meta,
+                ffmpeg_path=ffmpeg if settings.ffmpeg_path else None,
+            ),
+        )
+        await _send(websocket, ExportMp4Response(
+            path=result.path,
+            size_mb=result.size_mb,
+            duration_s=result.duration_s,
+        ))
+    except Exception as e:
+        log.exception("MP4 export failed: %s", e)
+        await _send(websocket, ExportMp4ErrorResponse(message=str(e)))
 
 
 async def _handle_generate_audio_reactive(

@@ -31,7 +31,7 @@ Quick fixes for common issues. For detailed configuration, see [Configuration](C
 | Problem | Solution |
 |---------|----------|
 | Generation timed out | Increase `PIXYTOON_GENERATION_TIMEOUT` or reduce steps/resolution |
-| Cancel doesn't stop immediately | Server-side cancel ACK + 30s safety timer auto-unlocks UI; check server terminal |
+| Cancel doesn't stop immediately | Server-side cancel ACK + 30s safety timer auto-unlocks UI; v0.7.3 concurrent receive handles cancel during long-running generations; check server terminal |
 | Blurry or non-pixel results | Ensure post-processing is enabled (pixelate + quantize). Check denoise_strength isn't too low |
 | Wrong colors | Try palette enforcement in CIELAB mode or adjust quantize_colors |
 
@@ -67,6 +67,7 @@ Quick fixes for common issues. For detailed configuration, see [Configuration](C
 | Audio file not found | Use absolute path; supported: .wav, .mp3, .flac, .ogg, .m4a, .aac |
 | Stem separation unavailable | Install demucs: `pip install demucs>=4.0` (heavy dependency, CPU only) |
 | Modulation too subtle | Increase min/max range in slot, or try a preset with wider range (e.g., `glitch_chaos`) |
+| MP4 export fails | Install ffmpeg and ensure it's in PATH. Set `PIXYTOON_FFMPEG_PATH` if non-standard location |
 | Modulation too aggressive | Increase release frames (smoother decay), decrease max range |
 | "Analysis failed" | Check server logs; ensure librosa installed, audio file not corrupted |
 

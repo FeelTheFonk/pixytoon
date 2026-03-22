@@ -19,9 +19,12 @@ log = logging.getLogger("pixytoon.audio")
 AUDIO_EXTENSIONS = frozenset({".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"})
 
 # Mel spectrogram band boundaries (128 mel bands)
-_BAND_LOW_END = 16    # bands 0-15  → ~20-300 Hz
-_BAND_MID_END = 64    # bands 16-63 → ~300-2 kHz
-                       # bands 64-127 → ~2k-16 kHz
+_BAND_SUB_BASS_END = 4   # bands 0-3    → ~20-60 Hz
+_BAND_LOW_END = 16        # bands 4-15   → ~60-300 Hz
+_BAND_MID_END = 64        # bands 16-63  → ~300-2 kHz
+_BAND_UPPER_MID_END = 90  # bands 64-89  → ~2-4 kHz
+_BAND_PRESENCE_END = 110  # bands 90-109 → ~4-8 kHz
+                           # bands 110-127 → ~8-16 kHz (high)
 
 
 @dataclass
@@ -39,6 +42,19 @@ class AudioAnalysis:
     @property
     def feature_names(self) -> list[str]:
         return sorted(self.features.keys())
+
+    def get_waveform_preview(self, num_points: int = 100) -> list[float]:
+        """Return a downsampled RMS waveform for UI display."""
+        rms = self.features.get("global_rms")
+        if rms is None or len(rms) == 0:
+            return [0.0] * num_points
+        # Downsample by averaging into num_points bins
+        indices = np.linspace(0, len(rms), num_points + 1, dtype=int)
+        result = []
+        for i in range(num_points):
+            segment = rms[indices[i]:indices[i + 1]]
+            result.append(float(segment.mean()) if len(segment) > 0 else 0.0)
+        return result
 
 
 def _normalize(arr: np.ndarray) -> np.ndarray:
@@ -149,6 +165,7 @@ class AudioAnalyzer:
         # Convert back to linear for energy summing (dB is log scale)
         mel_linear = librosa.db_to_power(mel_db)
 
+        # Core 3-band split (backward-compatible)
         low_energy = mel_linear[:_BAND_LOW_END, :].mean(axis=0)
         mid_energy = mel_linear[_BAND_LOW_END:_BAND_MID_END, :].mean(axis=0)
         high_energy = mel_linear[_BAND_MID_END:, :].mean(axis=0)
@@ -156,6 +173,15 @@ class AudioAnalyzer:
         features["global_low"] = _normalize(_resample_to_fps(low_energy, librosa_fps, fps, total_frames))
         features["global_mid"] = _normalize(_resample_to_fps(mid_energy, librosa_fps, fps, total_frames))
         features["global_high"] = _normalize(_resample_to_fps(high_energy, librosa_fps, fps, total_frames))
+
+        # Extended bands: sub_bass (20-60Hz), upper_mid (2-4kHz), presence (4-8kHz)
+        sub_bass_energy = mel_linear[:_BAND_SUB_BASS_END, :].mean(axis=0)
+        upper_mid_energy = mel_linear[_BAND_MID_END:_BAND_UPPER_MID_END, :].mean(axis=0)
+        presence_energy = mel_linear[_BAND_UPPER_MID_END:_BAND_PRESENCE_END, :].mean(axis=0)
+
+        features["global_sub_bass"] = _normalize(_resample_to_fps(sub_bass_energy, librosa_fps, fps, total_frames))
+        features["global_upper_mid"] = _normalize(_resample_to_fps(upper_mid_energy, librosa_fps, fps, total_frames))
+        features["global_presence"] = _normalize(_resample_to_fps(presence_energy, librosa_fps, fps, total_frames))
 
         # BPM detection + beat feature
         tempo, beat_frames_idx = librosa.beat.beat_track(y=y, sr=sr, hop_length=hop_length)

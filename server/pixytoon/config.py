@@ -94,6 +94,9 @@ class Settings(BaseSettings):
     stem_model: str = "htdemucs"
     stem_device: str = "cpu"  # always CPU — keep GPU free for diffusion
 
+    # ── Video Export ──────────────────────────────────────────
+    ffmpeg_path: str = ""  # empty = auto-detect via shutil.which("ffmpeg")
+
     # ── Real-Time Paint Mode ──────────────────────────────────
     realtime_timeout: float = Field(300.0, gt=0.0)  # auto-stop if no frame for N seconds
     realtime_default_steps: int = Field(4, ge=2, le=8)

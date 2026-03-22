@@ -583,11 +583,16 @@ To reproduce: enter that seed number in the Seed field, keep all other parameter
 
 ## Audio Reactivity
 
-> v0.7.0 — Synth-style modulation matrix: map audio features to inference parameters. v0.7.1 — BPM detection, 20 presets, auto-calibration, prompt schedule.
+> v0.7.0 — Synth-style modulation matrix. v0.7.1 — BPM detection, 20 presets, auto-calibration, prompt schedule. v0.7.3 — New bands (sub-bass, upper-mid, presence), new targets (palette shift, frame cadence), AnimateDiff + Audio mode, MP4 export, waveform preview.
 
-The **Audio** tab drives generation parameters from audio features. Select a file, click **Analyze** (auto-detects BPM and recommends a preset), then **GENERATE AUDIO**. Supports all modes (txt2img, img2img, inpaint, ControlNet).
+The **Audio** tab drives generation parameters from audio features. Select a file, click **Analyze** (auto-detects BPM, shows waveform preview, and recommends a preset), then **GENERATE AUDIO**. Supports all modes (txt2img, img2img, inpaint, ControlNet) and both animation methods:
 
-For the complete guide — modulation matrix, all 20 presets, custom expressions, prompt scheduling, tips: see **[Audio Reactivity Guide](AUDIO-REACTIVITY.md)**.
+- **Frame Chain**: Traditional img2img chaining — fast, per-frame control
+- **AnimateDiff + Audio**: 16-frame temporal batches with overlap blending — superior coherence for longer sequences
+
+After generating, click **Export MP4** to create a video with the audio track embedded (requires ffmpeg).
+
+For the complete guide — modulation matrix, all 22 presets, custom expressions, prompt scheduling, tips: see **[Audio Reactivity Guide](AUDIO-REACTIVITY.md)**.
 
 ---
 

@@ -107,6 +107,7 @@ All environment variables are prefixed with `PIXYTOON_`. Example: `PIXYTOON_PORT
 | `AUDIO_DEFAULT_RELEASE` | `8` | Default EMA release frames |
 | `STEM_MODEL` | `htdemucs` | Demucs model for stem separation |
 | `STEM_DEVICE` | `cpu` | Stem separation device (always CPU) |
+| `FFMPEG_PATH` | `""` (auto-detect) | Path to ffmpeg binary for MP4 export |
 
 ---
 

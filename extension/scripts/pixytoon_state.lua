@@ -120,6 +120,8 @@ PT.audio = {
   mod_presets       = {},
   bpm              = 0,
   recommended_preset = "",
+  waveform         = {},
+  last_output_dir  = nil,
 }
 
 -- ─── Metadata Tracking ────────────────────────────────────────

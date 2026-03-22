@@ -18,8 +18,9 @@ Audio File (.wav/.mp3/.flac/.ogg)
     v
 Audio Analyzer (librosa)
     |  - RMS energy, onset strength, spectral centroid
-    |  - Multi-band energy (low/mid/high)
+    |  - Multi-band energy (low/mid/high + sub_bass/upper_mid/presence)
     |  - BPM detection + beat signal
+    |  - Waveform preview (100-point RMS)
     |  - Optional: per-stem features (demucs)
     v
 Modulation Engine (synth-style matrix)
@@ -27,14 +28,23 @@ Modulation Engine (synth-style matrix)
     |  - Attack/Release EMA smoothing
     |  - Custom math expressions (simpleeval)
     v
-Parameter Schedule (per-frame values)
+Parameter Schedule (per-frame or per-chunk values)
+    |
+    +--- Frame Chain (img2img from previous frame)
+    |      - Frame 0: txt2img / img2img / inpaint / ControlNet
+    |      - Frame 1+: img2img chain with modulated params
+    |
+    +--- AnimateDiff + Audio (v0.7.3)
+    |      - 16-frame temporal batches with 4-frame overlap
+    |      - Per-chunk averaged parameters
+    |      - Alpha-blended inter-batch transitions
+    |      - FreeInit on first chunk (optional)
     |
     v
-Frame Chain (img2img from previous frame)
-    |  - Frame 0: txt2img / img2img / inpaint / ControlNet
-    |  - Frame 1+: img2img chain with modulated params
-    v
-Post-Processing Pipeline -> Aseprite Timeline
+Post-Processing Pipeline (+ palette shift) -> Aseprite Timeline
+    |
+    v  (optional)
+MP4 Export (ffmpeg, nearest-neighbor scaling, audio mux)
 ```
 
 ## Quick Start
@@ -54,7 +64,7 @@ That's it. The auto-calibration system picks the best preset for your audio.
 Click **Analyze** after selecting a file. The server:
 
 - Loads the audio (mono, 22050 Hz)
-- Extracts 7 global features (8 with beat detection) normalized to [0, 1]
+- Extracts 10 global features (11 with beat detection) normalized to [0, 1]
 - Detects BPM via `librosa.beat.beat_track`
 - Optionally separates stems (drums, bass, vocals, other) via demucs — adds 8 more features
 - Caches results for 24 hours (subsequent analyses of the same file are instant)
@@ -90,6 +100,9 @@ Audio features extracted per frame, normalized to [0, 1]:
 | `global_low` | Low-frequency energy (20-300 Hz) | Bass-driven effects |
 | `global_mid` | Mid-frequency energy (300-2 kHz) | Melodic content |
 | `global_high` | High-frequency energy (2k-16 kHz) | Hi-hat, cymbal reactivity |
+| `global_sub_bass` | Sub-bass energy (20-60 Hz) | Deep bass, kick drums |
+| `global_upper_mid` | Upper-mid energy (2-4 kHz) | Vocal presence, guitar |
+| `global_presence` | Presence energy (4-8 kHz) | Clarity, sibilance |
 | `global_beat` | Beat impulse (BPM-aligned) | Rhythmic sync |
 
 With stems enabled (demucs, CPU):
@@ -112,6 +125,8 @@ Inference parameters that can be modulated per-frame:
 | `noise_amplitude` | 0.0 - 1.0 | Additive noise injected before generation. Creates visual turbulence. |
 | `controlnet_scale` | 0.0 - 2.0 | ControlNet conditioning strength (if using ControlNet mode). |
 | `seed_offset` | 0 - 1000 | Offset added to base seed. Creates visual jumps between frames. |
+| `palette_shift` | 0.0 - 1.0 | Audio-driven hue rotation. Shifts the color palette per frame. |
+| `frame_cadence` | 1 - 8 | Frame skip cadence. Higher = fewer generated frames (GPU savings). |
 
 ### Attack / Release
 
@@ -208,6 +223,7 @@ Expressions override slot values with mathematical formulas. Enable via **Advanc
 | `global_onset` | Current frame's onset value |
 | `global_centroid` | Current frame's centroid value |
 | `global_low` / `mid` / `high` | Band energies |
+| `global_sub_bass` / `upper_mid` / `presence` | Extended band energies |
 | `global_beat` | Beat signal |
 | *(per-stem vars)* | Available if stems enabled |
 
@@ -244,6 +260,60 @@ lerp(0.5, 1.5, global_rms)
 # Exponential onset response
 0.1 + 0.7 * pow(global_onset, 2.0)
 ```
+
+## AnimateDiff + Audio (v0.7.3)
+
+Frame Chain generates each frame independently from the previous one — no temporal awareness. AnimateDiff + Audio combines AnimateDiff's temporal attention (16-frame window) with audio-driven parameter modulation for superior temporal coherence.
+
+### How It Works
+
+1. The audio timeline is divided into **chunks of 16 frames** with **4-frame overlap**
+2. Modulation parameters are **averaged per chunk** (e.g., denoise_strength is the mean over the 16 frames)
+3. Each chunk is generated via AnimateDiff with the averaged parameters
+4. Overlap frames are **alpha-blended** for smooth inter-chunk transitions
+5. FreeInit can be applied to the first chunk for improved initialization
+
+### When to Use
+
+| Method | Best For |
+|--------|----------|
+| **Frame Chain** | Short clips (<5s), maximum per-frame control, fast iteration |
+| **AnimateDiff + Audio** | Longer sequences, temporal coherence, smoother motion |
+
+### Usage
+
+1. In the **Audio** tab, set **Method** to `animatediff`
+2. Optionally enable **FreeInit** for the first chunk
+3. Click **GENERATE AUDIO** as usual
+
+### Limitations
+
+- Parameters are constant within each 16-frame chunk (averaged)
+- Minimum useful sequence: 16 frames (shorter falls back to single chunk)
+- Slightly slower than chain due to temporal attention computation
+
+## MP4 Export (v0.7.3)
+
+Export your audio-reactive animation as an MP4 video with the audio track embedded.
+
+### Requirements
+
+**ffmpeg** must be installed and in your PATH. Download from [ffmpeg.org](https://ffmpeg.org/download.html).
+
+### Usage
+
+After generating an audio-reactive animation, click **Export MP4** in the Audio tab. The button appears after generation completes.
+
+### Quality Presets
+
+| Quality | CRF | ffmpeg Preset | Scale | Best For |
+|---------|-----|---------------|-------|----------|
+| `web` | 23 | medium | 4x | Social media, small file size |
+| `high` | 17 | slow | 4x | Sharing, good quality/size ratio |
+| `archive` | 12 | veryslow | 8x | Archival, maximum quality |
+| `raw` | 0 | ultrafast | 1x | Lossless, no scaling |
+
+Pixel art is upscaled with **nearest-neighbor interpolation** (no blur). The output includes metadata (prompt, seed) embedded in the MP4.
 
 ## Prompt Schedule
 

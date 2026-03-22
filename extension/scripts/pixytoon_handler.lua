@@ -455,6 +455,7 @@ handlers.audio_analysis = function(resp)
   PT.audio.stems = resp.stems or {}
   PT.audio.bpm = resp.bpm or 0
   PT.audio.recommended_preset = resp.recommended_preset or ""
+  PT.audio.waveform = resp.waveform or {}
 
   if PT.dlg then
     local dur_str = string.format("%.1fs", PT.audio.duration)
@@ -494,6 +495,21 @@ handlers.audio_reactive_frame = function(resp)
     return
   end
   if resp.frame_index ~= nil then
+    -- Status with percentage and ETA
+    local total = resp.total_frames or 1
+    local idx = resp.frame_index + 1
+    local pct = math.floor((idx / total) * 100)
+    local eta_str = ""
+    if PT.state.gen_step_start and idx > 1 then
+      local elapsed = os.clock() - PT.state.gen_step_start
+      local remaining = (elapsed / (idx - 1)) * (total - idx)
+      if remaining < 60 then
+        eta_str = string.format(" ~%.0fs", remaining)
+      else
+        eta_str = string.format(" ~%.1fmin", remaining / 60)
+      end
+    end
+    PT.update_status("Audio " .. idx .. "/" .. total .. " (" .. pct .. "%)" .. eta_str)
     -- Reuse the animation frame import mechanism
     PT.import_animation_frame(resp)
     -- Write frame to output directory incrementally
@@ -516,6 +532,8 @@ handlers.audio_reactive_complete = function(resp)
       .. tostring(resp.total_time_ms or "?") .. "ms" .. tag_str .. ")")
     PT.reset_ui_buttons()
     PT.dlg:modify{ id = "audio_generate_btn", enabled = PT.state.connected }
+    -- Enable MP4 export (output dir preserved in audio.last_output_dir after reset)
+    PT.dlg:modify{ id = "export_mp4_btn", enabled = true }
   end
 
   -- Finalize frames (set durations + tag)
@@ -541,6 +559,9 @@ handlers.audio_reactive_complete = function(resp)
   -- Write metadata to output directory (frames already written incrementally)
   PT.save_animation_meta(resp)
 
+  -- Preserve output dir for MP4 export before resetting anim state
+  PT.audio.last_output_dir = PT.anim.output_dir
+
   PT.anim.layer = nil
   PT.anim.start_frame = 0
   PT.anim.frame_count = 0
@@ -564,6 +585,23 @@ handlers.modulation_presets = function(resp)
       opts[#opts + 1] = p
     end
     PT.dlg:modify{ id = "audio_mod_preset", options = opts }
+  end
+end
+
+-- ─── MP4 Export ──────────────────────────────────────────────
+
+handlers.export_mp4_complete = function(resp)
+  if PT.dlg then
+    local size_str = string.format("%.1f MB", resp.size_mb or 0)
+    PT.update_status("MP4 exported: " .. size_str)
+    PT.dlg:modify{ id = "export_mp4_btn", enabled = true }
+  end
+end
+
+handlers.export_mp4_error = function(resp)
+  if PT.dlg then
+    PT.update_status("MP4 export failed: " .. (resp.message or "unknown error"))
+    PT.dlg:modify{ id = "export_mp4_btn", enabled = true }
   end
 end
 

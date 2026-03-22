@@ -255,7 +255,7 @@ end
 function PT.build_generation_meta(resp)
   local req = PT.last_request
   local meta = {
-    pixytoon_version = "0.7.2",
+    pixytoon_version = "0.7.3",
     type = "generation",
     timestamp = os.date("!%Y-%m-%dT%H:%M:%S"),
     timestamp_local = os.date("%Y-%m-%d %H:%M:%S"),
@@ -283,7 +283,7 @@ end
 function PT.build_animation_meta(resp)
   local req = PT.last_request
   local meta = {
-    pixytoon_version = "0.7.2",
+    pixytoon_version = "0.7.3",
     type = "animation",
     timestamp = os.date("!%Y-%m-%dT%H:%M:%S"),
     timestamp_local = os.date("%Y-%m-%d %H:%M:%S"),

@@ -39,6 +39,8 @@ class Action(str, Enum):
     GENERATE_AUDIO_REACTIVE = "generate_audio_reactive"
     CHECK_STEMS = "check_stems"
     LIST_MODULATION_PRESETS = "list_modulation_presets"
+    # Video export
+    EXPORT_MP4 = "export_mp4"
     # Server lifecycle
     SHUTDOWN = "shutdown"
 
@@ -76,6 +78,7 @@ class PaletteMode(str, Enum):
 class AnimationMethod(str, Enum):
     CHAIN = "chain"
     ANIMATEDIFF = "animatediff"
+    ANIMATEDIFF_AUDIO = "animatediff_audio"
 
 
 class SeedStrategy(str, Enum):
@@ -292,6 +295,10 @@ class Request(BaseModel):
     expressions: Optional[dict[str, str]] = None
     modulation_preset: Optional[str] = None
     prompt_segments: Optional[list[dict]] = None
+    # Video export fields
+    output_dir: Optional[str] = None
+    scale_factor: Optional[int] = None
+    quality: Optional[str] = None
 
     def to_generate_request(self) -> GenerateRequest:
         _exclude = {
@@ -358,8 +365,7 @@ class Request(BaseModel):
 
     def to_audio_reactive_request(self) -> AudioReactiveRequest:
         _exclude = {
-            "action", "method", "frame_count", "seed_strategy",
-            "enable_freeinit", "freeinit_iterations",
+            "action", "frame_count", "seed_strategy",
             "image", "frame_id", "mask", "roi_x", "roi_y", "roi_w", "roi_h",
             "locked_fields", "prompt_template", "preset_name", "preset_data",
         }
@@ -397,6 +403,11 @@ class AudioReactiveRequest(BaseModel):
     expressions: Optional[dict[str, str]] = None
     modulation_preset: Optional[str] = None
     prompt_segments: list[dict] = Field(default_factory=list)
+    # Animation method: chain (default) or animatediff_audio
+    method: AnimationMethod = AnimationMethod.CHAIN
+    # AnimateDiff-specific
+    enable_freeinit: bool = False
+    freeinit_iterations: int = Field(2, ge=1, le=3)
     # Generation parameters (same as AnimationRequest)
     prompt: str = ""
     negative_prompt: str = _DEFAULT_NEGATIVE
@@ -544,6 +555,7 @@ class AudioAnalysisResponse(BaseModel):
     recommended_preset: str = ""
     stems_available: bool = False
     stems: Optional[list[str]] = None
+    waveform: Optional[list[float]] = None  # mini RMS waveform (100 points, [0,1])
 
 
 class AudioReactiveFrameResponse(BaseModel):
@@ -579,6 +591,18 @@ class ModulationPresetsResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────
 # SERVER LIFECYCLE RESPONSE MODELS
 # ─────────────────────────────────────────────────────────────
+
+class ExportMp4Response(BaseModel):
+    type: Literal["export_mp4_complete"] = "export_mp4_complete"
+    path: str
+    size_mb: float
+    duration_s: float = 0.0
+
+
+class ExportMp4ErrorResponse(BaseModel):
+    type: Literal["export_mp4_error"] = "export_mp4_error"
+    message: str
+
 
 class ShutdownResponse(BaseModel):
     type: Literal["shutdown_ack"] = "shutdown_ack"

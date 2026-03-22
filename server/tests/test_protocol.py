@@ -54,6 +54,7 @@ class TestAction:
             "cleanup",
             "analyze_audio", "generate_audio_reactive", "check_stems",
             "list_modulation_presets",
+            "export_mp4",
             "shutdown",
         }
         actual = {a.value for a in Action}
@@ -341,6 +342,30 @@ class TestAudioRequestModels:
         assert req.modulation_slots == []
         assert req.expressions is None
         assert req.modulation_preset is None
+        assert req.method.value == "chain"
+
+    def test_audio_reactive_animatediff_method(self):
+        from pixytoon.protocol import AnimationMethod
+        req = AudioReactiveRequest(
+            audio_path="/test.wav",
+            method="animatediff_audio",
+            enable_freeinit=True,
+        )
+        assert req.method == AnimationMethod.ANIMATEDIFF_AUDIO
+        assert req.enable_freeinit is True
+
+    def test_request_to_audio_reactive_with_method(self):
+        req = Request(
+            action="generate_audio_reactive",
+            audio_path="/test.wav",
+            prompt="pixel art",
+            method="animatediff_audio",
+            enable_freeinit=True,
+        )
+        ar = req.to_audio_reactive_request()
+        assert isinstance(ar, AudioReactiveRequest)
+        assert ar.method.value == "animatediff_audio"
+        assert ar.enable_freeinit is True
 
     def test_modulation_slot_spec(self):
         slot = ModulationSlotSpec(

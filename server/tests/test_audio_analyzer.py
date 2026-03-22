@@ -187,3 +187,26 @@ class TestAudioAnalyzer:
         path = _make_sine_wav(tmp_path)
         analysis = AudioAnalyzer().analyze(path, fps=10)
         assert analysis.feature_names == sorted(analysis.feature_names)
+
+    def test_extended_bands_present(self, tmp_path):
+        """v0.7.3: sub_bass, upper_mid, presence bands should be extracted."""
+        path = _make_sine_wav(tmp_path, duration=1.0)
+        analysis = AudioAnalyzer().analyze(path, fps=10)
+        for band in ("global_sub_bass", "global_upper_mid", "global_presence"):
+            assert band in analysis.features, f"Missing band: {band}"
+            assert len(analysis.features[band]) == analysis.total_frames
+
+    def test_get_waveform_preview(self, tmp_path):
+        """v0.7.3: waveform preview returns correct number of points."""
+        path = _make_sine_wav(tmp_path, duration=2.0)
+        analysis = AudioAnalyzer().analyze(path, fps=24)
+        wf = analysis.get_waveform_preview(100)
+        assert len(wf) == 100
+        assert all(0.0 <= v <= 1.0 for v in wf)
+
+    def test_get_waveform_preview_short_audio(self, tmp_path):
+        """Waveform preview works even with fewer frames than points."""
+        path = _make_sine_wav(tmp_path, duration=0.5)
+        analysis = AudioAnalyzer().analyze(path, fps=4)
+        wf = analysis.get_waveform_preview(100)
+        assert len(wf) == 100

@@ -546,12 +546,14 @@ end
 local GLOBAL_SOURCES = {
   "global_rms", "global_onset", "global_centroid",
   "global_low", "global_mid", "global_high",
+  "global_sub_bass", "global_upper_mid", "global_presence",
   "global_beat",
 }
 
 local MOD_TARGETS = {
   "denoise_strength", "cfg_scale", "noise_amplitude",
-  "controlnet_scale", "seed_offset",
+  "controlnet_scale", "seed_offset", "palette_shift",
+  "frame_cadence",
 }
 
 -- Syncs slot widget visibility based on slot count and advanced toggle
@@ -571,9 +573,14 @@ local function sync_slot_visibility()
     dlg:modify{ id = "mod" .. i .. "_release", visible = vis and adv }
   end
   dlg:modify{ id = "audio_use_expressions", visible = adv }
-  dlg:modify{ id = "expr_denoise", visible = adv and dlg.data.audio_use_expressions }
-  dlg:modify{ id = "expr_cfg",     visible = adv and dlg.data.audio_use_expressions }
-  dlg:modify{ id = "expr_noise",   visible = adv and dlg.data.audio_use_expressions }
+  local expr_vis = adv and dlg.data.audio_use_expressions
+  dlg:modify{ id = "expr_denoise",    visible = expr_vis }
+  dlg:modify{ id = "expr_cfg",        visible = expr_vis }
+  dlg:modify{ id = "expr_noise",      visible = expr_vis }
+  dlg:modify{ id = "expr_controlnet", visible = expr_vis }
+  dlg:modify{ id = "expr_seed",       visible = expr_vis }
+  dlg:modify{ id = "expr_palette",    visible = expr_vis }
+  dlg:modify{ id = "expr_cadence",    visible = expr_vis }
   dlg:modify{ id = "audio_random_seed", visible = adv }
   -- Prompt schedule visibility
   dlg:modify{ id = "audio_prompt_schedule", visible = adv }
@@ -643,13 +650,55 @@ local function build_tab_audio()
         label = "Frame (" .. dlg.data.audio_frame_duration .. "ms)" }
     end,
   }
+  dlg:combobox{
+    id = "audio_method",
+    label = "Method",
+    options = { "chain", "animatediff" },
+    option = "chain",
+    onchange = function()
+      local is_ad = dlg.data.audio_method == "animatediff"
+      dlg:modify{ id = "audio_freeinit", visible = is_ad }
+      dlg:modify{ id = "audio_freeinit_iters", visible = is_ad and dlg.data.audio_freeinit }
+    end,
+  }
+  dlg:check{
+    id = "audio_freeinit",
+    text = "FreeInit (1st chunk)",
+    selected = false,
+    visible = false,
+    onchange = function()
+      dlg:modify{ id = "audio_freeinit_iters",
+        visible = dlg.data.audio_method == "animatediff" and dlg.data.audio_freeinit }
+    end,
+  }
+  dlg:slider{
+    id = "audio_freeinit_iters",
+    label = "FreeInit Iters",
+    min = 1, max = 3, value = 2,
+    visible = false,
+  }
 
   -- Modulation
   dlg:separator{ text = "Modulation" }
   dlg:combobox{
     id = "audio_mod_preset",
     label = "Preset",
-    options = { "(custom)", "energetic", "ambient", "bass_driven" },
+    options = {
+      "(custom)",
+      -- Genre-specific
+      "electronic_pulse", "rock_energy", "hiphop_bounce",
+      "classical_flow", "ambient_drift",
+      -- Style-specific
+      "glitch_chaos", "smooth_morph", "rhythmic_pulse",
+      "atmospheric", "abstract_noise",
+      -- Complexity levels
+      "one_click_easy", "beginner_balanced",
+      "intermediate_full", "advanced_max",
+      -- Target-specific
+      "controlnet_reactive", "seed_scatter", "noise_sculpt",
+      -- Legacy
+      "energetic", "ambient", "bass_driven",
+    },
     option = "(custom)",
     onchange = function()
       local sel = dlg.data.audio_mod_preset
@@ -761,6 +810,34 @@ local function build_tab_audio()
     visible = false,
     hexpand = true,
   }
+  dlg:entry{
+    id = "expr_controlnet",
+    label = "cn_scale",
+    text = "",
+    visible = false,
+    hexpand = true,
+  }
+  dlg:entry{
+    id = "expr_seed",
+    label = "seed_off",
+    text = "",
+    visible = false,
+    hexpand = true,
+  }
+  dlg:entry{
+    id = "expr_palette",
+    label = "pal_shift",
+    text = "",
+    visible = false,
+    hexpand = true,
+  }
+  dlg:entry{
+    id = "expr_cadence",
+    label = "cadence",
+    text = "",
+    visible = false,
+    hexpand = true,
+  }
 
   dlg:check{
     id = "audio_random_seed",
@@ -833,6 +910,46 @@ local function build_tab_audio()
       dlg:modify{ id = "cancel_btn", enabled = true }
       PT.update_status("Generating audio animation...")
       PT.send(req)
+    end,
+  }
+
+  dlg:combobox{
+    id = "mp4_quality",
+    label = "MP4 Quality",
+    options = { "high", "web", "archive", "raw" },
+    option = "high",
+  }
+  dlg:combobox{
+    id = "mp4_scale",
+    label = "MP4 Scale",
+    options = { "4x", "2x", "1x", "8x" },
+    option = "4x",
+  }
+  dlg:button{
+    id = "export_mp4_btn",
+    text = "Export MP4",
+    enabled = false,
+    hexpand = true,
+    onclick = function()
+      local out_dir = PT.audio.last_output_dir or PT.anim.output_dir
+      if not out_dir then
+        app.alert("No audio animation output to export. Generate first.")
+        return
+      end
+      local d = dlg.data
+      local scale_str = d.mp4_scale or "4x"
+      local scale = tonumber(scale_str:match("(%d+)")) or 4
+      dlg:modify{ id = "export_mp4_btn", enabled = false }
+      PT.update_status("Exporting MP4...")
+      PT.send({
+        action       = "export_mp4",
+        output_dir   = out_dir,
+        audio_path   = d.audio_file or nil,
+        fps          = tonumber(d.audio_fps) or 24,
+        scale_factor = scale,
+        quality      = d.mp4_quality or "high",
+        prompt       = d.prompt or nil,
+      })
     end,
   }
 end

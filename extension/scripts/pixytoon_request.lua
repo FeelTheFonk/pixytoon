@@ -125,6 +125,9 @@ function PT.build_audio_reactive_request()
       elseif target == "controlnet_scale" then
         mn = mn * 2.0
         mx = mx * 2.0
+      elseif target == "frame_cadence" then
+        mn = 1.0 + mn * 7.0   -- 0%→1, 100%→8
+        mx = 1.0 + mx * 7.0
       end
       slots[#slots + 1] = {
         source  = d[prefix .. "source"],
@@ -142,8 +145,14 @@ function PT.build_audio_reactive_request()
   local expressions = nil
   if d.audio_use_expressions then
     expressions = {}
-    local expr_fields = { "expr_denoise", "expr_cfg", "expr_noise" }
-    local expr_targets = { "denoise_strength", "cfg_scale", "noise_amplitude" }
+    local expr_fields = {
+      "expr_denoise", "expr_cfg", "expr_noise",
+      "expr_controlnet", "expr_seed", "expr_palette", "expr_cadence",
+    }
+    local expr_targets = {
+      "denoise_strength", "cfg_scale", "noise_amplitude",
+      "controlnet_scale", "seed_offset", "palette_shift", "frame_cadence",
+    }
     for idx, field in ipairs(expr_fields) do
       local val = d[field] or ""
       if val ~= "" then
@@ -187,6 +196,12 @@ function PT.build_audio_reactive_request()
     end
   end
 
+  -- Animation method: "chain" or "animatediff_audio"
+  local method = d.audio_method or "chain"
+  if method == "animatediff" then method = "animatediff_audio" end
+  local enable_freeinit = (method == "animatediff_audio") and (d.audio_freeinit or false)
+  local freeinit_iters = enable_freeinit and (d.audio_freeinit_iters or 2) or 2
+
   local req = {
     action            = "generate_audio_reactive",
     audio_path        = d.audio_file,
@@ -196,6 +211,9 @@ function PT.build_audio_reactive_request()
     expressions       = expressions,
     modulation_preset = mod_preset,
     prompt_segments   = #prompt_segments > 0 and prompt_segments or nil,
+    method            = method,
+    enable_freeinit   = enable_freeinit,
+    freeinit_iterations = freeinit_iters,
     prompt            = d.prompt,
     negative_prompt   = d.negative_prompt,
     mode              = d.mode,

@@ -24,6 +24,8 @@ TARGET_RANGES: dict[str, tuple[float, float]] = {
     "noise_amplitude": (0.0, 1.0),
     "controlnet_scale": (0.0, 2.0),
     "seed_offset": (0.0, 1000.0),
+    "palette_shift": (0.0, 1.0),  # hue rotation amount (0 = no shift, 1 = full 360°)
+    "frame_cadence": (1.0, 8.0),  # frame skip cadence (1 = every frame, 4 = skip 3)
 }
 
 # Built-in modulation presets — organized by category
@@ -202,6 +204,46 @@ class ParameterSchedule:
         if 0 <= frame_idx < len(self.frame_params):
             return self.frame_params[frame_idx]
         return {}
+
+    def get_chunk_params(self, start: int, end: int) -> dict[str, float]:
+        """Average parameters over a chunk of frames [start, end).
+
+        Used by AnimateDiff audio mode to compute per-chunk averages
+        since AnimateDiff applies uniform parameters across a batch.
+        """
+        if start >= end or not self.frame_params:
+            return {}
+        # Clamp range
+        start = max(0, start)
+        end = min(end, len(self.frame_params))
+        if start >= end:
+            return {}
+
+        # Collect all keys present across chunk frames
+        all_keys: set[str] = set()
+        for i in range(start, end):
+            all_keys.update(self.frame_params[i].keys())
+
+        if not all_keys:
+            return {}
+
+        # Average each parameter over the chunk
+        result: dict[str, float] = {}
+        for key in all_keys:
+            values = [
+                self.frame_params[i][key]
+                for i in range(start, end)
+                if key in self.frame_params[i]
+            ]
+            if values:
+                avg = sum(values) / len(values)
+                # Clamp to valid range
+                if key in TARGET_RANGES:
+                    lo, hi = TARGET_RANGES[key]
+                    avg = max(lo, min(hi, avg))
+                result[key] = avg
+
+        return result
 
 
 class ExpressionEvaluator:

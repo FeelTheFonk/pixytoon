@@ -51,6 +51,43 @@ class TestParameterSchedule:
         assert schedule.get_params(-1) == {}
         assert schedule.get_params(5) == {}
 
+    def test_get_chunk_params_average(self):
+        """v0.7.3: get_chunk_params averages parameters over a frame range."""
+        schedule = ParameterSchedule(
+            total_frames=4,
+            frame_params=[
+                {"denoise_strength": 0.2, "cfg_scale": 4.0},
+                {"denoise_strength": 0.4, "cfg_scale": 6.0},
+                {"denoise_strength": 0.6, "cfg_scale": 8.0},
+                {"denoise_strength": 0.8, "cfg_scale": 10.0},
+            ],
+        )
+        chunk = schedule.get_chunk_params(0, 4)
+        assert chunk["denoise_strength"] == pytest.approx(0.5)
+        assert chunk["cfg_scale"] == pytest.approx(7.0)
+
+    def test_get_chunk_params_partial_range(self):
+        schedule = ParameterSchedule(
+            total_frames=4,
+            frame_params=[
+                {"denoise_strength": 0.2},
+                {"denoise_strength": 0.8},
+                {"denoise_strength": 0.4},
+                {"denoise_strength": 0.6},
+            ],
+        )
+        chunk = schedule.get_chunk_params(1, 3)
+        assert chunk["denoise_strength"] == pytest.approx(0.6)
+
+    def test_get_chunk_params_empty(self):
+        schedule = ParameterSchedule(total_frames=2, frame_params=[{}, {}])
+        assert schedule.get_chunk_params(0, 2) == {}
+
+    def test_get_chunk_params_out_of_range(self):
+        schedule = ParameterSchedule(total_frames=2, frame_params=[{"a": 1.0}, {"a": 2.0}])
+        assert schedule.get_chunk_params(5, 10) == {}
+        assert schedule.get_chunk_params(2, 1) == {}  # start >= end
+
 
 # ─── ExpressionEvaluator ───────────────────────────────────
 
@@ -284,6 +321,15 @@ class TestPresets:
             for slot in slots:
                 assert slot["target"] in TARGET_RANGES, \
                     f"Preset {name!r} has invalid target: {slot['target']}"
+
+    def test_new_targets_in_ranges(self):
+        """v0.7.3: palette_shift and frame_cadence must be in TARGET_RANGES."""
+        assert "palette_shift" in TARGET_RANGES
+        assert "frame_cadence" in TARGET_RANGES
+        # palette_shift: 0-1
+        assert TARGET_RANGES["palette_shift"] == (0.0, 1.0)
+        # frame_cadence: 1-8
+        assert TARGET_RANGES["frame_cadence"] == (1.0, 8.0)
 
 
 # ─── Validate Expressions ──────────────────────────────────
