@@ -50,6 +50,7 @@ function PT.save_settings()
     loop_seed_combo    = d.loop_seed_combo,
     loop_check         = d.loop_check,
     random_loop_check  = d.random_loop_check,
+    output_mode        = d.output_mode,
   }
   local ok, encoded = pcall(PT.json.encode, s)
   if not ok then return end
@@ -79,7 +80,7 @@ function PT.apply_settings(s)
   end
   -- Option (combobox) fields
   local opts = {
-    "mode", "output_size", "quantize_method", "dither", "palette_mode",
+    "mode", "output_size", "output_mode", "quantize_method", "dither", "palette_mode",
     "palette_name", "lora_name", "anim_method", "anim_seed_strategy", "preset_name",
     "loop_seed_combo", "live_mode",
   }
@@ -136,6 +137,18 @@ function PT.apply_settings(s)
   -- Sync loop seed combo visibility
   local show_loop_seed = (s.loop_check == true) or (s.random_loop_check == true)
   PT.dlg:modify{ id = "loop_seed_combo", visible = show_loop_seed }
+  -- Sync denoise visibility based on mode
+  if s.mode then
+    PT.dlg:modify{ id = "denoise", visible = (s.mode ~= "txt2img") }
+    -- Mode label hint
+    if s.mode == "inpaint" then
+      PT.dlg:modify{ id = "mode", label = "Mode (needs mask)" }
+    elseif s.mode == "img2img" or (s.mode and s.mode:find("controlnet_")) then
+      PT.dlg:modify{ id = "mode", label = "Mode (needs layer)" }
+    else
+      PT.dlg:modify{ id = "mode", label = "Mode" }
+    end
+  end
 end
 
 end

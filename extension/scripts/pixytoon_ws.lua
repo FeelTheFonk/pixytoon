@@ -21,8 +21,16 @@ function PT.start_heartbeat()
   PT.timers.heartbeat = Timer{
     interval = PT.cfg.HEARTBEAT_INTERVAL,
     ontick = function()
-      if PT.state.connected and PT.ws_handle
-          and not PT.state.generating and not PT.state.animating then
+      if not PT.state.connected or not PT.ws_handle then return end
+      -- Pong watchdog: detect unresponsive server
+      if PT.state.last_pong and (os.clock() - PT.state.last_pong) > PT.cfg.HEARTBEAT_INTERVAL * 3 then
+        PT.set_connected(false)
+        PT.update_status("Server unresponsive — disconnected")
+        if PT.ws_handle then pcall(function() PT.ws_handle:close() end); PT.ws_handle = nil end
+        PT.schedule_reconnect()
+        return
+      end
+      if not PT.state.generating and not PT.state.animating then
         pcall(function() PT.ws_handle:sendText('{"action":"ping"}') end)
       end
     end,
@@ -43,19 +51,21 @@ function PT.start_gen_timeout()
     ontick = function()
       PT.stop_gen_timeout()
       if PT.state.generating or PT.state.animating then
+        -- Send cancel to server so GPU stops working
+        pcall(function() PT.send({ action = "cancel" }) end)
         PT.state.generating = false
         PT.state.animating = false
+        PT.state.cancel_pending = false
+        PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
         PT.loop.mode = false
         PT.loop.random_mode = false
         PT.timers.loop = PT.stop_timer(PT.timers.loop)
         PT.state.gen_step_start = nil
+        PT.reset_sequence()
         if PT.live.mode then PT.stop_live_mode() end
         if PT.dlg then
           PT.update_status("Timed out — no response from server")
-          PT.dlg:modify{ id = "generate_btn", text = "GENERATE", enabled = not PT.live.mode }
-          PT.dlg:modify{ id = "animate_btn", enabled = not PT.live.mode }
-          PT.dlg:modify{ id = "live_btn", enabled = not PT.live.mode }
-          PT.dlg:modify{ id = "cancel_btn", enabled = false }
+          PT.reset_ui_buttons()
         end
       end
     end,
@@ -67,7 +77,13 @@ end
 
 function PT.set_connected(is_connected)
   PT.state.connected = is_connected
-  if is_connected then PT.start_heartbeat() else PT.stop_heartbeat() end
+  if is_connected then
+    PT.start_heartbeat()
+    PT.state.last_pong = os.clock()
+    PT.reconnect.attempts = 0
+  else
+    PT.stop_heartbeat()
+  end
   if not PT.dlg then return end
 
   if is_connected then
@@ -88,12 +104,22 @@ function PT.set_connected(is_connected)
     if PT.state.animating then PT.state.animating = false end
     PT.stop_live_timer()
     PT.stop_gen_timeout()
+    PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
     PT.live.mode = false
     PT.live.request_inflight = false
     PT.loop.mode = false
     PT.loop.random_mode = false
+    PT.loop.counter = 0
     PT.timers.loop = PT.stop_timer(PT.timers.loop)
     PT.state.cancel_pending = false
+    PT.state.last_pong = nil
+    -- Reset animation state (prevent orphan layer references)
+    PT.anim.layer = nil
+    PT.anim.start_frame = 0
+    PT.anim.frame_count = 0
+    PT.anim.base_seed = 0
+    -- Reset sequence state
+    PT.reset_sequence()
   end
 end
 
@@ -104,6 +130,7 @@ function PT.stop_connect_timer()
 end
 
 function PT.connect()
+  PT.reconnect.manual_disconnect = false
   if PT.ws_handle then pcall(function() PT.ws_handle:close() end); PT.ws_handle = nil end
   PT.update_status("Connecting...")
   PT.ws_handle = WebSocket{
@@ -111,16 +138,13 @@ function PT.connect()
     onreceive = function(msg_type, data)
       if msg_type == WebSocketMessageType.OPEN then
         PT.stop_connect_timer()
+        PT.timers.reconnect = PT.stop_timer(PT.timers.reconnect)
+        PT.reconnect.attempts = 0
         PT.set_connected(true)
         PT.update_status("Connected")
         pcall(function() PT.ws_handle:sendText(PT.json.encode({ action = "ping" })) end)
-        -- Auto re-request resources on reconnect
-        if PT.res.requested then
-          PT.send({ action = "list_loras" })
-          PT.send({ action = "list_palettes" })
-          PT.send({ action = "list_embeddings" })
-          PT.send({ action = "list_presets" })
-        end
+        -- Always re-request resources on (re)connect
+        PT.request_resources()
         return
       end
       if msg_type == WebSocketMessageType.CLOSE then
@@ -128,6 +152,10 @@ function PT.connect()
         PT.res.requested = false
         PT.update_status("Disconnected (server closed)")
         PT.ws_handle = nil
+        -- Auto-reconnect if not manual disconnect
+        if not PT.reconnect.manual_disconnect then
+          PT.schedule_reconnect()
+        end
         return
       end
       if msg_type == WebSocketMessageType.TEXT then
@@ -152,7 +180,11 @@ function PT.connect()
       PT.stop_connect_timer()
       if not PT.state.connected then
         if PT.ws_handle then pcall(function() PT.ws_handle:close() end); PT.ws_handle = nil end
-        PT.update_status("Connection failed - is the server running?")
+        if not PT.reconnect.manual_disconnect then
+          PT.schedule_reconnect()
+        else
+          PT.update_status("Connection failed - is the server running?")
+        end
       end
     end,
   }
@@ -160,14 +192,12 @@ function PT.connect()
 end
 
 function PT.disconnect()
+  PT.reconnect.manual_disconnect = true
+  PT.timers.reconnect = PT.stop_timer(PT.timers.reconnect)
   PT.stop_connect_timer()
   if PT.ws_handle then pcall(function() PT.ws_handle:close() end); PT.ws_handle = nil end
   PT.set_connected(false)
   PT.res.requested = false
-  PT.anim.layer = nil
-  PT.anim.start_frame = 0
-  PT.anim.frame_count = 0
-  PT.anim.base_seed = 0
   PT.state.generating = false
   PT.state.animating = false
   PT.loop.mode = false
@@ -191,6 +221,41 @@ function PT.disconnect()
   PT.live.preview_layer = nil
   PT.live.preview_sprite = nil
   PT.update_status("Disconnected")
+end
+
+-- ─── Auto-Reconnect ───────────────────────────────────────
+
+function PT.schedule_reconnect()
+  PT.timers.reconnect = PT.stop_timer(PT.timers.reconnect)
+  if PT.reconnect.manual_disconnect then return end
+  PT.reconnect.attempts = PT.reconnect.attempts + 1
+  local delay = math.min(
+    PT.cfg.RECONNECT_BASE_DELAY * (2 ^ (PT.reconnect.attempts - 1)),
+    PT.cfg.RECONNECT_MAX_DELAY
+  )
+  PT.update_status("Reconnecting in " .. string.format("%.0f", delay) .. "s (#" .. PT.reconnect.attempts .. ")...")
+  PT.timers.reconnect = Timer{
+    interval = delay,
+    ontick = function()
+      PT.timers.reconnect = PT.stop_timer(PT.timers.reconnect)
+      if PT.state.connected or PT.reconnect.manual_disconnect then return end
+      PT.update_status("Reconnecting (#" .. PT.reconnect.attempts .. ")...")
+      PT.connect()
+    end,
+  }
+  PT.timers.reconnect:start()
+end
+
+-- ─── UI Button Reset (factored) ──────────────────────────
+
+function PT.reset_ui_buttons(opts)
+  if not PT.dlg then return end
+  opts = opts or {}
+  local gen_enabled = opts.enabled ~= false and not PT.live.mode
+  PT.dlg:modify{ id = "generate_btn", text = "GENERATE", enabled = gen_enabled }
+  PT.dlg:modify{ id = "animate_btn", enabled = gen_enabled }
+  PT.dlg:modify{ id = "live_btn", enabled = gen_enabled }
+  PT.dlg:modify{ id = "cancel_btn", enabled = opts.cancel or false }
 end
 
 -- ─── Send ───────────────────────────────────────────────────

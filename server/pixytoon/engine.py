@@ -458,6 +458,9 @@ class DiffusionEngine:
                 # ── Post-process ──────────────────────────────────────
                 image = postprocess_apply(image, req.post_process)
 
+                if self._cancel_event.is_set():
+                    raise GenerationCancelled("Cancelled during post-processing")
+
                 # ── Encode result ─────────────────────────────────────
                 b64_image = encode_image_b64(image)
                 elapsed_ms = int((time.perf_counter() - t0) * 1000)
@@ -855,6 +858,9 @@ class DiffusionEngine:
                 # Post-process
                 image = postprocess_apply(image, req.post_process)
 
+                if self._cancel_event.is_set():
+                    raise GenerationCancelled("Animation cancelled during post-processing")
+
                 # Encode
                 b64_image = encode_image_b64(image)
                 w, h = image.size
@@ -979,6 +985,8 @@ class DiffusionEngine:
         # Post-process and encode each frame
         frames: list[AnimationFrameResponse] = []
         for frame_idx, pil_img in enumerate(pil_frames):
+            if self._cancel_event.is_set():
+                raise GenerationCancelled("AnimateDiff cancelled during post-processing")
             t0_frame = time.perf_counter()
             image = postprocess_apply(pil_img, req.post_process)
             b64_image = encode_image_b64(image)

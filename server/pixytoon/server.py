@@ -270,8 +270,10 @@ async def _handle(websocket: WebSocket, req: Request, ws_id: int) -> None:
         elif req.action == Action.CANCEL:
             if ws_id in _generating and _generating[ws_id].is_set():
                 engine.cancel()
-                # Don't send response here — the GenerationCancelled exception
-                # handler will send CANCELLED when the generation actually stops.
+                # ACK immediately so client knows cancel was received.
+                # The GenerationCancelled exception handler will still send
+                # the final CANCELLED error when the generation actually stops.
+                await _send(websocket, ProgressResponse(step=0, total=0))
             else:
                 await _send(websocket, PongResponse())  # No-op — nothing to cancel
 

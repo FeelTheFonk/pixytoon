@@ -134,6 +134,19 @@ local function build_tab_generate()
       "controlnet_scribble", "controlnet_lineart",
     },
     option = "txt2img",
+    onchange = function()
+      local m = dlg.data.mode
+      local is_txt = (m == "txt2img")
+      dlg:modify{ id = "denoise", visible = not is_txt }
+      -- Show hint about required inputs
+      if m == "inpaint" then
+        dlg:modify{ id = "mode", label = "Mode (needs mask)" }
+      elseif m == "img2img" or m:find("controlnet_") then
+        dlg:modify{ id = "mode", label = "Mode (needs layer)" }
+      else
+        dlg:modify{ id = "mode", label = "Mode" }
+      end
+    end,
   }
 
   dlg:combobox{
@@ -217,6 +230,13 @@ local function build_tab_generate()
       "64x64", "48x48", "32x32",
     },
     option = "512x512",
+  }
+
+  dlg:combobox{
+    id = "output_mode",
+    label = "Output",
+    options = { "layer", "sequence" },
+    option = "layer",
   }
 
   dlg:entry{
@@ -525,8 +545,12 @@ local function build_actions_panel()
     hexpand = true,
     onclick = function()
       if PT.state.generating or PT.state.animating then return end
-      -- Initialize loop state
+      -- Reset sequence for non-loop single gen (new sequence each click)
       local is_loop = dlg.data.loop_check or dlg.data.random_loop_check
+      if not is_loop then
+        PT.finalize_sequence()
+      end
+      -- Initialize loop state
       if is_loop then
         PT.loop.mode = true
         PT.loop.counter = 0
@@ -585,12 +609,28 @@ local function build_actions_panel()
         PT.state.cancel_pending = true
         dlg:modify{ id = "generate_btn", enabled = false }
         PT.update_status("Cancelling...")
+        -- Safety timer: force UI unlock if server never responds
+        PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
+        PT.timers.cancel_safety = Timer{
+          interval = PT.cfg.CANCEL_TIMEOUT,
+          ontick = function()
+            PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
+            if PT.state.cancel_pending then
+              PT.state.cancel_pending = false
+              PT.state.generating = false
+              PT.state.animating = false
+              PT.stop_gen_timeout()
+              PT.finalize_sequence()
+              PT.update_status("Cancel timeout — UI reset")
+              PT.reset_ui_buttons()
+            end
+          end,
+        }
+        PT.timers.cancel_safety:start()
       else
         -- Cancel random loop even if no generation is in flight yet
-        dlg:modify{ id = "generate_btn", text = "GENERATE", enabled = true }
-        dlg:modify{ id = "animate_btn", enabled = true }
-        dlg:modify{ id = "live_btn", enabled = true }
-        dlg:modify{ id = "cancel_btn", enabled = false }
+        PT.finalize_sequence()
+        PT.reset_ui_buttons()
         PT.update_status("Cancelled")
       end
     end,

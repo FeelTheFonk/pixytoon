@@ -39,6 +39,115 @@ function PT.import_result(resp)
   end
 end
 
+-- ─── Sequence Mode: place each result as a new frame ───────
+
+function PT.reset_sequence()
+  PT.seq.layer = nil
+  PT.seq.start_frame = 0
+  PT.seq.frame_count = 0
+  PT.seq.active = false
+end
+
+function PT.finalize_sequence()
+  if not PT.seq.active or PT.seq.frame_count == 0 then
+    PT.reset_sequence()
+    return
+  end
+  local spr = app.sprite
+  if spr and PT.seq.frame_count > 0 then
+    pcall(function()
+      app.transaction("PixyToon Sequence Finalize", function()
+        local dur = 0.1  -- 100ms default
+        for i = 0, PT.seq.frame_count - 1 do
+          local fn = PT.seq.start_frame + i
+          if spr.frames[fn] then spr.frames[fn].duration = dur end
+        end
+      end)
+    end)
+  end
+  PT.reset_sequence()
+end
+
+function PT.import_result_as_frame(resp)
+  local img_data = PT.base64_decode(resp.image)
+  local tmp = PT.make_tmp_path("seq")
+
+  local ok, err = pcall(function()
+    local f = io.open(tmp, "wb")
+    if not f then error("Failed to create temp file") end
+    f:write(img_data)
+    f:close()
+
+    local spr = app.sprite
+    local created_sprite = false
+    if spr == nil then
+      spr = Sprite(resp.width or 512, resp.height or 512, ColorMode.RGB)
+      created_sprite = true
+    end
+
+    local img = Image{ fromFile = tmp }
+    os.remove(tmp)
+    tmp = nil
+
+    app.transaction("PixyToon Seq Frame " .. (PT.seq.frame_count + 1), function()
+      -- First frame in sequence: create layer and anchor
+      if PT.seq.layer == nil then
+        PT.seq.layer = spr:newLayer()
+        PT.seq.layer.name = "PixyToon Seq #" .. tostring(resp.seed or "?")
+        PT.seq.active = true
+        PT.seq.frame_count = 0
+        if created_sprite then
+          PT.seq.start_frame = 1
+        else
+          PT.seq.start_frame = #spr.frames + 1
+        end
+      end
+
+      -- Determine frame position
+      local frame_num
+      if PT.seq.frame_count == 0 and created_sprite then
+        frame_num = 1
+      elseif PT.seq.frame_count == 0 and not created_sprite then
+        -- First result: use current frame position
+        local target_pos = PT.seq.start_frame
+        target_pos = math.min(target_pos, #spr.frames + 1)
+        local new_frame = spr:newEmptyFrame(target_pos)
+        frame_num = new_frame.frameNumber
+      else
+        local target_pos = PT.seq.start_frame + PT.seq.frame_count
+        target_pos = math.min(target_pos, #spr.frames + 1)
+        local new_frame = spr:newEmptyFrame(target_pos)
+        frame_num = new_frame.frameNumber
+      end
+
+      -- Validate layer still exists
+      local layer_valid = false
+      if img and PT.seq.layer and spr.frames[frame_num] then
+        for _, layer in ipairs(spr.layers) do
+          if layer == PT.seq.layer then layer_valid = true; break end
+        end
+      end
+      if layer_valid then
+        spr:newCel(PT.seq.layer, spr.frames[frame_num], img, Point(0, 0))
+      end
+    end)
+
+    PT.seq.frame_count = PT.seq.frame_count + 1
+    app.refresh()
+
+    if PT.dlg then
+      PT.update_status("Seq frame " .. PT.seq.frame_count
+        .. " (seed=" .. tostring(resp.seed or "?") .. ", " .. tostring(resp.time_ms or "?") .. "ms)")
+    end
+  end)
+  if not ok then
+    if tmp then pcall(os.remove, tmp) end
+    PT.update_status("Import error: " .. tostring(err))
+  end
+end
+
+-- ─── Animation Frame Import ──────────────────────────────
+
 function PT.import_animation_frame(resp)
   if not PT.state.animating then return end
   if resp.frame_index ~= 0 and PT.anim.layer == nil then return end

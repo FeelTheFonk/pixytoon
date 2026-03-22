@@ -182,6 +182,13 @@ function PT.start_live_timer()
     ontick = function()
       if not PT.live.mode then return end
 
+      -- Disconnect guard: auto-stop live if connection lost
+      if not PT.state.connected then
+        pcall(function() PT.send({ action = "realtime_stop" }) end)
+        PT.stop_live_mode()
+        return
+      end
+
       -- Inflight timeout guard
       if PT.live.request_inflight and PT.live.inflight_time then
         if (os.clock() - PT.live.inflight_time) > PT.cfg.LIVE_INFLIGHT_TIMEOUT then

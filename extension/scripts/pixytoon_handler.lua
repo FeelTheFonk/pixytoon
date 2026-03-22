@@ -42,21 +42,23 @@ handlers.result = function(resp)
   PT.state.gen_step_start = nil
   PT.stop_gen_timeout()
   PT.state.cancel_pending = false
+  PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
 
   if not resp.image then
     PT.loop.mode = false
     PT.loop.random_mode = false
     PT.update_status("Error: missing image in result response")
-    if PT.dlg then
-      PT.dlg:modify{ id = "generate_btn", text = "GENERATE", enabled = true }
-      PT.dlg:modify{ id = "animate_btn", enabled = true }
-      PT.dlg:modify{ id = "live_btn", enabled = true }
-      PT.dlg:modify{ id = "cancel_btn", enabled = false }
-    end
+    PT.reset_ui_buttons()
     return
   end
   if not resp.seed then resp.seed = 0 end
-  PT.import_result(resp)
+
+  -- Dispatch based on output mode: layer (default) or sequence (timeline)
+  if PT.dlg and PT.dlg.data.output_mode == "sequence" then
+    PT.import_result_as_frame(resp)
+  else
+    PT.import_result(resp)
+  end
 
   -- Loop mode: schedule next generation
   if PT.loop.mode and PT.dlg then
@@ -90,12 +92,8 @@ handlers.result = function(resp)
         if not PT.attach_source_image(req) then
           PT.loop.mode = false
           PT.loop.random_mode = false
-          if PT.dlg then
-            PT.dlg:modify{ id = "generate_btn", text = "GENERATE", enabled = true }
-            PT.dlg:modify{ id = "animate_btn", enabled = true }
-            PT.dlg:modify{ id = "live_btn", enabled = true }
-            PT.dlg:modify{ id = "cancel_btn", enabled = false }
-          end
+          PT.finalize_sequence()
+          PT.reset_ui_buttons()
           PT.update_status("Loop stopped (no source image)")
           return
         end
@@ -110,11 +108,10 @@ handlers.result = function(resp)
     }
     PT.timers.loop:start()
   elseif PT.dlg then
+    -- Not looping: finalize any active sequence
+    PT.finalize_sequence()
     PT.update_status("Done (" .. tostring(resp.time_ms or "?") .. "ms, seed=" .. tostring(resp.seed or "?") .. ")")
-    PT.dlg:modify{ id = "generate_btn", text = "GENERATE", enabled = true }
-    PT.dlg:modify{ id = "animate_btn", enabled = true }
-    PT.dlg:modify{ id = "live_btn", enabled = true }
-    PT.dlg:modify{ id = "cancel_btn", enabled = false }
+    PT.reset_ui_buttons()
   end
 end
 
@@ -136,6 +133,8 @@ handlers.animation_complete = function(resp)
   PT.state.animating = false
   PT.state.gen_step_start = nil
   PT.stop_gen_timeout()
+  PT.state.cancel_pending = false
+  PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
 
   -- Validate frame count
   if resp.total_frames and PT.anim.frame_count ~= resp.total_frames then
@@ -147,10 +146,7 @@ handlers.animation_complete = function(resp)
     if resp.tag_name and resp.tag_name ~= "" then tag_str = ", tag=" .. resp.tag_name end
     PT.update_status("Animation done (" .. tostring(resp.total_frames or "?") .. " frames, "
       .. tostring(resp.total_time_ms or "?") .. "ms" .. tag_str .. ")")
-    PT.dlg:modify{ id = "generate_btn", text = "GENERATE", enabled = true }
-    PT.dlg:modify{ id = "animate_btn", enabled = true }
-    PT.dlg:modify{ id = "live_btn", enabled = true }
-    PT.dlg:modify{ id = "cancel_btn", enabled = false }
+    PT.reset_ui_buttons()
   end
 
   local spr = app.sprite
@@ -187,6 +183,8 @@ handlers.error = function(resp)
   PT.timers.loop = PT.stop_timer(PT.timers.loop)
   PT.state.gen_step_start = nil
   PT.stop_gen_timeout()
+  PT.state.cancel_pending = false
+  PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
 
   -- Finalize partial animation on error
   if was_animating and PT.anim.frame_count > 0 then
@@ -204,19 +202,18 @@ handlers.error = function(resp)
     PT.anim.base_seed = 0
   end
 
+  -- Finalize partial sequence on error
+  PT.finalize_sequence()
+
   PT.live.request_inflight = false
   PT.live.inflight_time = nil
-  PT.state.cancel_pending = false
   -- If live mode was active, stop it cleanly before resetting UI
   if PT.live.mode then
     PT.stop_live_mode()
   end
   if PT.dlg then
     PT.update_status("Error: " .. tostring(resp.message or "Unknown"))
-    PT.dlg:modify{ id = "generate_btn", text = "GENERATE", enabled = not PT.live.mode }
-    PT.dlg:modify{ id = "animate_btn", enabled = not PT.live.mode }
-    PT.dlg:modify{ id = "live_btn", enabled = not PT.live.mode }
-    PT.dlg:modify{ id = "cancel_btn", enabled = false }
+    PT.reset_ui_buttons()
   end
   if resp.code ~= "CANCELLED" then
     app.alert("PixyToon: " .. tostring(resp.message or "Unknown error"))
@@ -322,6 +319,7 @@ end
 -- ─── Pong / Misc ────────────────────────────────────────────
 
 handlers.pong = function(resp)
+  PT.state.last_pong = os.clock()
   if not PT.state.connected then PT.set_connected(true) end
   if not PT.res.requested then PT.request_resources() end
   PT.update_status("Connected")
@@ -344,12 +342,8 @@ handlers.prompt_result = function(resp)
     if not PT.attach_source_image(req) then
       PT.loop.mode = false
       PT.loop.random_mode = false
-      if PT.dlg then
-        PT.dlg:modify{ id = "generate_btn", text = "GENERATE", enabled = true }
-        PT.dlg:modify{ id = "animate_btn", enabled = true }
-        PT.dlg:modify{ id = "live_btn", enabled = true }
-        PT.dlg:modify{ id = "cancel_btn", enabled = false }
-      end
+      PT.finalize_sequence()
+      PT.reset_ui_buttons()
       PT.update_status("Random loop stopped (no source image)")
       return
     end

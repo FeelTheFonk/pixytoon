@@ -12,12 +12,15 @@ PT.cfg = {
   CONNECT_TIMEOUT         = 5.0,
   HEARTBEAT_INTERVAL      = 30.0,
   GEN_TIMEOUT             = 300,
+  CANCEL_TIMEOUT          = 30,
   LIVE_WATCHDOG_INTERVAL  = 0.5,
   LIVE_STROKE_DEBOUNCE    = 0.3,
   LIVE_INFLIGHT_TIMEOUT   = 10.0,
   LIVE_SLIDER_DEBOUNCE    = 0.1,
   LOOP_DELAY              = 0.1,
   DIRTY_STEP_DIVISOR      = 32,
+  RECONNECT_BASE_DELAY    = 2.0,
+  RECONNECT_MAX_DELAY     = 30.0,
 }
 
 -- ─── Mutable State ──────────────────────────────────────────
@@ -35,6 +38,7 @@ PT.state = {
   gen_step_start = nil,
   file_counter   = 0,
   session_id     = tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999)),
+  last_pong      = nil,
 }
 
 PT.anim = {
@@ -42,6 +46,13 @@ PT.anim = {
   start_frame = 0,
   frame_count = 0,
   base_seed   = 0,
+}
+
+PT.seq = {
+  layer       = nil,
+  start_frame = 0,
+  frame_count = 0,
+  active      = false,
 }
 
 PT.live = {
@@ -82,10 +93,17 @@ PT.res = {
 }
 
 PT.timers = {
-  connect     = nil,
-  heartbeat   = nil,
-  gen_timeout = nil,
-  loop        = nil,
+  connect        = nil,
+  heartbeat      = nil,
+  gen_timeout    = nil,
+  loop           = nil,
+  cancel_safety  = nil,
+  reconnect      = nil,
+}
+
+PT.reconnect = {
+  attempts = 0,
+  manual_disconnect = false,
 }
 
 end
