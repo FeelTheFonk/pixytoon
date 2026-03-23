@@ -88,6 +88,19 @@ function PT.save_settings()
     mod3_min = d.mod3_min, mod3_max = d.mod3_max, mod3_attack = d.mod3_attack, mod3_release = d.mod3_release,
     mod4_enable = d.mod4_enable, mod4_source = d.mod4_source, mod4_target = d.mod4_target,
     mod4_min = d.mod4_min, mod4_max = d.mod4_max, mod4_attack = d.mod4_attack, mod4_release = d.mod4_release,
+    -- Audio method & FreeInit
+    audio_method         = d.audio_method,
+    audio_freeinit       = d.audio_freeinit,
+    audio_freeinit_iters = d.audio_freeinit_iters,
+    -- Audio advanced sub-fields
+    audio_random_seed    = d.audio_random_seed,
+    audio_prompt_schedule = d.audio_prompt_schedule,
+    ps1_time = d.ps1_time, ps1_prompt = d.ps1_prompt,
+    ps2_time = d.ps2_time, ps2_prompt = d.ps2_prompt,
+    ps3_time = d.ps3_time, ps3_prompt = d.ps3_prompt,
+    -- MP4 export
+    mp4_quality          = d.mp4_quality,
+    mp4_scale            = d.mp4_scale,
   }
   local ok, encoded = pcall(PT.json.encode, s)
   if not ok then return end
@@ -126,7 +139,9 @@ function PT.apply_settings(s)
   local texts = { "server_url", "prompt", "negative_prompt", "seed", "fixed_subject", "palette_custom_colors", "anim_tag",
                    "expr_denoise", "expr_cfg", "expr_noise", "expr_controlnet", "expr_seed",
                    "expr_palette", "expr_cadence", "expr_motion_x", "expr_motion_y",
-                   "expr_motion_zoom", "expr_motion_rot" }
+                   "expr_motion_zoom", "expr_motion_rot",
+                   "ps1_time", "ps1_prompt", "ps2_time", "ps2_prompt",
+                   "ps3_time", "ps3_prompt" }
   for _, id in ipairs(texts) do
     if s[id] ~= nil then PT.dlg:modify{ id = id, text = s[id] } end
   end
@@ -135,7 +150,8 @@ function PT.apply_settings(s)
     "mode", "output_size", "output_mode", "quantize_method", "dither", "palette_mode",
     "palette_name", "lora_name", "anim_method", "anim_seed_strategy", "preset_name",
     "loop_seed_combo", "live_mode",
-    "audio_fps", "audio_mod_preset",
+    "audio_fps", "audio_mod_preset", "audio_method",
+    "mp4_quality", "mp4_scale",
     "mod1_source", "mod1_target", "mod2_source", "mod2_target",
     "mod3_source", "mod3_target", "mod4_source", "mod4_target",
   }
@@ -150,7 +166,8 @@ function PT.apply_settings(s)
     "live_strength", "live_steps", "live_cfg", "live_opacity",
     "randomness",
     "audio_steps", "audio_cfg", "audio_denoise",
-    "audio_frame_duration", "audio_max_frames", "mod_slot_count",
+    "audio_frame_duration", "audio_max_frames", "audio_freeinit_iters",
+    "mod_slot_count",
     "mod1_min", "mod1_max", "mod1_attack", "mod1_release",
     "mod2_min", "mod2_max", "mod2_attack", "mod2_release",
     "mod3_min", "mod3_max", "mod3_attack", "mod3_release",
@@ -163,6 +180,7 @@ function PT.apply_settings(s)
   local bools = { "use_neg_ti", "pixelate", "remove_bg", "lock_subject", "anim_freeinit",
                    "randomize_before", "loop_check", "random_loop_check", "save_output",
                    "audio_stems_enable", "audio_advanced", "audio_use_expressions",
+                   "audio_freeinit", "audio_random_seed", "audio_prompt_schedule",
                    "mod1_enable", "mod2_enable", "mod3_enable", "mod4_enable" }
   for _, id in ipairs(bools) do
     if s[id] ~= nil then PT.dlg:modify{ id = id, selected = s[id] } end
@@ -182,6 +200,13 @@ function PT.apply_settings(s)
   PT.dlg:modify{ id = "live_strength", label = string.format("Strength (%.2f)", d.live_strength / 100.0) }
   PT.dlg:modify{ id = "live_cfg", label = string.format("CFG (%.1f)", d.live_cfg / 10.0) }
   PT.dlg:modify{ id = "live_opacity", label = string.format("Preview (%d%%)", d.live_opacity) }
+  PT.dlg:modify{ id = "steps", label = "Steps (" .. d.steps .. ")" }
+  PT.dlg:modify{ id = "clip_skip", label = "CLIP Skip (" .. d.clip_skip .. ")" }
+  PT.dlg:modify{ id = "anim_steps", label = "Steps (" .. d.anim_steps .. ")" }
+  PT.dlg:modify{ id = "anim_frames", label = "Frames (" .. d.anim_frames .. ")" }
+  PT.dlg:modify{ id = "anim_duration", label = "Duration (" .. d.anim_duration .. "ms)" }
+  PT.dlg:modify{ id = "audio_steps", label = "Steps (" .. d.audio_steps .. ")" }
+  PT.dlg:modify{ id = "mod_slot_count", label = "Slots (" .. d.mod_slot_count .. ")" }
   -- Sync visibility for conditional fields
   if s.use_neg_ti ~= nil then
     PT.dlg:modify{ id = "neg_ti_weight", visible = s.use_neg_ti }
@@ -200,6 +225,12 @@ function PT.apply_settings(s)
     local ad = (s.anim_method == "animatediff")
     PT.dlg:modify{ id = "anim_freeinit", visible = ad }
     PT.dlg:modify{ id = "anim_freeinit_iters", visible = ad }
+  end
+  -- Sync audio method → audio freeinit visibility
+  if s.audio_method ~= nil then
+    local ad = (s.audio_method == "animatediff")
+    PT.dlg:modify{ id = "audio_freeinit", visible = ad }
+    PT.dlg:modify{ id = "audio_freeinit_iters", visible = ad and (s.audio_freeinit == true) }
   end
   -- Sync loop seed combo visibility
   local show_loop_seed = (s.loop_check == true) or (s.random_loop_check == true)
@@ -227,6 +258,15 @@ function PT.apply_settings(s)
     }
     for _, eid in ipairs(expr_ids) do
       PT.dlg:modify{ id = eid, visible = expr_vis }
+    end
+    -- Sync audio_random_seed visibility (advanced only)
+    PT.dlg:modify{ id = "audio_random_seed", visible = adv }
+    -- Sync audio_prompt_schedule + sub-fields visibility
+    PT.dlg:modify{ id = "audio_prompt_schedule", visible = adv }
+    local ps_vis = adv and PT.dlg.data.audio_prompt_schedule
+    for i = 1, 3 do
+      PT.dlg:modify{ id = "ps" .. i .. "_time", visible = ps_vis }
+      PT.dlg:modify{ id = "ps" .. i .. "_prompt", visible = ps_vis }
     end
   end
   -- Sync max frames label

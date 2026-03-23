@@ -47,9 +47,6 @@ sddj.pid
 # Output directory (user-generated content)
 output/
 
-# Screenshots (user captures)
-/menu*.png
-
 # Test output
 test_output/
 

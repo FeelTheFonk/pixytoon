@@ -101,8 +101,8 @@ def _remove_pid() -> None:
     """Remove PID file on clean shutdown."""
     try:
         _PID_FILE.unlink(missing_ok=True)
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug("PID cleanup failed: %s", e)
 
 
 # Register atexit as a safety net (covers non-fatal exits)
@@ -741,7 +741,6 @@ async def _handle_analyze_audio(websocket: WebSocket, req: Request) -> None:
             code="INVALID_REQUEST", message="audio_path required"))
         return
     # Validate path security
-    import os
     real_path = os.path.realpath(audio_req.audio_path)
     if not os.path.isfile(real_path):
         await _send(websocket, ErrorResponse(
@@ -887,7 +886,6 @@ async def _handle_generate_audio_reactive(
         return
 
     # Validate audio path (same checks as analyze_audio)
-    import os
     real_path = os.path.realpath(audio_req.audio_path)
     if not os.path.isfile(real_path):
         await _send(websocket, ErrorResponse(
@@ -1096,16 +1094,23 @@ async def _cleanup_realtime(ws_id: int) -> None:
     """Stop realtime mode if owned by ws_id. Safe to call multiple times."""
     global _realtime_owner, _realtime_ws, _realtime_timeout_task
 
+    task_to_cancel = None
     async with _realtime_lock:
         if _realtime_owner != ws_id:
             return
 
-        if _realtime_timeout_task is not None:
-            _realtime_timeout_task.cancel()
-            _realtime_timeout_task = None
-
+        task_to_cancel = _realtime_timeout_task
+        _realtime_timeout_task = None
         _realtime_owner = None
         _realtime_ws = None
+
+    # Cancel timeout task outside the lock (task itself acquires the lock)
+    if task_to_cancel is not None:
+        task_to_cancel.cancel()
+        try:
+            await task_to_cancel
+        except (asyncio.CancelledError, Exception):
+            pass
 
     loop = asyncio.get_running_loop()
     try:
@@ -1124,11 +1129,10 @@ def _reset_realtime_timeout() -> None:
         _realtime_timeout_task.cancel()
 
     async def _auto_stop():
-        global _realtime_timeout_task
+        global _realtime_timeout_task, _realtime_owner, _realtime_ws
         await asyncio.sleep(settings.realtime_timeout)
-        _realtime_timeout_task = None
-        global _realtime_owner, _realtime_ws
         async with _realtime_lock:
+            _realtime_timeout_task = None
             if _realtime_owner is None:
                 return
             log.info("Realtime auto-stop: no frame for %.0fs", settings.realtime_timeout)
@@ -1138,8 +1142,8 @@ def _reset_realtime_timeout() -> None:
         loop = asyncio.get_running_loop()
         try:
             await loop.run_in_executor(None, engine.stop_realtime)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Realtime auto-stop cleanup error: %s", e)
         # Notify client that realtime was auto-stopped
         if ws is not None:
             try:
@@ -1147,7 +1151,7 @@ def _reset_realtime_timeout() -> None:
                     message="Real-time mode auto-stopped (timeout)",
                 ))
             except Exception:
-                pass
+                pass  # Client already disconnected
 
     try:
         loop = asyncio.get_running_loop()

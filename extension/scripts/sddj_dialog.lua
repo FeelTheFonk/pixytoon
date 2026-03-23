@@ -289,8 +289,11 @@ local function build_tab_generate()
 
   dlg:slider{
     id = "steps",
-    label = "Steps",
+    label = "Steps (8)",
     min = 1, max = 100, value = 8,
+    onchange = function()
+      dlg:modify{ id = "steps", label = "Steps (" .. dlg.data.steps .. ")" }
+    end,
   }
 
   dlg:slider{
@@ -302,8 +305,11 @@ local function build_tab_generate()
 
   dlg:slider{
     id = "clip_skip",
-    label = "CLIP Skip",
+    label = "CLIP Skip (2)",
     min = 1, max = 12, value = 2,
+    onchange = function()
+      dlg:modify{ id = "clip_skip", label = "CLIP Skip (" .. dlg.data.clip_skip .. ")" }
+    end,
   }
 end
 
@@ -408,8 +414,11 @@ local function build_tab_animation()
 
   dlg:slider{
     id = "anim_steps",
-    label = "Steps",
+    label = "Steps (8)",
     min = 1, max = 50, value = 8,
+    onchange = function()
+      dlg:modify{ id = "anim_steps", label = "Steps (" .. dlg.data.anim_steps .. ")" }
+    end,
   }
   dlg:slider{
     id = "anim_cfg",
@@ -420,14 +429,20 @@ local function build_tab_animation()
 
   dlg:slider{
     id = "anim_frames",
-    label = "Frames",
+    label = "Frames (8)",
     min = 2, max = 120, value = 8,
+    onchange = function()
+      dlg:modify{ id = "anim_frames", label = "Frames (" .. dlg.data.anim_frames .. ")" }
+    end,
   }
 
   dlg:slider{
     id = "anim_duration",
-    label = "Duration (ms)",
+    label = "Duration (100ms)",
     min = 50, max = 2000, value = 100,
+    onchange = function()
+      dlg:modify{ id = "anim_duration", label = "Duration (" .. dlg.data.anim_duration .. "ms)" }
+    end,
   }
 
   dlg:slider{
@@ -661,8 +676,11 @@ local function build_tab_audio()
   }
   dlg:slider{
     id = "audio_steps",
-    label = "Steps",
+    label = "Steps (8)",
     min = 1, max = 50, value = 8,
+    onchange = function()
+      dlg:modify{ id = "audio_steps", label = "Steps (" .. dlg.data.audio_steps .. ")" }
+    end,
   }
   dlg:slider{
     id = "audio_cfg",
@@ -758,9 +776,12 @@ local function build_tab_audio()
 
   dlg:slider{
     id = "mod_slot_count",
-    label = "Slots",
+    label = "Slots (1)",
     min = 1, max = 4, value = 1,
-    onchange = function() sync_slot_visibility() end,
+    onchange = function()
+      dlg:modify{ id = "mod_slot_count", label = "Slots (" .. dlg.data.mod_slot_count .. ")" }
+      sync_slot_visibility()
+    end,
   }
 
   -- Slot defaults: [source, target, min, max, attack, release, visible]

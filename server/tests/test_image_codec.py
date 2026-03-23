@@ -142,7 +142,7 @@ class TestApplyMotionWarp:
     def _make_image(self, mode="RGB", size=(64, 64)):
         import numpy as np
         arr = np.random.randint(0, 255, (*size[::-1], 3 if mode == "RGB" else 4), dtype=np.uint8)
-        return Image.fromarray(arr, mode=mode)
+        return Image.fromarray(arr)
 
     def test_identity_no_motion(self):
         img = self._make_image()

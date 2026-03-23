@@ -167,4 +167,4 @@ def apply_motion_warp(
         borderMode=cv2.BORDER_REFLECT_101,
     )
 
-    return Image.fromarray(warped, mode=image.mode)
+    return Image.fromarray(warped)
