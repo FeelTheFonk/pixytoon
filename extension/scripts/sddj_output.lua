@@ -240,7 +240,6 @@ function PT.apply_metadata(meta)
   if meta.mode then
     local m = meta.mode
     local is_txt = (m == "txt2img")
-    PT.dlg:modify{ id = "denoise", visible = not is_txt }
     if m == "inpaint" then
       PT.dlg:modify{ id = "mode", label = "Mode (needs mask)" }
     elseif m == "img2img" or (m:find("controlnet_") ~= nil) then
@@ -269,7 +268,6 @@ function PT.apply_metadata(meta)
         if pp.pixelate.target_size then
           PT.dlg:modify{ id = "pixel_size", value = pp.pixelate.target_size }
           PT.dlg:modify{ id = "pixel_size", label = "Target (" .. pp.pixelate.target_size .. "px)" }
-          PT.dlg:modify{ id = "pixel_size", visible = pp.pixelate.enabled }
         end
       end
     end

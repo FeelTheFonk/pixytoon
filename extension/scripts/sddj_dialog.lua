@@ -170,8 +170,6 @@ local function build_tab_generate()
     option = "txt2img",
     onchange = function()
       local m = dlg.data.mode
-      local is_txt = (m == "txt2img")
-      dlg:modify{ id = "denoise", visible = not is_txt }
       -- Show hint about required inputs
       if m == "inpaint" then
         dlg:modify{ id = "mode", label = "Mode (needs mask)" }
@@ -238,16 +236,12 @@ local function build_tab_generate()
     id = "use_neg_ti",
     label = "Neg. Embeddings",
     selected = false,
-    onchange = function()
-      dlg:modify{ id = "neg_ti_weight", visible = dlg.data.use_neg_ti }
-    end,
   }
 
   dlg:slider{
     id = "neg_ti_weight",
     label = "Emb. (1.00)",
     min = 10, max = 200, value = 100,
-    visible = false,
     onchange = slider_label("neg_ti_weight", "Emb. (%.2f)", 100.0),
   }
 
@@ -280,7 +274,6 @@ local function build_tab_generate()
     id = "denoise",
     label = "Strength (1.00)",
     min = 0, max = 100, value = 100,
-    visible = false,
     onchange = slider_label("denoise", "Strength (%.2f)", 100.0),
   }
 
@@ -319,16 +312,12 @@ local function build_tab_postprocess()
     id = "pixelate",
     label = "Pixelate",
     selected = false,
-    onchange = function()
-      dlg:modify{ id = "pixel_size", visible = dlg.data.pixelate }
-    end,
   }
 
   dlg:slider{
     id = "pixel_size",
     label = "Target (128px)",
     min = 8, max = 512, value = 128,
-    visible = false,
     onchange = function()
       dlg:modify{ id = "pixel_size", label = "Target (" .. dlg.data.pixel_size .. "px)" }
     end,
@@ -362,13 +351,6 @@ local function build_tab_postprocess()
     label = "Palette",
     options = { "auto", "preset", "custom" },
     option = "auto",
-    onchange = function()
-      local m = dlg.data.palette_mode
-      dlg:modify{ id = "palette_name", visible = (m == "preset") }
-      dlg:modify{ id = "palette_del_btn", visible = (m == "preset") }
-      dlg:modify{ id = "palette_custom_colors", visible = (m == "custom") }
-      dlg:modify{ id = "palette_save_btn", visible = (m == "custom") }
-    end,
   }
 
   dlg:combobox{
@@ -376,21 +358,18 @@ local function build_tab_postprocess()
     label = "Preset",
     options = { "pico8" },
     option = "pico8",
-    visible = false,
   }
 
   dlg:entry{
     id = "palette_custom_colors",
     label = "Custom Hex",
     text = "",
-    visible = false,
     hexpand = true,
   }
 
   dlg:button{
     id = "palette_save_btn",
     text = "Save Palette",
-    visible = false,
     onclick = function()
       -- Collect colors from custom hex field or current preset
       local hex_str = dlg.data.palette_custom_colors or ""
@@ -417,7 +396,6 @@ local function build_tab_postprocess()
   dlg:button{
     id = "palette_del_btn",
     text = "Del Palette",
-    visible = false,
     onclick = function()
       local name = dlg.data.palette_name
       if not name or name == "" then return end
@@ -444,11 +422,6 @@ local function build_tab_animation()
     label = "Method",
     options = { "chain", "animatediff" },
     option = "chain",
-    onchange = function()
-      local ad = dlg.data.anim_method == "animatediff"
-      dlg:modify{ id = "anim_freeinit", visible = ad }
-      dlg:modify{ id = "anim_freeinit_iters", visible = ad and dlg.data.anim_freeinit }
-    end,
   }
 
   dlg:slider{
@@ -509,18 +482,12 @@ local function build_tab_animation()
     id = "anim_freeinit",
     label = "FreeInit",
     selected = false,
-    visible = false,
-    onchange = function()
-      dlg:modify{ id = "anim_freeinit_iters",
-        visible = dlg.data.anim_method == "animatediff" and dlg.data.anim_freeinit }
-    end,
   }
 
   dlg:slider{
     id = "anim_freeinit_iters",
     label = "FreeInit Iters",
     min = 1, max = 3, value = 2,
-    visible = false,
   }
 end
 
@@ -629,45 +596,6 @@ local MOD_TARGETS = {
   "motion_x", "motion_y", "motion_zoom", "motion_rotation",
 }
 
--- Syncs slot widget visibility based on slot count and advanced toggle
-local function sync_slot_visibility()
-  local dlg = PT.dlg
-  if not dlg then return end
-  local n = dlg.data.mod_slot_count
-  local adv = dlg.data.audio_advanced
-  for i = 1, 4 do
-    local vis = (i <= n)
-    dlg:modify{ id = "mod" .. i .. "_enable",  visible = vis }
-    dlg:modify{ id = "mod" .. i .. "_source",  visible = vis }
-    dlg:modify{ id = "mod" .. i .. "_target",  visible = vis }
-    dlg:modify{ id = "mod" .. i .. "_min",     visible = vis }
-    dlg:modify{ id = "mod" .. i .. "_max",     visible = vis }
-    dlg:modify{ id = "mod" .. i .. "_attack",  visible = vis and adv }
-    dlg:modify{ id = "mod" .. i .. "_release", visible = vis and adv }
-  end
-  dlg:modify{ id = "audio_use_expressions", visible = adv }
-  local expr_vis = adv and dlg.data.audio_use_expressions
-  dlg:modify{ id = "expr_denoise",      visible = expr_vis }
-  dlg:modify{ id = "expr_cfg",          visible = expr_vis }
-  dlg:modify{ id = "expr_noise",        visible = expr_vis }
-  dlg:modify{ id = "expr_controlnet",   visible = expr_vis }
-  dlg:modify{ id = "expr_seed",         visible = expr_vis }
-  dlg:modify{ id = "expr_palette",      visible = expr_vis }
-  dlg:modify{ id = "expr_cadence",      visible = expr_vis }
-  dlg:modify{ id = "expr_motion_x",     visible = expr_vis }
-  dlg:modify{ id = "expr_motion_y",     visible = expr_vis }
-  dlg:modify{ id = "expr_motion_zoom",  visible = expr_vis }
-  dlg:modify{ id = "expr_motion_rot",   visible = expr_vis }
-  dlg:modify{ id = "audio_random_seed", visible = adv }
-  -- Prompt schedule visibility
-  dlg:modify{ id = "audio_prompt_schedule", visible = adv }
-  local ps_vis = adv and dlg.data.audio_prompt_schedule
-  for i = 1, 3 do
-    dlg:modify{ id = "ps" .. i .. "_time", visible = ps_vis }
-    dlg:modify{ id = "ps" .. i .. "_prompt", visible = ps_vis }
-  end
-end
-
 local function build_tab_audio()
   local dlg = PT.dlg
 
@@ -762,27 +690,16 @@ local function build_tab_audio()
     label = "Method",
     options = { "chain", "animatediff" },
     option = "chain",
-    onchange = function()
-      local is_ad = dlg.data.audio_method == "animatediff"
-      dlg:modify{ id = "audio_freeinit", visible = is_ad }
-      dlg:modify{ id = "audio_freeinit_iters", visible = is_ad and dlg.data.audio_freeinit }
-    end,
   }
   dlg:check{
     id = "audio_freeinit",
     text = "FreeInit (1st chunk)",
     selected = false,
-    visible = false,
-    onchange = function()
-      dlg:modify{ id = "audio_freeinit_iters",
-        visible = dlg.data.audio_method == "animatediff" and dlg.data.audio_freeinit }
-    end,
   }
   dlg:slider{
     id = "audio_freeinit_iters",
     label = "FreeInit Iters",
     min = 1, max = 3, value = 2,
-    visible = false,
   }
 
   -- Modulation
@@ -824,158 +741,134 @@ local function build_tab_audio()
     min = 1, max = 4, value = 1,
     onchange = function()
       dlg:modify{ id = "mod_slot_count", label = "Slots (" .. dlg.data.mod_slot_count .. ")" }
-      sync_slot_visibility()
     end,
   }
 
-  -- Slot defaults: [source, target, min, max, attack, release, visible]
+  -- Slot defaults: [source, target, min, max, attack, release]
   local slot_defaults = {
-    { "global_rms",    "denoise_strength",  15, 65, 2, 8,  true },
-    { "global_onset",  "cfg_scale",         30, 80, 2, 8,  false },
-    { "global_low",    "noise_amplitude",    0, 30, 2, 8,  false },
-    { "global_high",   "seed_offset",        0, 50, 2, 8,  false },
+    { "global_rms",    "denoise_strength",  15, 65, 2, 8 },
+    { "global_onset",  "cfg_scale",         30, 80, 2, 8 },
+    { "global_low",    "noise_amplitude",    0, 30, 2, 8 },
+    { "global_high",   "seed_offset",        0, 50, 2, 8 },
   }
 
   for i, def in ipairs(slot_defaults) do
     local prefix = "mod" .. i .. "_"
-    local vis = def[7]
 
     dlg:check{
       id = prefix .. "enable",
       text = "Slot " .. i,
       selected = true,
-      visible = vis,
     }
     dlg:combobox{
       id = prefix .. "source",
       label = "Source",
       options = GLOBAL_SOURCES,
       option = def[1],
-      visible = vis,
     }
     dlg:combobox{
       id = prefix .. "target",
       label = "Target",
       options = MOD_TARGETS,
       option = def[2],
-      visible = vis,
     }
     dlg:slider{
       id = prefix .. "min",
       label = "Min (%)",
       min = 0, max = 100, value = def[3],
-      visible = vis,
     }
     dlg:slider{
       id = prefix .. "max",
       label = "Max (%)",
       min = 0, max = 100, value = def[4],
-      visible = vis,
     }
     dlg:slider{
       id = prefix .. "attack",
       label = "Attack",
       min = 1, max = 30, value = def[5],
-      visible = false,
     }
     dlg:slider{
       id = prefix .. "release",
       label = "Release",
       min = 1, max = 60, value = def[6],
-      visible = false,
     }
   end
 
-  -- Advanced toggle (controls attack/release + expressions)
   dlg:check{
     id = "audio_advanced",
     text = "Advanced",
     selected = false,
-    onchange = function() sync_slot_visibility() end,
   }
 
   dlg:check{
     id = "audio_use_expressions",
     text = "Custom Expressions",
     selected = false,
-    visible = false,
-    onchange = function() sync_slot_visibility() end,
   }
   dlg:entry{
     id = "expr_denoise",
     label = "denoise",
     text = "",
-    visible = false,
     hexpand = true,
   }
   dlg:entry{
     id = "expr_cfg",
     label = "cfg_scale",
     text = "",
-    visible = false,
     hexpand = true,
   }
   dlg:entry{
     id = "expr_noise",
     label = "noise_amp",
     text = "",
-    visible = false,
     hexpand = true,
   }
   dlg:entry{
     id = "expr_controlnet",
     label = "cn_scale",
     text = "",
-    visible = false,
     hexpand = true,
   }
   dlg:entry{
     id = "expr_seed",
     label = "seed_off",
     text = "",
-    visible = false,
     hexpand = true,
   }
   dlg:entry{
     id = "expr_palette",
     label = "pal_shift",
     text = "",
-    visible = false,
     hexpand = true,
   }
   dlg:entry{
     id = "expr_cadence",
     label = "cadence",
     text = "",
-    visible = false,
     hexpand = true,
   }
   dlg:entry{
     id = "expr_motion_x",
     label = "motion_x",
     text = "",
-    visible = false,
     hexpand = true,
   }
   dlg:entry{
     id = "expr_motion_y",
     label = "motion_y",
     text = "",
-    visible = false,
     hexpand = true,
   }
   dlg:entry{
     id = "expr_motion_zoom",
     label = "zoom",
     text = "",
-    visible = false,
     hexpand = true,
   }
   dlg:entry{
     id = "expr_motion_rot",
     label = "rotation",
     text = "",
-    visible = false,
     hexpand = true,
   }
 
@@ -983,7 +876,6 @@ local function build_tab_audio()
     id = "audio_random_seed",
     text = "Random seed per frame",
     selected = false,
-    visible = false,
   }
 
   -- Prompt Schedule (advanced only)
@@ -991,28 +883,18 @@ local function build_tab_audio()
     id = "audio_prompt_schedule",
     text = "Prompt Schedule",
     selected = false,
-    visible = false,
-    onchange = function()
-      local vis = dlg.data.audio_prompt_schedule and dlg.data.audio_advanced
-      for i = 1, 3 do
-        dlg:modify{ id = "ps" .. i .. "_time", visible = vis }
-        dlg:modify{ id = "ps" .. i .. "_prompt", visible = vis }
-      end
-    end,
   }
   for i = 1, 3 do
     dlg:entry{
       id = "ps" .. i .. "_time",
       label = "T" .. i .. " (s-s)",
       text = "",
-      visible = false,
       hexpand = true,
     }
     dlg:entry{
       id = "ps" .. i .. "_prompt",
       label = "P" .. i,
       text = "",
-      visible = false,
       hexpand = true,
     }
   end
@@ -1350,35 +1232,22 @@ local function build_actions_panel()
     id = "randomize_before",
     text = "Randomize",
     selected = false,
-    onchange = function()
-      local show = dlg.data.randomize_before or dlg.data.random_loop_check
-      dlg:modify{ id = "randomness", visible = show }
-    end,
   }
   dlg:check{
     id = "loop_check",
     text = "Loop",
     selected = false,
-    onchange = function()
-      dlg:modify{ id = "loop_seed_combo", visible = dlg.data.loop_check or dlg.data.random_loop_check }
-    end,
   }
   dlg:check{
     id = "random_loop_check",
     text = "Random Loop",
     selected = false,
-    onchange = function()
-      dlg:modify{ id = "loop_seed_combo", visible = dlg.data.loop_check or dlg.data.random_loop_check }
-      local show = dlg.data.randomize_before or dlg.data.random_loop_check
-      dlg:modify{ id = "randomness", visible = show }
-    end,
   }
 
   dlg:slider{
     id = "randomness",
     label = "Randomness (0 — Off)",
     min = 0, max = 20, value = 0,
-    visible = false,
     onchange = function()
       local v = dlg.data.randomness
       local names = { [0]="Off", [5]="Subtle", [10]="Moderate", [15]="Wild", [20]="Chaos" }
@@ -1393,10 +1262,8 @@ local function build_actions_panel()
     label = "Loop Seed",
     options = { "random", "increment" },
     option = "random",
-    visible = false,
   }
 
-  -- Live mode buttons (shown only during live)
   dlg:button{
     id = "live_send_btn",
     text = "SEND (F5)",

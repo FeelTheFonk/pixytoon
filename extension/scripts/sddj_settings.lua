@@ -217,68 +217,6 @@ function PT.apply_settings(s)
   PT.dlg:modify{ id = "audio_frame_duration",
     label = "Frame (" .. d.audio_frame_duration .. "ms)" }
   PT.dlg:modify{ id = "mod_slot_count", label = "Slots (" .. d.mod_slot_count .. ")" }
-  -- Sync visibility for conditional fields
-  if s.use_neg_ti ~= nil then
-    PT.dlg:modify{ id = "neg_ti_weight", visible = s.use_neg_ti }
-  end
-  if s.pixelate ~= nil then
-    PT.dlg:modify{ id = "pixel_size", visible = s.pixelate }
-  end
-  -- lock_subject no longer controls fixed_subject visibility (always visible)
-  if s.palette_mode ~= nil then
-    PT.dlg:modify{ id = "palette_name", visible = (s.palette_mode == "preset") }
-    PT.dlg:modify{ id = "palette_del_btn", visible = (s.palette_mode == "preset") }
-    PT.dlg:modify{ id = "palette_custom_colors", visible = (s.palette_mode == "custom") }
-    PT.dlg:modify{ id = "palette_save_btn", visible = (s.palette_mode == "custom") }
-  end
-  if s.anim_method ~= nil then
-    local ad = (s.anim_method == "animatediff")
-    PT.dlg:modify{ id = "anim_freeinit", visible = ad }
-    PT.dlg:modify{ id = "anim_freeinit_iters", visible = ad and (s.anim_freeinit == true) }
-  end
-  -- Sync audio method → audio freeinit visibility
-  if s.audio_method ~= nil then
-    local ad = (s.audio_method == "animatediff")
-    PT.dlg:modify{ id = "audio_freeinit", visible = ad }
-    PT.dlg:modify{ id = "audio_freeinit_iters", visible = ad and (s.audio_freeinit == true) }
-  end
-  -- Sync loop seed combo visibility
-  local show_loop_seed = (s.loop_check == true) or (s.random_loop_check == true)
-  PT.dlg:modify{ id = "loop_seed_combo", visible = show_loop_seed }
-  -- Sync audio slot + advanced visibility (uses shared helper from dialog)
-  if s.mod_slot_count or s.audio_advanced ~= nil or s.audio_use_expressions ~= nil then
-    local n = PT.dlg.data.mod_slot_count
-    local adv = PT.dlg.data.audio_advanced
-    for i = 1, 4 do
-      local vis = (i <= n)
-      PT.dlg:modify{ id = "mod" .. i .. "_enable",  visible = vis }
-      PT.dlg:modify{ id = "mod" .. i .. "_source",  visible = vis }
-      PT.dlg:modify{ id = "mod" .. i .. "_target",  visible = vis }
-      PT.dlg:modify{ id = "mod" .. i .. "_min",     visible = vis }
-      PT.dlg:modify{ id = "mod" .. i .. "_max",     visible = vis }
-      PT.dlg:modify{ id = "mod" .. i .. "_attack",  visible = vis and adv }
-      PT.dlg:modify{ id = "mod" .. i .. "_release", visible = vis and adv }
-    end
-    PT.dlg:modify{ id = "audio_use_expressions", visible = adv }
-    local expr_vis = adv and PT.dlg.data.audio_use_expressions
-    local expr_ids = {
-      "expr_denoise", "expr_cfg", "expr_noise", "expr_controlnet",
-      "expr_seed", "expr_palette", "expr_cadence",
-      "expr_motion_x", "expr_motion_y", "expr_motion_zoom", "expr_motion_rot",
-    }
-    for _, eid in ipairs(expr_ids) do
-      PT.dlg:modify{ id = eid, visible = expr_vis }
-    end
-    -- Sync audio_random_seed visibility (advanced only)
-    PT.dlg:modify{ id = "audio_random_seed", visible = adv }
-    -- Sync audio_prompt_schedule + sub-fields visibility
-    PT.dlg:modify{ id = "audio_prompt_schedule", visible = adv }
-    local ps_vis = adv and PT.dlg.data.audio_prompt_schedule
-    for i = 1, 3 do
-      PT.dlg:modify{ id = "ps" .. i .. "_time", visible = ps_vis }
-      PT.dlg:modify{ id = "ps" .. i .. "_prompt", visible = ps_vis }
-    end
-  end
   -- Sync max frames label
   if s.audio_max_frames then
     local v = s.audio_max_frames
@@ -290,10 +228,8 @@ function PT.apply_settings(s)
     PT.dlg:modify{ id = "audio_frame_duration",
       label = "Frame (" .. s.audio_frame_duration .. "ms)" }
   end
-  -- Sync denoise visibility based on mode
+  -- Mode label hint
   if s.mode then
-    PT.dlg:modify{ id = "denoise", visible = (s.mode ~= "txt2img") }
-    -- Mode label hint
     if s.mode == "inpaint" then
       PT.dlg:modify{ id = "mode", label = "Mode (needs mask)" }
     elseif s.mode == "img2img" or (s.mode and s.mode:find("controlnet_")) then
@@ -302,9 +238,6 @@ function PT.apply_settings(s)
       PT.dlg:modify{ id = "mode", label = "Mode" }
     end
   end
-  -- Sync randomness slider visibility
-  local show_rand = (s.randomize_before == true) or (s.random_loop_check == true)
-  PT.dlg:modify{ id = "randomness", visible = show_rand }
   -- Sync randomness label
   if s.randomness then
     local v = s.randomness
