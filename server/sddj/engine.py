@@ -538,8 +538,8 @@ class DiffusionEngine:
         source = source.convert("RGB")
         target_w, target_h = round8(req.width), round8(req.height)
         source = resize_to_target(source, target_w, target_h)
-        # Clamp: ensure at least 1 denoising step (0 steps → empty latents → VAE crash)
-        min_denoise = 1.0 / max(req.steps, 1) + 1e-3
+        # Clamp: ensure at least 2 denoising steps (1 step produces poor quality)
+        min_denoise = 2.0 / max(req.steps, 1) + 1e-3
         strength = max(req.denoise_strength, min_denoise)
         torch.compiler.cudagraph_mark_step_begin()
         return self._img2img_pipe(
@@ -570,8 +570,8 @@ class DiffusionEngine:
         mask = resize_to_target(mask, target_w, target_h)
 
         # Run img2img on the full source (model sees context for coherent inpainting)
-        # Clamp: ensure at least 1 denoising step (0 steps → empty latents → VAE crash)
-        min_denoise = 1.0 / max(req.steps, 1) + 1e-3
+        # Clamp: ensure at least 2 denoising steps (1 step produces poor quality)
+        min_denoise = 2.0 / max(req.steps, 1) + 1e-3
         strength = max(req.denoise_strength, min_denoise)
         torch.compiler.cudagraph_mark_step_begin()
         inpainted = self._img2img_pipe(
@@ -678,10 +678,13 @@ class DiffusionEngine:
                       enable_stems: bool = False):
         """Analyze audio file, returning features. Uses cache when available."""
         self._ensure_audio_modules()
-        # Check cache first
+        # Check cache first (invalidate old format without raw_features)
         cached = self._audio_cache.get(audio_path, fps, enable_stems)
         if cached is not None:
-            return cached
+            if cached.raw_features:
+                return cached
+            log.info("Cache outdated (no raw_features), re-analyzing: %s", audio_path)
+            self._audio_cache.invalidate(audio_path, fps, enable_stems)
 
         # Analyze with optional stem separation
         stems = None
@@ -702,6 +705,8 @@ class DiffusionEngine:
             analysis.total_frames = settings.audio_max_frames
             for name in analysis.features:
                 analysis.features[name] = analysis.features[name][:settings.audio_max_frames]
+            for name in analysis.raw_features:
+                analysis.raw_features[name] = analysis.raw_features[name][:settings.audio_max_frames]
 
         self._audio_cache.put(audio_path, fps, analysis, enable_stems)
         return analysis
@@ -900,10 +905,10 @@ class DiffusionEngine:
                         continue
 
                 eff_denoise = frame_params.get("denoise_strength", req.denoise_strength)
-                # Clamp: ensure at least 1 denoising step for img2img
-                # (int(steps * strength) == 0 → empty latents → VAE crash)
-                min_denoise = 1.0 / max(req.steps, 1) + 1e-3
-                eff_denoise = max(eff_denoise, min_denoise)
+                # Clamp: ensure at least 2 denoising steps for img2img
+                # (1 step produces artifacts that accumulate in chains)
+                min_denoise = 2.0 / max(req.steps, 1) + 1e-3
+                eff_denoise = max(min_denoise, min(1.0, eff_denoise))
                 eff_cfg = frame_params.get("cfg_scale", req.cfg_scale)
                 seed_offset = int(frame_params.get("seed_offset", frame_idx))
                 frame_seed = (base_seed + seed_offset) % (2**32)
@@ -1020,7 +1025,7 @@ class DiffusionEngine:
                         )
 
                     # Noise amplitude modulation: inject noise into source
-                    noise_amp = frame_params.get("noise_amplitude", 0.0)
+                    noise_amp = max(0.0, min(1.0, frame_params.get("noise_amplitude", 0.0)))
                     if noise_amp > 0:
                         arr = np.array(source, dtype=np.float32) / 255.0
                         noise = np.random.default_rng(frame_seed).standard_normal(
@@ -1414,7 +1419,7 @@ class DiffusionEngine:
 
         # Clamp: ensure at least 1 denoising step for img2img
         # (int(steps * strength) == 0 → empty latents → VAE crash)
-        min_denoise = 1.0 / max(req.steps, 1) + 1e-3
+        min_denoise = 2.0 / max(req.steps, 1) + 1e-3
         chain_denoise = max(req.denoise_strength, min_denoise)
 
         log.info("Chain animation: %d frames, mode=%s, steps=%d, denoise=%.2f, seed_base=%d",

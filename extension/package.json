@@ -2,7 +2,7 @@
   "name": "sddj",
   "displayName": "SDDj - SD Generator & Animator",
   "description": "Generate SOTA images and animations using local Stable Diffusion + AnimateDiff from within Aseprite",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "author": "SDDj",
   "license": "MIT",
   "minimumAsepriteVersion": "1.3",

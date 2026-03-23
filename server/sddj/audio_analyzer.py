@@ -38,6 +38,8 @@ class AudioAnalysis:
     audio_path: str
     features: dict[str, np.ndarray] = field(default_factory=dict)
     bpm: float = 0.0
+    # Raw (un-smoothed) features for per-slot EMA in modulation engine
+    raw_features: dict[str, np.ndarray] = field(default_factory=dict)
 
     @property
     def feature_names(self) -> list[str]:
@@ -216,7 +218,10 @@ class AudioAnalyzer:
                     _resample_to_fps(stem_onset, librosa_fps, fps, total_frames)
                 )
 
-        # Apply smoothing
+        # Store raw (un-smoothed) features for per-slot EMA in modulation engine
+        raw_features = {name: arr.copy() for name, arr in features.items()}
+
+        # Apply smoothing (used by expressions and UI preview)
         features = smooth_features(features, attack_frames, release_frames)
 
         log.info("Analysis complete: %d features, %d frames", len(features), total_frames)
@@ -228,5 +233,6 @@ class AudioAnalyzer:
             sample_rate=sr,
             audio_path=audio_path,
             features=features,
+            raw_features=raw_features,
             bpm=bpm,
         )

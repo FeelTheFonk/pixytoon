@@ -297,6 +297,77 @@ class TestModulationEngine:
         for i in range(5):
             assert schedule.get_params(i) == {}
 
+    def test_per_slot_ema_uses_raw_features(self):
+        """Per-slot EMA smoothing uses raw_features when available."""
+        engine = ModulationEngine()
+        # Raw: step function 0→1 at frame 5
+        raw = np.zeros(20, dtype=np.float32)
+        raw[5:] = 1.0
+        # Smoothed: already heavily smoothed (simulates global EMA)
+        smoothed = np.full(20, 0.3, dtype=np.float32)
+        analysis = AudioAnalysis(
+            fps=24.0, duration=20/24.0, total_frames=20,
+            sample_rate=22050, audio_path="test.wav",
+            features={"global_rms": smoothed},
+            raw_features={"global_rms": raw},
+        )
+        slots = [ModulationSlot(
+            source="global_rms", target="denoise_strength",
+            min_val=0.2, max_val=0.8, attack=1, release=4,
+        )]
+        schedule = engine.compute_schedule(analysis, slots)
+        # Frame 0-4: feature=0 → denoise near min (0.2)
+        assert schedule.get_params(0)["denoise_strength"] == pytest.approx(0.2, abs=0.01)
+        # Frame 10+: feature has risen toward 1.0 via EMA → denoise well above 0.5
+        d10 = schedule.get_params(10)["denoise_strength"]
+        assert d10 > 0.5, f"Expected denoise > 0.5 at frame 10, got {d10}"
+
+    def test_per_slot_ema_fast_attack(self):
+        """attack=1 responds faster than attack=8 to a step input."""
+        engine = ModulationEngine()
+        raw = np.zeros(20, dtype=np.float32)
+        raw[5:] = 1.0
+        analysis = AudioAnalysis(
+            fps=24.0, duration=20/24.0, total_frames=20,
+            sample_rate=22050, audio_path="test.wav",
+            features={"global_rms": raw.copy()},
+            raw_features={"global_rms": raw},
+        )
+        # Fast attack
+        slots_fast = [ModulationSlot(
+            source="global_rms", target="denoise_strength",
+            min_val=0.0, max_val=1.0, attack=1, release=4,
+        )]
+        sched_fast = engine.compute_schedule(analysis, slots_fast)
+
+        # Slow attack
+        engine2 = ModulationEngine()
+        slots_slow = [ModulationSlot(
+            source="global_rms", target="denoise_strength",
+            min_val=0.0, max_val=1.0, attack=8, release=4,
+        )]
+        sched_slow = engine2.compute_schedule(analysis, slots_slow)
+
+        # At frame 6 (1 frame after step), fast attack should be higher
+        d_fast = sched_fast.get_params(6)["denoise_strength"]
+        d_slow = sched_slow.get_params(6)["denoise_strength"]
+        assert d_fast > d_slow, f"Fast ({d_fast}) should exceed slow ({d_slow})"
+
+    def test_fallback_to_smoothed_when_no_raw(self):
+        """When raw_features is empty, uses smoothed features (backward compat)."""
+        engine = ModulationEngine()
+        analysis = _make_analysis(n_frames=1, features={
+            "global_rms": np.array([0.5], dtype=np.float32),
+        })
+        # raw_features is empty dict (default)
+        assert analysis.raw_features == {}
+        slots = [ModulationSlot(
+            source="global_rms", target="denoise_strength",
+            min_val=0.2, max_val=0.8,
+        )]
+        schedule = engine.compute_schedule(analysis, slots)
+        assert schedule.get_params(0)["denoise_strength"] == pytest.approx(0.5, abs=0.01)
+
 
 # ─── Presets ────────────────────────────────────────────────
 

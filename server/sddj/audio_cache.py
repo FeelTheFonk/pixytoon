@@ -63,7 +63,13 @@ class AudioCache:
 
         try:
             data = np.load(str(npz_path), allow_pickle=False)
-            features = {name: data[name] for name in data.files}
+            features = {}
+            raw_features = {}
+            for name in data.files:
+                if name.startswith("raw_"):
+                    raw_features[name[4:]] = data[name]
+                else:
+                    features[name] = data[name]
 
             meta = meta_path.read_text().strip().split("\n")
             meta_dict = {}
@@ -78,6 +84,7 @@ class AudioCache:
                 sample_rate=int(meta_dict["sample_rate"]),
                 audio_path=meta_dict["audio_path"],
                 features=features,
+                raw_features=raw_features,
                 bpm=float(meta_dict.get("bpm", 0.0)),
             )
             log.info("Cache hit for %s (%d features)", Path(audio_path).name, len(features))
@@ -96,7 +103,10 @@ class AudioCache:
         meta_path = self._dir / f"{key}.meta"
 
         try:
-            np.savez_compressed(str(npz_path), **analysis.features)
+            save_dict = dict(analysis.features)
+            for name, arr in analysis.raw_features.items():
+                save_dict[f"raw_{name}"] = arr
+            np.savez_compressed(str(npz_path), **save_dict)
             meta_path.write_text(
                 f"fps={analysis.fps}\n"
                 f"duration={analysis.duration}\n"
