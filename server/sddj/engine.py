@@ -17,6 +17,7 @@ from __future__ import annotations
 import gc
 import hashlib
 import logging
+import math
 import random
 import threading
 import time
@@ -106,6 +107,20 @@ def _apply_hue_shift(image: Image.Image, shift: float) -> Image.Image:
     if alpha is not None:
         result.putalpha(alpha)
     return result
+
+
+def scale_steps_for_denoise(steps: int, strength: float) -> int:
+    """Scale num_inference_steps so effective denoising steps ≈ requested steps.
+
+    In img2img, diffusers computes: effective = int(steps * strength).
+    When strength < 1.0, fewer steps run, degrading quality.
+    We compensate by scaling the schedule length: ceil(steps / strength),
+    guaranteeing ~`steps` effective denoising passes regardless of strength.
+    """
+    if strength >= 1.0:
+        return steps
+    strength = max(strength, 0.01)  # safety floor
+    return max(steps, math.ceil(steps / strength))
 
 
 class RealtimeState:
@@ -541,12 +556,13 @@ class DiffusionEngine:
         # Clamp: ensure at least 2 denoising steps (1 step produces poor quality)
         min_denoise = 2.0 / max(req.steps, 1) + 1e-3
         strength = max(req.denoise_strength, min_denoise)
+        scaled_steps = scale_steps_for_denoise(req.steps, strength)
         torch.compiler.cudagraph_mark_step_begin()
         return self._img2img_pipe(
             prompt=req.prompt,
             negative_prompt=effective_neg,
             image=source,
-            num_inference_steps=req.steps,
+            num_inference_steps=scaled_steps,
             guidance_scale=req.cfg_scale,
             strength=strength,
             generator=generator,
@@ -573,12 +589,13 @@ class DiffusionEngine:
         # Clamp: ensure at least 2 denoising steps (1 step produces poor quality)
         min_denoise = 2.0 / max(req.steps, 1) + 1e-3
         strength = max(req.denoise_strength, min_denoise)
+        scaled_steps = scale_steps_for_denoise(req.steps, strength)
         torch.compiler.cudagraph_mark_step_begin()
         inpainted = self._img2img_pipe(
             prompt=req.prompt,
             negative_prompt=effective_neg,
             image=source,
-            num_inference_steps=req.steps,
+            num_inference_steps=scaled_steps,
             guidance_scale=req.cfg_scale,
             strength=strength,
             generator=generator,
@@ -909,6 +926,7 @@ class DiffusionEngine:
                 # (1 step produces artifacts that accumulate in chains)
                 min_denoise = 2.0 / max(req.steps, 1) + 1e-3
                 eff_denoise = max(min_denoise, min(1.0, eff_denoise))
+                eff_scaled_steps = scale_steps_for_denoise(req.steps, eff_denoise)
                 eff_cfg = frame_params.get("cfg_scale", req.cfg_scale)
                 seed_offset = int(frame_params.get("seed_offset", frame_idx))
                 frame_seed = (base_seed + seed_offset) % (2**32)
@@ -937,8 +955,8 @@ class DiffusionEngine:
                 if frame_idx > 0:
                     self._img2img_pipe.scheduler = pipeline_factory.fresh_scheduler(self._pipe)
 
-                log.info("Audio frame %d/%d: seed=%d, denoise=%.3f, cfg=%.2f",
-                         frame_idx, total_frames, frame_seed, eff_denoise, eff_cfg)
+                log.info("Audio frame %d/%d: seed=%d, denoise=%.3f, cfg=%.2f, steps=%d (scaled=%d)",
+                         frame_idx, total_frames, frame_seed, eff_denoise, eff_cfg, req.steps, eff_scaled_steps)
 
                 # Frame 0: initial generation
                 if frame_idx == 0:
@@ -962,7 +980,7 @@ class DiffusionEngine:
                             prompt=frame_prompt,
                             negative_prompt=effective_neg,
                             image=_source_img,
-                            num_inference_steps=req.steps,
+                            num_inference_steps=eff_scaled_steps,
                             guidance_scale=eff_cfg,
                             strength=eff_denoise,
                             generator=generator,
@@ -977,7 +995,7 @@ class DiffusionEngine:
                             prompt=frame_prompt,
                             negative_prompt=effective_neg,
                             image=_source_img,
-                            num_inference_steps=req.steps,
+                            num_inference_steps=eff_scaled_steps,
                             guidance_scale=eff_cfg,
                             strength=eff_denoise,
                             generator=generator,
@@ -1040,7 +1058,7 @@ class DiffusionEngine:
                         prompt=frame_prompt,
                         negative_prompt=effective_neg,
                         image=source,
-                        num_inference_steps=req.steps,
+                        num_inference_steps=eff_scaled_steps,
                         guidance_scale=eff_cfg,
                         strength=eff_denoise,
                         generator=generator,
@@ -1123,6 +1141,7 @@ class DiffusionEngine:
     ) -> list[AudioReactiveFrameResponse]:
         """Core AnimateDiff audio loop — chunked with overlap blending."""
         is_controlnet = req.mode.value.startswith("controlnet_")
+        is_img2img = req.mode == GenerationMode.IMG2IMG
 
         if is_controlnet:
             existing_cn = pipeline_factory.get_controlnet_from_pipe(
@@ -1131,11 +1150,13 @@ class DiffusionEngine:
             pipe = self._animatediff.ensure_controlnet(
                 self._pipe, req.mode, existing_controlnet=existing_cn,
             )
+        elif is_img2img:
+            pipe = self._animatediff.ensure_vid2vid(self._pipe)
         else:
             pipe = self._animatediff.ensure_base(self._pipe)
 
-        # FreeInit only for first chunk
-        freeinit_enabled = req.enable_freeinit
+        # FreeInit only for first chunk (not supported on vid2vid)
+        freeinit_enabled = req.enable_freeinit and not is_img2img
 
         base_seed = req.seed if req.seed >= 0 else random.randint(0, 2**32 - 1)
         base_seed = base_seed % (2**32)
@@ -1164,11 +1185,18 @@ class DiffusionEngine:
         log.info("AnimateDiff audio: %d total frames, %d chunks (chunk=%d, overlap=%d)",
                  total_frames, len(chunks), chunk_size, overlap)
 
-        # Pre-decode control image if needed
+        # Pre-decode images
         _control_img = None
         if is_controlnet and req.control_image is not None:
             _control_img = decode_b64_image(req.control_image).convert("RGB")
             _control_img = resize_to_target(_control_img, target_w, target_h)
+
+        _source_img = None
+        if is_img2img and req.source_image is not None:
+            _source_img = decode_b64_image(req.source_image).convert("RGB")
+            _source_img = resize_to_target(_source_img, target_w, target_h)
+        elif is_img2img:
+            raise ValueError("AnimateDiff audio img2img requires source_image")
 
         # Prompt schedule
         from .prompt_schedule import PromptSchedule
@@ -1236,22 +1264,41 @@ class DiffusionEngine:
                      num_frames, eff_cfg, eff_denoise, chunk_seed)
 
             with torch.inference_mode():
-                kwargs = dict(
-                    prompt=chunk_prompt,
-                    negative_prompt=effective_neg,
-                    num_frames=num_frames,
-                    num_inference_steps=req.steps,
-                    guidance_scale=eff_cfg,
-                    width=target_w,
-                    height=target_h,
-                    generator=generator,
-                    clip_skip=req.clip_skip,
-                    callback_on_step_end=step_callback,
-                    output_type="pil",
-                )
+                if is_img2img:
+                    # vid2vid: source image repeated as input video per chunk
+                    min_denoise = 2.0 / max(req.steps, 1) + 1e-3
+                    chunk_strength = max(min_denoise, min(1.0, eff_denoise))
+                    chunk_scaled_steps = scale_steps_for_denoise(req.steps, chunk_strength)
 
-                if is_controlnet and _control_img is not None:
-                    kwargs["conditioning_frames"] = [_control_img] * num_frames
+                    kwargs = dict(
+                        video=[_source_img] * num_frames,
+                        prompt=chunk_prompt,
+                        negative_prompt=effective_neg,
+                        num_inference_steps=chunk_scaled_steps,
+                        guidance_scale=eff_cfg,
+                        strength=chunk_strength,
+                        generator=generator,
+                        clip_skip=req.clip_skip,
+                        callback_on_step_end=step_callback,
+                        output_type="pil",
+                    )
+                else:
+                    kwargs = dict(
+                        prompt=chunk_prompt,
+                        negative_prompt=effective_neg,
+                        num_frames=num_frames,
+                        num_inference_steps=req.steps,
+                        guidance_scale=eff_cfg,
+                        width=target_w,
+                        height=target_h,
+                        generator=generator,
+                        clip_skip=req.clip_skip,
+                        callback_on_step_end=step_callback,
+                        output_type="pil",
+                    )
+
+                    if is_controlnet and _control_img is not None:
+                        kwargs["conditioning_frames"] = [_control_img] * num_frames
 
                 output = pipe(**kwargs)
 
@@ -1421,9 +1468,10 @@ class DiffusionEngine:
         # (int(steps * strength) == 0 → empty latents → VAE crash)
         min_denoise = 2.0 / max(req.steps, 1) + 1e-3
         chain_denoise = max(req.denoise_strength, min_denoise)
+        chain_scaled_steps = scale_steps_for_denoise(req.steps, chain_denoise)
 
-        log.info("Chain animation: %d frames, mode=%s, steps=%d, denoise=%.2f, seed_base=%d",
-                 req.frame_count, req.mode.value, req.steps, chain_denoise, base_seed)
+        log.info("Chain animation: %d frames, mode=%s, steps=%d (scaled=%d), denoise=%.2f, seed_base=%d",
+                 req.frame_count, req.mode.value, req.steps, chain_scaled_steps, chain_denoise, base_seed)
 
         with torch.inference_mode():
             for frame_idx in range(req.frame_count):
@@ -1488,7 +1536,7 @@ class DiffusionEngine:
                             prompt=req.prompt,
                             negative_prompt=effective_neg,
                             image=_source_img,
-                            num_inference_steps=req.steps,
+                            num_inference_steps=chain_scaled_steps,
                             guidance_scale=req.cfg_scale,
                             strength=chain_denoise,
                             generator=generator,
@@ -1503,7 +1551,7 @@ class DiffusionEngine:
                             prompt=req.prompt,
                             negative_prompt=effective_neg,
                             image=_source_img,
-                            num_inference_steps=req.steps,
+                            num_inference_steps=chain_scaled_steps,
                             guidance_scale=req.cfg_scale,
                             strength=chain_denoise,
                             generator=generator,
@@ -1546,7 +1594,7 @@ class DiffusionEngine:
                             prompt=req.prompt,
                             negative_prompt=effective_neg,
                             image=source,
-                            num_inference_steps=req.steps,
+                            num_inference_steps=chain_scaled_steps,
                             guidance_scale=req.cfg_scale,
                             strength=chain_denoise,
                             generator=generator,
@@ -1555,15 +1603,15 @@ class DiffusionEngine:
                             output_type="pil",
                         ).images[0]
                     else:
-                        log.info("Chain frame %d: calling img2img pipe (source=%s, steps=%d, strength=%.2f, unet=%s, scheduler=%s)",
-                                 frame_idx, source.size, req.steps, chain_denoise,
+                        log.info("Chain frame %d: calling img2img pipe (source=%s, steps=%d (scaled=%d), strength=%.2f, unet=%s, scheduler=%s)",
+                                 frame_idx, source.size, req.steps, chain_scaled_steps, chain_denoise,
                                  type(self._img2img_pipe.unet).__name__,
                                  type(self._img2img_pipe.scheduler).__name__)
                         image = self._img2img_pipe(
                             prompt=req.prompt,
                             negative_prompt=effective_neg,
                             image=source,
-                            num_inference_steps=req.steps,
+                            num_inference_steps=chain_scaled_steps,
                             guidance_scale=req.cfg_scale,
                             strength=chain_denoise,
                             generator=generator,
@@ -1627,22 +1675,24 @@ class DiffusionEngine:
         on_frame: Optional[Callable[[AnimationFrameResponse], None]],
         on_progress: Optional[Callable[[ProgressResponse], None]],
     ) -> list[AnimationFrameResponse]:
-        """Core AnimateDiff generation logic."""
+        """Core AnimateDiff generation logic (txt2img, img2img, controlnet)."""
         is_controlnet = req.mode.value.startswith("controlnet_")
+        is_img2img = req.mode == GenerationMode.IMG2IMG
 
         if is_controlnet:
-            # Reuse existing ControlNet model if same mode already loaded
             existing_cn = pipeline_factory.get_controlnet_from_pipe(
                 self._controlnet_pipe, self._controlnet_mode, req.mode,
             )
             pipe = self._animatediff.ensure_controlnet(
                 self._pipe, req.mode, existing_controlnet=existing_cn,
             )
+        elif is_img2img:
+            pipe = self._animatediff.ensure_vid2vid(self._pipe)
         else:
             pipe = self._animatediff.ensure_base(self._pipe)
 
-        # FreeInit
-        if req.enable_freeinit:
+        # FreeInit (not supported on vid2vid pipeline)
+        if req.enable_freeinit and not is_img2img:
             try:
                 pipe.enable_free_init(
                     num_iters=req.freeinit_iterations,
@@ -1657,6 +1707,7 @@ class DiffusionEngine:
         generator = torch.Generator("cuda").manual_seed(seed)
 
         effective_neg = self._build_effective_negative(req.negative_prompt, req.negative_ti)
+        target_w, target_h = round8(req.width), round8(req.height)
 
         # Progress callback
         def step_callback(pipe_ref, step_idx, timestep, callback_kwargs):
@@ -1672,25 +1723,54 @@ class DiffusionEngine:
         t0 = time.perf_counter()
 
         with torch.inference_mode():
-            kwargs = dict(
-                prompt=req.prompt,
-                negative_prompt=effective_neg,
-                num_frames=req.frame_count,
-                num_inference_steps=req.steps,
-                guidance_scale=req.cfg_scale,
-                width=round8(req.width),
-                height=round8(req.height),
-                generator=generator,
-                clip_skip=req.clip_skip,
-                callback_on_step_end=step_callback,
-                output_type="pil",
-            )
+            if is_img2img:
+                # AnimateDiff vid2vid: source image → animated frames
+                if req.source_image is None:
+                    raise ValueError("AnimateDiff img2img requires source_image")
+                source = decode_b64_image(req.source_image).convert("RGB")
+                source = resize_to_target(source, target_w, target_h)
+                # Repeat source image as input "video"
+                video_input = [source] * req.frame_count
 
-            if is_controlnet and req.control_image is not None:
-                control = decode_b64_image(req.control_image).convert("RGB")
-                target_w, target_h = round8(req.width), round8(req.height)
-                control = resize_to_target(control, target_w, target_h)
-                kwargs["conditioning_frames"] = [control] * req.frame_count
+                min_denoise = 2.0 / max(req.steps, 1) + 1e-3
+                strength = max(req.denoise_strength, min_denoise)
+                scaled_steps = scale_steps_for_denoise(req.steps, strength)
+
+                log.info("AnimateDiff img2img: %d frames, steps=%d (scaled=%d), strength=%.2f",
+                         req.frame_count, req.steps, scaled_steps, strength)
+
+                kwargs = dict(
+                    video=video_input,
+                    prompt=req.prompt,
+                    negative_prompt=effective_neg,
+                    num_inference_steps=scaled_steps,
+                    guidance_scale=req.cfg_scale,
+                    strength=strength,
+                    generator=generator,
+                    clip_skip=req.clip_skip,
+                    callback_on_step_end=step_callback,
+                    output_type="pil",
+                )
+            else:
+                # txt2img or controlnet
+                kwargs = dict(
+                    prompt=req.prompt,
+                    negative_prompt=effective_neg,
+                    num_frames=req.frame_count,
+                    num_inference_steps=req.steps,
+                    guidance_scale=req.cfg_scale,
+                    width=target_w,
+                    height=target_h,
+                    generator=generator,
+                    clip_skip=req.clip_skip,
+                    callback_on_step_end=step_callback,
+                    output_type="pil",
+                )
+
+                if is_controlnet and req.control_image is not None:
+                    control = decode_b64_image(req.control_image).convert("RGB")
+                    control = resize_to_target(control, target_w, target_h)
+                    kwargs["conditioning_frames"] = [control] * req.frame_count
 
             output = pipe(**kwargs)
 
@@ -1698,7 +1778,7 @@ class DiffusionEngine:
         pil_frames = output.frames[0] if isinstance(output.frames[0], list) else output.frames
 
         # Disable FreeInit for next normal generation
-        if req.enable_freeinit:
+        if req.enable_freeinit and not is_img2img:
             try:
                 pipe.disable_free_init()
             except Exception:

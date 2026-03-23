@@ -10,6 +10,7 @@ import torch
 from diffusers import (
     AnimateDiffControlNetPipeline,
     AnimateDiffPipeline,
+    AnimateDiffVideoToVideoPipeline,
     ControlNetModel,
     MotionAdapter,
 )
@@ -69,6 +70,7 @@ class AnimateDiffManager:
     def __init__(self) -> None:
         self.motion_adapter: Optional[MotionAdapter] = None
         self.pipe: Optional[AnimateDiffPipeline] = None
+        self.vid2vid_pipe: Optional[AnimateDiffVideoToVideoPipeline] = None
         self.controlnet_pipe: Optional[AnimateDiffControlNetPipeline] = None
         self.controlnet_mode: Optional[GenerationMode] = None
 
@@ -106,6 +108,39 @@ class AnimateDiffManager:
 
         log.info("AnimateDiff pipeline ready")
         return self.pipe
+
+    def ensure_vid2vid(self, base_pipe) -> AnimateDiffVideoToVideoPipeline:
+        """Lazy-load AnimateDiff vid2vid pipeline for img2img animation.
+
+        Shares all heavy components (UNet, VAE, text encoder, motion adapter)
+        with the base AnimateDiff pipeline — no additional VRAM.
+        """
+        if self.vid2vid_pipe is not None:
+            return self.vid2vid_pipe
+
+        # Ensure base pipeline + motion adapter are loaded first
+        self.ensure_base(base_pipe)
+
+        unet = get_uncompiled_unet(base_pipe)
+
+        try:
+            self.vid2vid_pipe = AnimateDiffVideoToVideoPipeline(
+                vae=base_pipe.vae,
+                text_encoder=base_pipe.text_encoder,
+                tokenizer=base_pipe.tokenizer,
+                unet=unet,
+                motion_adapter=self.motion_adapter,
+                scheduler=copy.deepcopy(base_pipe.scheduler),
+                feature_extractor=None,
+            )
+            self.vid2vid_pipe.to("cuda")
+            apply_freeu(self.vid2vid_pipe)
+        except Exception:
+            self.vid2vid_pipe = None
+            raise
+
+        log.info("AnimateDiff vid2vid pipeline ready")
+        return self.vid2vid_pipe
 
     def ensure_controlnet(
         self,
@@ -162,6 +197,7 @@ class AnimateDiffManager:
         import torch
         self.motion_adapter = None
         self.pipe = None
+        self.vid2vid_pipe = None
         self.controlnet_pipe = None
         self.controlnet_mode = None
         gc.collect()
