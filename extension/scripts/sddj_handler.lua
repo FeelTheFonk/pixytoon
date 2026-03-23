@@ -89,7 +89,7 @@ handlers.result = function(resp)
 
         -- Random loop: generate new prompt first, then auto-generate in prompt_result handler
         if PT.loop.random_mode then
-          PT.update_status("Random Loop #" .. PT.loop.counter .. " — Generating prompt...")
+          PT.update_status("Random Loop #" .. PT.loop.counter .. " — Generating prompt, then image...")
           PT.send({ action = "generate_prompt", locked_fields = PT.loop.locked_fields, randomness = PT.dlg and PT.dlg.data.randomness or 0 })
           return
         end
@@ -444,6 +444,20 @@ handlers.preset_deleted = function(resp)
     PT.update_status("Preset '" .. tostring(resp.name or "?") .. "' deleted")
     PT.dlg:modify{ id = "preset_name", option = "(none)" }
     PT.send({ action = "list_presets" })
+  end
+end
+
+handlers.palette_saved = function(resp)
+  if PT.dlg then
+    PT.update_status("Palette '" .. tostring(resp.name or "?") .. "' saved")
+    PT.send({ action = "list_palettes" })
+  end
+end
+
+handlers.palette_deleted = function(resp)
+  if PT.dlg then
+    PT.update_status("Palette '" .. tostring(resp.name or "?") .. "' deleted")
+    PT.send({ action = "list_palettes" })
   end
 end
 

@@ -186,6 +186,8 @@ class AudioAnalyzer:
         # BPM detection + beat feature
         tempo, beat_frames_idx = librosa.beat.beat_track(y=y, sr=sr, hop_length=hop_length)
         bpm = float(np.atleast_1d(tempo)[0])
+        if np.isnan(bpm):
+            bpm = 0.0
         beat_signal = np.zeros_like(onset)
         for bf in beat_frames_idx:
             if bf < len(beat_signal):

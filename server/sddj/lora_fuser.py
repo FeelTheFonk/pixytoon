@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import logging
 from typing import Optional
 
@@ -12,9 +13,9 @@ from .lora_manager import resolve_lora_path
 
 log = logging.getLogger("sddj.lora_fuser")
 
-# Monotonic counter avoids PEFT adapter name reuse (PEFT retains
+# Thread-safe monotonic counter avoids PEFT adapter name reuse (PEFT retains
 # stale names after fuse+unload, causing "already in use" errors).
-_adapter_counter = 0
+_adapter_counter = itertools.count(1)
 
 
 class LoRAFuser:
@@ -26,7 +27,6 @@ class LoRAFuser:
 
     def set_lora(self, pipe, name: Optional[str], weight: float = 1.0) -> None:
         """Load or switch style LoRA (fused into weights, no PEFT runtime)."""
-        global _adapter_counter
 
         # Validate new LoRA path BEFORE unfusing the old one
         if name is not None:
@@ -64,8 +64,7 @@ class LoRAFuser:
 
         # Use unique adapter name each time — PEFT retains stale names
         # after fuse+unload, so reusing the same name causes conflicts
-        _adapter_counter += 1
-        adapter_name = f"style_{_adapter_counter}"
+        adapter_name = f"style_{next(_adapter_counter)}"
 
         try:
             pipe.load_lora_weights(

@@ -32,10 +32,14 @@ class PresetsManager:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
 
+    _MAX_PRESETS = 100
+
     def save_preset(self, name: str, data: dict) -> None:
         """Save a preset (create or overwrite)."""
         validate_resource_name(name, "preset")
         path = self._dir / f"{name}.json"
+        if not path.is_file() and len(list(self._dir.glob("*.json"))) >= self._MAX_PRESETS:
+            raise ValueError(f"Maximum number of presets ({self._MAX_PRESETS}) reached")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         log.info("Preset saved: %s", name)

@@ -32,6 +32,9 @@ class Action(str, Enum):
     GET_PRESET = "get_preset"
     SAVE_PRESET = "save_preset"
     DELETE_PRESET = "delete_preset"
+    # Palette management
+    SAVE_PALETTE = "save_palette"
+    DELETE_PALETTE = "delete_palette"
     # Resource management
     CLEANUP = "cleanup"
     # Audio reactivity
@@ -288,6 +291,9 @@ class Request(BaseModel):
     # Preset fields
     preset_name: Optional[str] = None
     preset_data: Optional[dict] = None
+    # Palette CRUD fields
+    palette_save_name: Optional[str] = None
+    palette_save_colors: Optional[list[str]] = None
     # Audio reactivity fields
     audio_path: Optional[str] = None
     fps: Optional[float] = None
@@ -542,6 +548,16 @@ class PresetSavedResponse(BaseModel):
 
 class PresetDeletedResponse(BaseModel):
     type: Literal["preset_deleted"] = "preset_deleted"
+    name: str
+
+
+class PaletteSavedResponse(BaseModel):
+    type: Literal["palette_saved"] = "palette_saved"
+    name: str
+
+
+class PaletteDeletedResponse(BaseModel):
+    type: Literal["palette_deleted"] = "palette_deleted"
     name: str
 
 

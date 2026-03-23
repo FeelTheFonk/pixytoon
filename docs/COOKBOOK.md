@@ -1112,6 +1112,17 @@ If you have a carefully crafted palette in Aseprite:
 2. Set Palette to **Custom**
 3. Paste hex codes: `#1a1c2c #5d275d #b13e53 #ef7d57 #ffcd75 ...`
 
+### Saving & Deleting Palettes
+
+You can save custom palettes for reuse across sessions:
+
+1. Set Palette to **Preset** and configure your desired colors
+2. Click **Save Palette** — enter a name
+3. Your palette appears in the preset dropdown alongside built-in palettes (PICO-8, Game Boy, etc.)
+4. To remove a saved palette, select it and click **Del Palette**
+
+Saved palettes are stored as JSON files in the server's `palettes/` directory.
+
 ### When Palette Enforcement Shifts Colors Too Much
 
 Palette enforcement maps each pixel to the nearest perceptual match (CIELAB color space). If results feel "off":

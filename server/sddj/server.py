@@ -34,6 +34,8 @@ from .protocol import (
     ErrorResponse,
     ListResponse,
     ModulationPresetsResponse,
+    PaletteDeletedResponse,
+    PaletteSavedResponse,
     PongResponse,
     PresetDeletedResponse,
     PresetResponse,
@@ -420,6 +422,12 @@ async def _handle(websocket: WebSocket, req: Request, ws_id: int) -> None:
             items = palette_manager.list_palettes()
             await _send(websocket, ListResponse(list_type="palettes", items=items))
 
+        elif req.action == Action.SAVE_PALETTE:
+            await _handle_save_palette(websocket, req)
+
+        elif req.action == Action.DELETE_PALETTE:
+            await _handle_delete_palette(websocket, req)
+
         elif req.action == Action.LIST_CONTROLNETS:
             from . import pipeline_factory
             await _send(websocket, ListResponse(
@@ -666,6 +674,30 @@ async def _handle_delete_preset(websocket: WebSocket, req: Request) -> None:
     try:
         presets_manager.delete_preset(req.preset_name)
         await _send(websocket, PresetDeletedResponse(name=req.preset_name))
+    except (FileNotFoundError, ValueError) as e:
+        await _send(websocket, ErrorResponse(code="INVALID_REQUEST", message=str(e)))
+
+
+async def _handle_save_palette(websocket: WebSocket, req: Request) -> None:
+    if not req.palette_save_name or not req.palette_save_colors:
+        await _send(websocket, ErrorResponse(
+            code="INVALID_REQUEST", message="palette_save_name and palette_save_colors required"))
+        return
+    try:
+        palette_manager.save_palette(req.palette_save_name, req.palette_save_colors)
+        await _send(websocket, PaletteSavedResponse(name=req.palette_save_name))
+    except ValueError as e:
+        await _send(websocket, ErrorResponse(code="INVALID_REQUEST", message=str(e)))
+
+
+async def _handle_delete_palette(websocket: WebSocket, req: Request) -> None:
+    if not req.palette_save_name:
+        await _send(websocket, ErrorResponse(
+            code="INVALID_REQUEST", message="palette_save_name required"))
+        return
+    try:
+        palette_manager.delete_palette(req.palette_save_name)
+        await _send(websocket, PaletteDeletedResponse(name=req.palette_save_name))
     except (FileNotFoundError, ValueError) as e:
         await _send(websocket, ErrorResponse(code="INVALID_REQUEST", message=str(e)))
 

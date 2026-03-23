@@ -134,11 +134,12 @@ class RealtimeState:
         self._scheduler_cfg = None   # cached scheduler config dict
 
     def reset(self) -> None:
-        self.active = False
-        self.prompt_embeds = None
-        self.negative_prompt_embeds = None
-        self._prompt_hash = None
-        self.frame_counter = 0
+        with self._lock:
+            self.active = False
+            self.prompt_embeds = None
+            self.negative_prompt_embeds = None
+            self._prompt_hash = None
+            self.frame_counter = 0
 
 
 class DiffusionEngine:
@@ -974,7 +975,7 @@ class DiffusionEngine:
                         if _control_img is None:
                             raise ValueError("controlnet requires control_image")
                         self._ensure_controlnet(req.mode)
-                        cn_scale = frame_params.get("controlnet_scale", 1.0)
+                        cn_scale = max(0.0, min(2.0, frame_params.get("controlnet_scale", 1.0)))
                         image = self._controlnet_pipe(
                             prompt=frame_prompt,
                             negative_prompt=effective_neg,
@@ -1732,24 +1733,25 @@ class DiffusionEngine:
                     or req.lora.weight != self._lora_fuser.current_weight):
                 self.set_style_lora(req.lora.name, req.lora.weight)
 
-        # Configure state from request
-        rt.prompt = req.prompt
-        rt.negative_prompt = self._build_effective_negative(req.negative_prompt, req.negative_ti)
-        rt.denoise_strength = req.denoise_strength
-        rt.steps = req.steps
-        rt.cfg_scale = req.cfg_scale
-        rt.clip_skip = req.clip_skip
-        rt.width = round8(req.width)
-        rt.height = round8(req.height)
-        rt.post_process = req.post_process
-        rt.frame_counter = 0
+        # Configure state from request (lock ensures no partial reads from frame thread)
+        with rt._lock:
+            rt.prompt = req.prompt
+            rt.negative_prompt = self._build_effective_negative(req.negative_prompt, req.negative_ti)
+            rt.denoise_strength = req.denoise_strength
+            rt.steps = req.steps
+            rt.cfg_scale = req.cfg_scale
+            rt.clip_skip = req.clip_skip
+            rt.width = round8(req.width)
+            rt.height = round8(req.height)
+            rt.post_process = req.post_process
+            rt.frame_counter = 0
 
-        # Resolve seed once (fixed for session coherence)
-        if req.seed >= 0:
-            rt.seed = req.seed
-        else:
-            rt.seed = random.randint(0, 2**32 - 1)
-        rt._resolved_seed = rt.seed % (2**32)
+            # Resolve seed once (fixed for session coherence)
+            if req.seed >= 0:
+                rt.seed = req.seed
+            else:
+                rt.seed = random.randint(0, 2**32 - 1)
+            rt._resolved_seed = rt.seed % (2**32)
 
         # Suspend DeepCache (not effective at 2-4 steps)
         if self._deepcache_helper is not None:

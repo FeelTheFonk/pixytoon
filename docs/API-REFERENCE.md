@@ -20,6 +20,8 @@ Connect to `ws://127.0.0.1:9876/ws`. All messages are JSON. Maximum 5 concurrent
 | `generate_animation` | Run multi-frame animation          |
 | `list_loras`         | List available LoRAs               |
 | `list_palettes`      | List available palettes            |
+| `save_palette`       | Save a custom palette              |
+| `delete_palette`     | Delete a user palette              |
 | `list_controlnets`   | List available ControlNet modes    |
 | `list_embeddings`    | List available TI embeddings       |
 | `realtime_start`     | Start real-time paint session       |
@@ -305,6 +307,34 @@ When `randomness` > 0 and no manual `prompt_segments` are provided, the server a
 
 Longer audio increases segments proportionally (×1 per extra minute, capped at 12). Boundaries snap to the BPM beat grid when available.
 
+## Palette Management
+
+Save a custom palette:
+
+```json
+{
+  "action": "save_palette",
+  "palette_save_name": "my_palette",
+  "palette_save_colors": ["#FF0000", "#00FF00", "#0000FF"]
+}
+```
+
+Delete a palette:
+
+```json
+{
+  "action": "delete_palette",
+  "palette_save_name": "my_palette"
+}
+```
+
+| Field                | Type           | Description                        |
+|----------------------|----------------|------------------------------------|
+| `palette_save_name`  | `string`       | Palette name (alphanumeric, max 256 chars) |
+| `palette_save_colors`| `string[]`     | Hex color codes (`#RRGGBB` or `#RGB`)      |
+
+**Responses**: `palette_saved` (with `name`) or `palette_deleted` (with `name`). Both also trigger a `list` response refreshing the palette list.
+
 ## Export MP4 Request
 
 Requires ffmpeg in PATH. Export animation frames + audio to a single MP4 file.
@@ -346,6 +376,8 @@ Requires ffmpeg in PATH. Export animation frames + audio to a single MP4 file.
 | `preset`             | `name`, `data`                                                      |
 | `preset_saved`       | `name`                                                              |
 | `preset_deleted`     | `name`                                                              |
+| `palette_saved`      | `name`                                                              |
+| `palette_deleted`    | `name`                                                              |
 | `cleanup_done`       | `message`, `freed_mb`                                               |
 | `audio_analysis`     | `duration`, `total_frames`, `features`, `bpm`, `recommended_preset`, `stems_available`, `stems`, `waveform` (opt) |
 | `audio_reactive_frame` | `frame_index`, `total_frames`, `image`, `seed`, `time_ms`, `width`, `height`, `params_used` |

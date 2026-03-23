@@ -87,3 +87,15 @@ class TestPresetsManager:
         assert new_dir.is_dir()
         mgr.save_preset("test", sample_preset_data)
         assert "test" in mgr.list_presets()
+
+    def test_max_presets_limit(self, empty_presets_dir: Path, sample_preset_data: dict):
+        """v0.7.9: reject save when preset count reaches _MAX_PRESETS."""
+        mgr = PresetsManager(empty_presets_dir)
+        mgr._MAX_PRESETS = 3  # Override for test
+        mgr.save_preset("p1", sample_preset_data)
+        mgr.save_preset("p2", sample_preset_data)
+        mgr.save_preset("p3", sample_preset_data)
+        with pytest.raises(ValueError, match="Maximum"):
+            mgr.save_preset("p4", sample_preset_data)
+        # Overwriting existing should still work
+        mgr.save_preset("p1", {**sample_preset_data, "steps": 99})

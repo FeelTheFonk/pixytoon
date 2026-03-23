@@ -437,7 +437,7 @@ def _bayer_dither(
 
     # Apply threshold offset (vectorized across all 3 channels)
     n_colors = len(palette_rgb)
-    step = 255.0 / max(2, n_colors - 1)
+    step = 255.0 / max(1, n_colors - 1)
     offset = (th_tiled - 0.5) * step
     rgb += offset[:, :, np.newaxis]
     rgb = np.round(rgb / step) * step

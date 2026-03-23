@@ -145,6 +145,7 @@ sddj/
 - **Randomness Slider** (v0.7.7) — 0-20 scale controlling prompt diversity: Off (0), Subtle (5), Moderate (10), Wild (15), Chaos (20). Chaos mode combines multiple items per category; Wild mode favors rare items and random templates.
 - **Dedicated Pipeline Sliders** (v0.7.7) — Animation and Audio tabs have their own Steps, CFG, and Strength sliders, independent from the Generate tab. Fixes the shared-slider bug where changing Generate settings silently affected other pipelines.
 - **Audio-Linked Randomness** (v0.7.7) — When randomness > 0 in audio-reactive mode, auto-generates varied prompt segments aligned to musical onset peaks and BPM. Higher randomness = more scene variety synchronized to the music (2-12 segments, capped).
+- **Palette CRUD** (v0.7.9) — Save and delete custom palettes from the UI. Palettes persist as JSON files alongside built-in presets (PICO-8, Game Boy, etc.).
 
 ## Performance Stack
 

@@ -1,12 +1,15 @@
-"""Palette loading, listing, and enforcement utilities."""
+"""Palette loading, listing, save/delete, and enforcement utilities."""
 
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from .config import settings
 from .validation import validate_resource_name as _validate_name
+
+log = logging.getLogger("sddj.palette")
 
 
 def _hex_to_rgb(h: str) -> tuple[int, int, int]:
@@ -46,3 +49,29 @@ def load_palette(name: str) -> list[tuple[int, int, int]]:
 
 def hex_list_to_rgb(colors: list[str]) -> list[tuple[int, int, int]]:
     return [_hex_to_rgb(c) for c in colors]
+
+
+def save_palette(name: str, colors: list[str]) -> None:
+    """Save a named palette to disk. Colors must be hex strings (#RRGGBB or #RGB)."""
+    _validate_name(name, "palette")
+    if not colors:
+        raise ValueError("Palette must contain at least one color")
+    # Validate all colors before writing
+    for c in colors:
+        _hex_to_rgb(c)
+    d = settings.palettes_dir
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / f"{name}.json"
+    data = {"name": name, "colors": colors}
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    log.info("Palette saved: %s (%d colors)", name, len(colors))
+
+
+def delete_palette(name: str) -> None:
+    """Delete a named palette from disk."""
+    _validate_name(name, "palette")
+    path = settings.palettes_dir / f"{name}.json"
+    if not path.is_file():
+        raise FileNotFoundError(f"Palette not found: {name}")
+    path.unlink()
+    log.info("Palette deleted: %s", name)

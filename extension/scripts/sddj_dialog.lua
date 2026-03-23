@@ -368,7 +368,9 @@ local function build_tab_postprocess()
     onchange = function()
       local m = dlg.data.palette_mode
       dlg:modify{ id = "palette_name", visible = (m == "preset") }
+      dlg:modify{ id = "palette_del_btn", visible = (m == "preset") }
       dlg:modify{ id = "palette_custom_colors", visible = (m == "custom") }
+      dlg:modify{ id = "palette_save_btn", visible = (m == "custom") }
     end,
   }
 
@@ -386,6 +388,46 @@ local function build_tab_postprocess()
     text = "",
     visible = false,
     hexpand = true,
+  }
+
+  dlg:button{
+    id = "palette_save_btn",
+    text = "Save Palette",
+    visible = false,
+    onclick = function()
+      -- Collect colors from custom hex field or current preset
+      local hex_str = dlg.data.palette_custom_colors or ""
+      local colors = {}
+      for hex in hex_str:gmatch("#?(%x%x%x%x%x%x)") do
+        colors[#colors + 1] = "#" .. hex
+      end
+      if #colors == 0 then
+        app.alert("Enter hex colors first (e.g. #FF0000 #00FF00 #0000FF)")
+        return
+      end
+      local name_dlg = Dialog{ title = "Save Palette" }
+      name_dlg:entry{ id = "pname", label = "Name", text = "", hexpand = true }
+      name_dlg:button{ id = "ok", text = "Save" }
+      name_dlg:button{ id = "cancel", text = "Cancel" }
+      name_dlg:show()
+      local pname = name_dlg.data.pname or ""
+      if pname ~= "" then
+        PT.send({ action = "save_palette", palette_save_name = pname, palette_save_colors = colors })
+      end
+    end,
+  }
+
+  dlg:button{
+    id = "palette_del_btn",
+    text = "Del Palette",
+    visible = false,
+    onclick = function()
+      local name = dlg.data.palette_name
+      if not name or name == "" then return end
+      if app.alert{ title = "Delete Palette", text = "Delete palette '" .. name .. "'?", buttons = { "Delete", "Cancel" } } == 1 then
+        PT.send({ action = "delete_palette", palette_save_name = name })
+      end
+    end,
   }
 
   dlg:check{
@@ -1019,7 +1061,10 @@ end
 -- ─── Trigger Functions (extracted for contextual button dispatch) ──────
 
 function PT.trigger_generate()
-  if PT.state.generating or PT.state.animating then return end
+  if PT.state.generating or PT.state.animating then
+    PT.update_status("Already generating...")
+    return
+  end
   local dlg = PT.dlg
   local d = dlg.data
   -- Reset sequence for non-loop single gen (new sequence each click)
@@ -1174,12 +1219,19 @@ end
 function PT.update_action_button(tab)
   if not PT.dlg then return end
   if PT.live.mode then
-    PT.dlg:modify{ id = "action_btn", text = "STOP LIVE" }
+    local live_label = "STOP LIVE"
+    if PT.dlg and PT.dlg.data.live_mode then
+      local m = PT.dlg.data.live_mode
+      if m == "Auto (stroke)" then live_label = "STOP LIVE (AUTO)"
+      elseif m == "Manual (F5)" then live_label = "STOP LIVE (F5)"
+      end
+    end
+    PT.dlg:modify{ id = "action_btn", text = live_label }
     return
   end
   local texts = {
     tab_gen   = "GENERATE",
-    tab_pp    = "GENERATE",
+    tab_pp    = "GENERATE (PP)",
     tab_anim  = "ANIMATE",
     tab_live  = "START LIVE",
     tab_audio = "AUDIO GEN",

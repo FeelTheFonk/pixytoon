@@ -63,7 +63,7 @@ function PT.save_to_output(resp, meta)
     local time_str = os.date("%H-%M-%S")
     local seed_str = tostring(resp.seed or 0)
     _output_counter = _output_counter + 1
-    local base_name = time_str .. "_" .. string.format("%03d", _output_counter) .. "_s" .. seed_str
+    local base_name = time_str .. "_" .. string.format("%04d", _output_counter) .. "_s" .. seed_str
 
     -- Decode and validate
     local img_data = PT.base64_decode(resp.image)
@@ -113,7 +113,7 @@ function PT.save_animation_frame(resp)
       tag = tag:gsub("[^%w%-_]", "_"):sub(1, 50)
       local action_prefix = (req and req.action == "generate_audio_reactive") and "audio" or "anim"
       _output_counter = _output_counter + 1
-      local folder_name = time_str .. "_" .. string.format("%03d", _output_counter) .. "_" .. action_prefix .. "_" .. tag
+      local folder_name = time_str .. "_" .. string.format("%04d", _output_counter) .. "_" .. action_prefix .. "_" .. tag
       PT.anim.output_dir = app.fs.joinPath(date_dir, folder_name)
       app.fs.makeDirectory(PT.anim.output_dir)
       PT.anim.output_count = 0
@@ -176,9 +176,25 @@ function PT.open_output_dir()
   if not app.fs.isDirectory(dir) then
     app.fs.makeDirectory(dir)
   end
-  -- Sanitize path: strip any quotes to prevent command injection
-  local safe_dir = dir:gsub("/", "\\"):gsub('"', "")
-  os.execute('explorer "' .. safe_dir .. '"')
+  -- Cross-platform open (sanitize path to prevent command injection)
+  local safe_dir = dir:gsub('"', "")
+  if package.config:sub(1, 1) == "\\" then
+    -- Windows
+    safe_dir = safe_dir:gsub("/", "\\")
+    os.execute('explorer "' .. safe_dir .. '"')
+  else
+    local is_mac = false
+    local ok, handle = pcall(io.popen, "uname -s")
+    if ok and handle then
+      is_mac = handle:read("*l") == "Darwin"
+      handle:close()
+    end
+    if is_mac then
+      os.execute('open "' .. safe_dir .. '"')
+    else
+      os.execute('xdg-open "' .. safe_dir .. '"')
+    end
+  end
 end
 
 -- ─── Load Metadata from JSON ──────────────────────────────────
@@ -281,7 +297,7 @@ end
 function PT.build_generation_meta(resp)
   local req = PT.last_request
   local meta = {
-    sddj_version = "0.7.7",
+    sddj_version = PT.VERSION,
     type = "generation",
     timestamp = os.date("!%Y-%m-%dT%H:%M:%S"),
     timestamp_local = os.date("%Y-%m-%d %H:%M:%S"),
@@ -309,7 +325,7 @@ end
 function PT.build_animation_meta(resp)
   local req = PT.last_request
   local meta = {
-    sddj_version = "0.7.7",
+    sddj_version = PT.VERSION,
     type = "animation",
     timestamp = os.date("!%Y-%m-%dT%H:%M:%S"),
     timestamp_local = os.date("%Y-%m-%d %H:%M:%S"),

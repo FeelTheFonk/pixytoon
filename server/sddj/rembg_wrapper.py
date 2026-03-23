@@ -31,7 +31,7 @@ def _get_session():
             from rembg import new_session
             providers = ["CPUExecutionProvider"] if settings.rembg_on_cpu else None
             _session = new_session(model_name=settings.rembg_model, providers=providers)
-    return _session
+        return _session
 
 
 def remove_bg(img: Image.Image) -> Image.Image:

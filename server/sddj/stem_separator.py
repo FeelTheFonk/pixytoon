@@ -7,6 +7,7 @@ to avoid competing with the GPU inference pipeline.
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -38,26 +39,30 @@ class StemSeparator:
         self._model_name = model_name
         self._device = device
         self._separator = None
+        self._load_lock = threading.Lock()
 
     def is_available(self) -> bool:
         return is_available()
 
     def _ensure_loaded(self) -> None:
-        """Lazy-load the demucs separator."""
+        """Lazy-load the demucs separator (thread-safe)."""
         if self._separator is not None:
             return
-        if not is_available():
-            raise RuntimeError(
-                "Stem separation requires demucs. "
-                "Install with: pip install demucs>=4.0"
+        with self._load_lock:
+            if self._separator is not None:
+                return
+            if not is_available():
+                raise RuntimeError(
+                    "Stem separation requires demucs. "
+                    "Install with: pip install demucs>=4.0"
+                )
+            import demucs.api
+            log.info("Loading stem separator: model=%s, device=%s", self._model_name, self._device)
+            self._separator = demucs.api.Separator(
+                model=self._model_name,
+                device=self._device,
             )
-        import demucs.api
-        log.info("Loading stem separator: model=%s, device=%s", self._model_name, self._device)
-        self._separator = demucs.api.Separator(
-            model=self._model_name,
-            device=self._device,
-        )
-        log.info("Stem separator loaded")
+            log.info("Stem separator loaded")
 
     def separate(self, audio_path: str, target_sr: int = 22050) -> dict[str, np.ndarray]:
         """Separate audio file into stems.

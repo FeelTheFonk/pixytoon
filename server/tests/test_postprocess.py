@@ -132,6 +132,22 @@ class TestDithering:
         result = apply(img, spec)
         assert result.size == (64, 64)
 
+    def test_bayer_2_colors(self):
+        """v0.7.9: Bayer dithering with 2-color palette should not crash."""
+        np.random.seed(42)
+        img = _make_test_image(32, 32)
+        spec = PostProcessSpec(
+            pixelate=PixelateSpec(enabled=False),
+            quantize_colors=2,
+            dither=DitherMode.BAYER_4X4,
+            palette=PaletteSpec(
+                mode=PaletteMode.CUSTOM,
+                colors=["#000000", "#FFFFFF"],
+            ),
+        )
+        result = apply(img, spec)
+        assert result.size == (32, 32)
+
 
 class TestPalette:
     def test_auto_palette(self):

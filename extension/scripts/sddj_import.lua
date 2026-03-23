@@ -17,6 +17,7 @@ function PT.import_result(resp)
     local spr = app.sprite
     if spr == nil then
       spr = Sprite(resp.width or 512, resp.height or 512, ColorMode.RGB)
+      app.activeSprite = spr
     end
 
     local img = Image{ fromFile = tmp }
@@ -82,6 +83,7 @@ function PT.import_result_as_frame(resp)
     local created_sprite = false
     if spr == nil then
       spr = Sprite(resp.width or 512, resp.height or 512, ColorMode.RGB)
+      app.activeSprite = spr
       created_sprite = true
     end
 
@@ -165,6 +167,7 @@ function PT.import_animation_frame(resp)
     local created_sprite = false
     if spr == nil then
       spr = Sprite(resp.width or 512, resp.height or 512, ColorMode.RGB)
+      app.activeSprite = spr
       created_sprite = true
     end
 

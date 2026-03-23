@@ -40,6 +40,8 @@ from sddj.protocol import (
     ResultResponse,
     SeedStrategy,
     StemsAvailableResponse,
+    PaletteSavedResponse,
+    PaletteDeletedResponse,
 )
 
 
@@ -51,6 +53,7 @@ class TestAction:
             "ping",
             "realtime_start", "realtime_frame", "realtime_update", "realtime_stop",
             "generate_prompt", "list_presets", "get_preset", "save_preset", "delete_preset",
+            "save_palette", "delete_palette",
             "cleanup",
             "analyze_audio", "generate_audio_reactive", "check_stems",
             "list_modulation_presets",
@@ -528,3 +531,32 @@ class TestAudioReactiveRandomness:
         )
         ar = req.to_audio_reactive_request()
         assert ar.randomness == 0
+
+
+class TestPaletteCrudProtocol:
+    """v0.7.9: palette save/delete actions and responses."""
+
+    def test_save_palette_action_exists(self):
+        assert Action.SAVE_PALETTE == "save_palette"
+
+    def test_delete_palette_action_exists(self):
+        assert Action.DELETE_PALETTE == "delete_palette"
+
+    def test_palette_saved_response(self):
+        resp = PaletteSavedResponse(name="my_pal")
+        assert resp.type == "palette_saved"
+        assert resp.name == "my_pal"
+
+    def test_palette_deleted_response(self):
+        resp = PaletteDeletedResponse(name="my_pal")
+        assert resp.type == "palette_deleted"
+        assert resp.name == "my_pal"
+
+    def test_request_palette_fields(self):
+        req = Request(
+            action="save_palette",
+            palette_save_name="test_pal",
+            palette_save_colors=["#FF0000", "#00FF00"],
+        )
+        assert req.palette_save_name == "test_pal"
+        assert req.palette_save_colors == ["#FF0000", "#00FF00"]

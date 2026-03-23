@@ -8,7 +8,10 @@ from unittest.mock import patch
 
 import pytest
 
-from sddj.palette_manager import _hex_to_rgb, hex_list_to_rgb, list_palettes, load_palette
+from sddj.palette_manager import (
+    _hex_to_rgb, hex_list_to_rgb, list_palettes, load_palette,
+    save_palette, delete_palette,
+)
 
 
 class TestHexToRgb:
@@ -79,3 +82,62 @@ class TestLoadPalette:
             mock_s.palettes_dir = tmp_palettes_dir
             with pytest.raises(ValueError):
                 load_palette("../etc/passwd")
+
+
+class TestSavePalette:
+    def test_save_and_load(self, tmp_path: Path):
+        with patch("sddj.palette_manager.settings") as mock_s:
+            mock_s.palettes_dir = tmp_path / "palettes"
+            save_palette("my_pal", ["#FF0000", "#00FF00", "#0000FF"])
+            colors = load_palette("my_pal")
+            assert len(colors) == 3
+            assert colors[0] == (255, 0, 0)
+
+    def test_save_empty_colors_rejected(self, tmp_path: Path):
+        with patch("sddj.palette_manager.settings") as mock_s:
+            mock_s.palettes_dir = tmp_path
+            with pytest.raises(ValueError, match="at least one color"):
+                save_palette("empty", [])
+
+    def test_save_invalid_hex_rejected(self, tmp_path: Path):
+        with patch("sddj.palette_manager.settings") as mock_s:
+            mock_s.palettes_dir = tmp_path
+            with pytest.raises(ValueError):
+                save_palette("bad", ["#FF0000", "XYZXYZ"])
+
+    def test_save_path_traversal_rejected(self, tmp_path: Path):
+        with patch("sddj.palette_manager.settings") as mock_s:
+            mock_s.palettes_dir = tmp_path
+            with pytest.raises(ValueError):
+                save_palette("../evil", ["#FF0000"])
+
+    def test_overwrite(self, tmp_path: Path):
+        with patch("sddj.palette_manager.settings") as mock_s:
+            mock_s.palettes_dir = tmp_path / "palettes"
+            save_palette("ow", ["#FF0000"])
+            save_palette("ow", ["#00FF00", "#0000FF"])
+            colors = load_palette("ow")
+            assert len(colors) == 2
+            assert colors[0] == (0, 255, 0)
+
+
+class TestDeletePalette:
+    def test_delete(self, tmp_path: Path):
+        with patch("sddj.palette_manager.settings") as mock_s:
+            mock_s.palettes_dir = tmp_path / "palettes"
+            save_palette("del_me", ["#FF0000"])
+            assert "del_me" in list_palettes()
+            delete_palette("del_me")
+            assert "del_me" not in list_palettes()
+
+    def test_delete_nonexistent(self, tmp_path: Path):
+        with patch("sddj.palette_manager.settings") as mock_s:
+            mock_s.palettes_dir = tmp_path
+            with pytest.raises(FileNotFoundError):
+                delete_palette("ghost")
+
+    def test_delete_path_traversal_rejected(self, tmp_path: Path):
+        with patch("sddj.palette_manager.settings") as mock_s:
+            mock_s.palettes_dir = tmp_path
+            with pytest.raises(ValueError):
+                delete_palette("../etc/passwd")

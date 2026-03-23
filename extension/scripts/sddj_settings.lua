@@ -58,6 +58,7 @@ function PT.save_settings()
     -- Output
     save_output        = d.save_output,
     -- Audio tab
+    audio_file         = d.audio_file,
     audio_fps          = d.audio_fps,
     audio_steps        = d.audio_steps,
     audio_cfg          = d.audio_cfg,
@@ -104,10 +105,14 @@ function PT.save_settings()
   }
   local ok, encoded = pcall(PT.json.encode, s)
   if not ok then return end
-  local f = io.open(PT.cfg.SETTINGS_FILE, "w")
+  local f, ferr = io.open(PT.cfg.SETTINGS_FILE, "w")
   if f then
-    f:write(encoded)
-    f:close()
+    local wok, werr = pcall(function() f:write(encoded); f:close() end)
+    if not wok then
+      PT.update_status("Settings save error: " .. tostring(werr))
+    end
+  else
+    PT.update_status("Cannot save settings: " .. tostring(ferr))
   end
 end
 
@@ -136,7 +141,7 @@ end
 function PT.apply_settings(s)
   if not s or not PT.dlg then return end
   -- Text fields
-  local texts = { "server_url", "prompt", "negative_prompt", "seed", "fixed_subject", "palette_custom_colors", "anim_tag",
+  local texts = { "server_url", "prompt", "negative_prompt", "seed", "fixed_subject", "palette_custom_colors", "anim_tag", "audio_file",
                    "expr_denoise", "expr_cfg", "expr_noise", "expr_controlnet", "expr_seed",
                    "expr_palette", "expr_cadence", "expr_motion_x", "expr_motion_y",
                    "expr_motion_zoom", "expr_motion_rot",
@@ -219,12 +224,14 @@ function PT.apply_settings(s)
   end
   if s.palette_mode ~= nil then
     PT.dlg:modify{ id = "palette_name", visible = (s.palette_mode == "preset") }
+    PT.dlg:modify{ id = "palette_del_btn", visible = (s.palette_mode == "preset") }
     PT.dlg:modify{ id = "palette_custom_colors", visible = (s.palette_mode == "custom") }
+    PT.dlg:modify{ id = "palette_save_btn", visible = (s.palette_mode == "custom") }
   end
   if s.anim_method ~= nil then
     local ad = (s.anim_method == "animatediff")
     PT.dlg:modify{ id = "anim_freeinit", visible = ad }
-    PT.dlg:modify{ id = "anim_freeinit_iters", visible = ad }
+    PT.dlg:modify{ id = "anim_freeinit_iters", visible = ad and (s.anim_freeinit == true) }
   end
   -- Sync audio method → audio freeinit visibility
   if s.audio_method ~= nil then

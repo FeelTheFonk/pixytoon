@@ -6,6 +6,8 @@ return function(PT)
 
 -- ─── Constants ──────────────────────────────────────────────
 
+PT.VERSION = "0.7.9"
+
 PT.cfg = {
   DEFAULT_SERVER_URL      = "ws://127.0.0.1:9876/ws",
   SETTINGS_FILE           = app.fs.joinPath(app.fs.userConfigPath, "sddj_settings.json"),
