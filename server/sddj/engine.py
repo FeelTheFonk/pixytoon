@@ -71,10 +71,12 @@ from .animatediff_manager import AnimateDiffManager, get_uncompiled_unet
 from .freeu_applicator import apply_freeu
 from .image_codec import (
     apply_motion_warp,
+    apply_optical_flow_blend,
     composite_with_mask,
     decode_b64_image,
     decode_b64_mask,
     encode_image_b64,
+    match_color_lab,
     resize_to_target,
     round8,
 )
@@ -116,11 +118,20 @@ def scale_steps_for_denoise(steps: int, strength: float) -> int:
     When strength < 1.0, fewer steps run, degrading quality.
     We compensate by scaling the schedule length: ceil(steps / strength),
     guaranteeing ~`steps` effective denoising passes regardless of strength.
+
+    A cap (``settings.distilled_step_scale_cap``) limits the multiplier to
+    avoid wasting compute on distilled models (Hyper-SD) that converge in
+    their trained step count.
     """
     if strength >= 1.0:
         return steps
     strength = max(strength, 0.01)  # safety floor
-    return max(steps, math.ceil(steps / strength))
+    scaled = math.ceil(steps / strength)
+    # Cap scaling for distilled models (Hyper-SD)
+    cap = settings.distilled_step_scale_cap
+    if cap > 0:
+        scaled = min(scaled, steps * cap)
+    return max(steps, scaled)
 
 
 class RealtimeState:
@@ -1042,8 +1053,13 @@ class DiffusionEngine:
                             denoise_strength=eff_denoise,
                         )
 
-                    # Noise amplitude modulation: inject noise into source
+                    # Noise amplitude modulation: inject noise into source.
+                    # Auto coupling (Deforum pattern): when no noise_amplitude
+                    # slot is active, inject subtle noise inversely proportional
+                    # to denoise strength for smoother transitions.
                     noise_amp = max(0.0, min(1.0, frame_params.get("noise_amplitude", 0.0)))
+                    if settings.auto_noise_coupling and "noise_amplitude" not in frame_params:
+                        noise_amp = max(0.0, (0.9 - eff_denoise) * 0.1)
                     if noise_amp > 0:
                         arr = np.array(source, dtype=np.float32) / 255.0
                         noise = np.random.default_rng(frame_seed).standard_normal(
@@ -1066,6 +1082,19 @@ class DiffusionEngine:
                         callback_on_step_end=step_callback,
                         output_type="pil",
                     ).images[0]
+
+                # Temporal coherence: color matching + optical flow (frame 1+)
+                if frame_idx > 0 and chain_source is not None:
+                    if settings.color_coherence_strength > 0:
+                        image = match_color_lab(
+                            image, chain_source,
+                            settings.color_coherence_strength,
+                        )
+                    if settings.optical_flow_blend > 0:
+                        image = apply_optical_flow_blend(
+                            image, chain_source,
+                            settings.optical_flow_blend,
+                        )
 
                 # Store pre-postprocess for next frame
                 chain_source = image
@@ -1324,15 +1353,42 @@ class DiffusionEngine:
                 frame_seeds[global_idx] = chunk_seed
 
         # Post-process and encode all frames
+        prev_ad_image: Optional[Image.Image] = None
         for frame_idx in sorted(frame_images.keys()):
             if self._cancel_event.is_set():
                 raise GenerationCancelled("AnimateDiff audio cancelled during post-processing")
 
             t0_frame = time.perf_counter()
-            pil_img = frame_images[frame_idx]
 
             # Motion warp for AnimateDiff: cumulative per-frame warp
             frame_params = schedule.get_params(frame_idx)
+
+            # Frame cadence: reuse previous output to match chain method behavior
+            cadence = max(1, int(frame_params.get("frame_cadence", 1.0)))
+            if (cadence > 1 and frame_idx > 0
+                    and (frame_idx % cadence) != 0
+                    and prev_ad_image is not None):
+                image = prev_ad_image.copy()
+                hue_shift = frame_params.get("palette_shift", 0.0)
+                if hue_shift > 0.01:
+                    image = _apply_hue_shift(image, hue_shift)
+                b64_image = encode_image_b64(image)
+                w, h = image.size
+                elapsed_ms = int((time.perf_counter() - t0_total) * 1000)
+                frame_resp = AudioReactiveFrameResponse(
+                    frame_index=frame_idx, total_frames=total_frames,
+                    image=b64_image, seed=frame_seeds.get(frame_idx, base_seed),
+                    time_ms=elapsed_ms, width=w, height=h,
+                    params_used=frame_params,
+                )
+                all_frames.append(frame_resp)
+                if on_frame:
+                    on_frame(frame_resp)
+                log.debug("AnimateDiff audio frame %d: cadence skip (reuse)", frame_idx)
+                continue
+
+            pil_img = frame_images[frame_idx]
+
             mx = frame_params.get("motion_x", 0.0)
             my = frame_params.get("motion_y", 0.0)
             mz = frame_params.get("motion_zoom", 1.0)
@@ -1350,6 +1406,8 @@ class DiffusionEngine:
             hue_shift = frame_params.get("palette_shift", 0.0)
             if hue_shift > 0.01:
                 image = _apply_hue_shift(image, hue_shift)
+
+            prev_ad_image = image
 
             b64_image = encode_image_b64(image)
             w, h = image.size
@@ -1620,6 +1678,19 @@ class DiffusionEngine:
                             output_type="pil",
                         ).images[0]
                         log.info("Chain frame %d: img2img complete", frame_idx)
+
+                # Temporal coherence: color matching + optical flow (frame 1+)
+                if frame_idx > 0 and chain_source is not None:
+                    if settings.color_coherence_strength > 0:
+                        image = match_color_lab(
+                            image, chain_source,
+                            settings.color_coherence_strength,
+                        )
+                    if settings.optical_flow_blend > 0:
+                        image = apply_optical_flow_blend(
+                            image, chain_source,
+                            settings.optical_flow_blend,
+                        )
 
                 # Store pre-postprocess image for next frame's img2img source
                 # (full-resolution, RGB, no pixelation/quantization artifacts)

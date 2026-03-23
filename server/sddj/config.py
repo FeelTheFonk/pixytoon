@@ -94,6 +94,24 @@ class Settings(BaseSettings):
     stem_model: str = "htdemucs"
     stem_device: str = "cpu"  # always CPU — keep GPU free for diffusion
 
+    # ── Temporal Coherence ──────────────────────────────────────
+    # Step scaling cap for distilled models (Hyper-SD): max multiplier on steps.
+    # E.g. cap=2 means steps=8 can scale to at most 16, preventing wasted compute
+    # on models distilled for N-step inference.
+    distilled_step_scale_cap: int = Field(2, ge=1, le=10)
+    # LAB color coherence between consecutive frames (0 = disabled).
+    # Matches each generated frame's LAB statistics to the previous frame,
+    # preventing color drift in chains. Recommended: 0.3-0.7.
+    color_coherence_strength: float = Field(0.5, ge=0.0, le=1.0)
+    # Auto noise-denoise coupling (Deforum pattern): when no noise_amplitude
+    # slot is active, inject subtle noise inversely proportional to denoise
+    # strength. Less denoise → more stabilizing noise for smoother transitions.
+    auto_noise_coupling: bool = True
+    # Optical flow temporal blending strength (0 = disabled).
+    # Blends each frame with a flow-warped previous frame to reduce jitter.
+    # Adds ~10-20ms per frame. Recommended: 0.1-0.3 if enabled.
+    optical_flow_blend: float = Field(0.0, ge=0.0, le=0.5)
+
     # ── Video Export ──────────────────────────────────────────
     ffmpeg_path: str = ""  # empty = auto-detect via shutil.which("ffmpeg")
 

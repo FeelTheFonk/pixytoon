@@ -168,3 +168,111 @@ def apply_motion_warp(
     )
 
     return Image.fromarray(warped)
+
+
+def match_color_lab(
+    image: Image.Image,
+    reference: Image.Image,
+    strength: float = 0.5,
+) -> Image.Image:
+    """Match the LAB color distribution of *image* to *reference*.
+
+    Transfers per-channel mean and standard deviation in CIELAB space,
+    then blends with the original based on *strength* (0 = no change,
+    1 = full transfer).  Prevents color drift in frame chains.
+    """
+    if strength <= 0.0:
+        return image
+
+    img_arr = np.array(image, dtype=np.uint8)
+    ref_arr = np.array(reference, dtype=np.uint8)
+
+    # Ensure both are 3-channel (strip alpha if present)
+    if img_arr.ndim == 2:
+        img_arr = cv2.cvtColor(img_arr, cv2.COLOR_GRAY2RGB)
+    elif img_arr.shape[2] == 4:
+        img_arr = img_arr[:, :, :3]
+    if ref_arr.ndim == 2:
+        ref_arr = cv2.cvtColor(ref_arr, cv2.COLOR_GRAY2RGB)
+    elif ref_arr.shape[2] == 4:
+        ref_arr = ref_arr[:, :, :3]
+
+    img_lab = cv2.cvtColor(img_arr, cv2.COLOR_RGB2LAB).astype(np.float32)
+    ref_lab = cv2.cvtColor(ref_arr, cv2.COLOR_RGB2LAB).astype(np.float32)
+
+    for ch in range(3):
+        img_mean = img_lab[:, :, ch].mean()
+        img_std = img_lab[:, :, ch].std()
+        ref_mean = ref_lab[:, :, ch].mean()
+        ref_std = ref_lab[:, :, ch].std()
+        if img_std < 1e-6:
+            continue
+        img_lab[:, :, ch] = (
+            (img_lab[:, :, ch] - img_mean) * (ref_std / img_std) + ref_mean
+        )
+
+    img_lab = np.clip(img_lab, 0, 255).astype(np.uint8)
+    matched = cv2.cvtColor(img_lab, cv2.COLOR_LAB2RGB)
+
+    if strength < 1.0:
+        matched = cv2.addWeighted(
+            img_arr, 1.0 - strength, matched, strength, 0,
+        )
+
+    return Image.fromarray(matched)
+
+
+def apply_optical_flow_blend(
+    current: Image.Image,
+    previous: Image.Image,
+    strength: float = 0.3,
+) -> Image.Image:
+    """Blend *current* frame with an optical-flow-warped *previous* frame.
+
+    Reduces inter-frame jitter by estimating dense flow (Farneback) from
+    *previous* → *current*, warping *previous* to align, then blending.
+    """
+    if strength <= 0.0:
+        return current
+
+    curr_arr = np.array(current, dtype=np.uint8)
+    prev_arr = np.array(previous, dtype=np.uint8)
+
+    # Ensure 3-channel
+    if curr_arr.ndim == 2:
+        curr_arr = cv2.cvtColor(curr_arr, cv2.COLOR_GRAY2RGB)
+    elif curr_arr.shape[2] == 4:
+        curr_arr = curr_arr[:, :, :3]
+    if prev_arr.ndim == 2:
+        prev_arr = cv2.cvtColor(prev_arr, cv2.COLOR_GRAY2RGB)
+    elif prev_arr.shape[2] == 4:
+        prev_arr = prev_arr[:, :, :3]
+
+    # Resize previous to match current if dimensions differ
+    if prev_arr.shape[:2] != curr_arr.shape[:2]:
+        prev_arr = cv2.resize(
+            prev_arr, (curr_arr.shape[1], curr_arr.shape[0]),
+            interpolation=cv2.INTER_LANCZOS4,
+        )
+
+    curr_gray = cv2.cvtColor(curr_arr, cv2.COLOR_RGB2GRAY)
+    prev_gray = cv2.cvtColor(prev_arr, cv2.COLOR_RGB2GRAY)
+
+    flow = cv2.calcOpticalFlowFarneback(
+        prev_gray, curr_gray, None,
+        pyr_scale=0.5, levels=3, winsize=15,
+        iterations=3, poly_n=5, poly_sigma=1.2, flags=0,
+    )
+
+    h, w = curr_gray.shape
+    map_y, map_x = np.mgrid[:h, :w].astype(np.float32)
+    map_x += flow[..., 0]
+    map_y += flow[..., 1]
+
+    warped = cv2.remap(
+        prev_arr, map_x, map_y,
+        cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101,
+    )
+
+    result = cv2.addWeighted(curr_arr, 1.0 - strength, warped, strength, 0)
+    return Image.fromarray(result)
