@@ -298,14 +298,20 @@ class AudioReactiveMixin:
                         continue
 
                 eff_denoise = frame_params.get("denoise_strength", req.denoise_strength)
-                # Clamp: ensure at least 2 effective denoising steps for img2img
-                # (1 step produces artifacts that accumulate in chains).
-                # scale_steps_for_denoise() inflates the scheduler length up to
-                # steps * cap, so the real floor is 2 / max_scaled_steps, not
-                # 2 / raw_steps (which was too aggressive and killed audio modulation).
+                _raw_denoise = eff_denoise
+                # Sub-floor blending: guarantee ≥2 effective denoising steps
+                # while preserving full audio dynamic range.  When audio
+                # modulation requests below the floor (quiet passages), we
+                # generate at the floor and blend the result toward the source
+                # — the visual change is attenuated without quality loss.
                 _cap = max(settings.distilled_step_scale_cap, 1)
                 min_denoise = min(1.0, 2.0 / max(req.steps * _cap, 1) + 1e-3)
-                eff_denoise = max(min_denoise, min(1.0, eff_denoise))
+                _sub_floor_alpha = 1.0
+                if eff_denoise < min_denoise:
+                    _sub_floor_alpha = eff_denoise / min_denoise
+                    eff_denoise = min_denoise
+                else:
+                    eff_denoise = min(1.0, eff_denoise)
                 eff_scaled_steps = scale_steps_for_denoise(req.steps, eff_denoise)
                 eff_cfg = frame_params.get("cfg_scale", req.cfg_scale)
                 seed_offset = int(frame_params.get("seed_offset", frame_idx))
@@ -335,8 +341,9 @@ class AudioReactiveMixin:
                 if frame_idx > 0:
                     self._img2img_pipe.scheduler = pipeline_factory.fresh_scheduler(self._pipe)
 
-                log.info("Audio frame %d/%d: seed=%d, denoise=%.3f, cfg=%.2f, steps=%d (scaled=%d)",
-                         frame_idx, total_frames, frame_seed, eff_denoise, eff_cfg, req.steps, eff_scaled_steps)
+                log.info("Audio frame %d/%d: seed=%d, denoise=%.3f, cfg=%.2f, steps=%d (scaled=%d)%s",
+                         frame_idx, total_frames, frame_seed, eff_denoise, eff_cfg, req.steps, eff_scaled_steps,
+                         f", blend={_sub_floor_alpha:.2f}" if _sub_floor_alpha < 1.0 else "")
 
                 # Frame 0: initial generation
                 if frame_idx == 0:
@@ -368,6 +375,8 @@ class AudioReactiveMixin:
                             callback_on_step_end=step_callback,
                             output_type="pil",
                         ).images[0]
+                        if _sub_floor_alpha < 1.0:
+                            image = Image.blend(_source_img, image, _sub_floor_alpha)
                     elif req.mode == GenerationMode.INPAINT:
                         if _source_img is None or _mask_img is None:
                             raise ValueError("inpaint requires source_image and mask_image")
@@ -383,6 +392,8 @@ class AudioReactiveMixin:
                             callback_on_step_end=step_callback,
                             output_type="pil",
                         ).images[0]
+                        if _sub_floor_alpha < 1.0:
+                            inpainted = Image.blend(_source_img, inpainted, _sub_floor_alpha)
                         image = composite_with_mask(_source_img, inpainted, _mask_img)
                     elif req.mode.value.startswith("controlnet_"):
                         if _control_img is None:
@@ -419,7 +430,7 @@ class AudioReactiveMixin:
                     if abs(mx) > 0.01 or abs(my) > 0.01 or abs(mz - 1.0) > 0.001 or abs(mr) > 0.01:
                         source = apply_motion_warp(
                             source, tx=mx, ty=my, zoom=mz, rotation=mr,
-                            denoise_strength=eff_denoise,
+                            denoise_strength=_raw_denoise,
                         )
 
                     # Noise amplitude modulation: inject noise into source.
@@ -428,7 +439,7 @@ class AudioReactiveMixin:
                     # to denoise strength for smoother transitions.
                     noise_amp = max(0.0, min(1.0, frame_params.get("noise_amplitude", 0.0)))
                     if settings.auto_noise_coupling and "noise_amplitude" not in frame_params:
-                        noise_amp = max(0.0, (0.9 - eff_denoise) * 0.1)
+                        noise_amp = max(0.0, (0.9 - _raw_denoise) * 0.1)
                     if noise_amp > 0:
                         arr = np.array(source, dtype=np.float32) / 255.0
                         noise = np.random.default_rng(frame_seed).standard_normal(
@@ -451,6 +462,8 @@ class AudioReactiveMixin:
                         callback_on_step_end=step_callback,
                         output_type="pil",
                     ).images[0]
+                    if _sub_floor_alpha < 1.0:
+                        image = Image.blend(source, image, _sub_floor_alpha)
 
                 # Temporal coherence: color matching + optical flow (frame 1+)
                 if frame_idx > 0 and chain_source is not None:
@@ -654,16 +667,23 @@ class AudioReactiveMixin:
                     ))
                 return callback_kwargs
 
+            _ad_sub_floor_alpha = 1.0
+
             log.info("Chunk %d/%d [%d-%d): %d frames, cfg=%.2f, denoise=%.3f, seed=%d",
                      chunk_idx + 1, len(chunks), c_start, c_end,
                      num_frames, eff_cfg, eff_denoise, chunk_seed)
 
             with torch.inference_mode():
                 if is_img2img:
-                    # vid2vid: source image repeated as input video per chunk
+                    # Sub-floor blending: same logic as chain loop — guarantee
+                    # ≥2 effective steps, blend toward source for quiet passages.
                     _cap = max(settings.distilled_step_scale_cap, 1)
                     min_denoise = min(1.0, 2.0 / max(req.steps * _cap, 1) + 1e-3)
-                    chunk_strength = max(min_denoise, min(1.0, eff_denoise))
+                    if eff_denoise < min_denoise:
+                        _ad_sub_floor_alpha = eff_denoise / min_denoise
+                        chunk_strength = min_denoise
+                    else:
+                        chunk_strength = min(1.0, eff_denoise)
                     chunk_scaled_steps = scale_steps_for_denoise(req.steps, chunk_strength)
 
                     kwargs = dict(
@@ -702,6 +722,12 @@ class AudioReactiveMixin:
 
             # Extract frames
             pil_frames = output.frames[0] if isinstance(output.frames[0], list) else output.frames
+
+            # Sub-floor blending for vid2vid: attenuate toward source
+            if _ad_sub_floor_alpha < 1.0 and is_img2img and _source_img is not None:
+                pil_frames = [
+                    Image.blend(_source_img, f, _ad_sub_floor_alpha) for f in pil_frames
+                ]
 
             # Blend overlap with previous chunk
             for local_idx, pil_img in enumerate(pil_frames):

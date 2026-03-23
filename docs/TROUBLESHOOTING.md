@@ -58,6 +58,7 @@ Quick fixes for common issues. For detailed configuration, see [Configuration](C
 | Audio file not found | Use absolute path; supported: .wav, .mp3, .flac, .ogg, .m4a, .aac |
 | Stem separation unavailable | Install demucs: `pip install demucs>=4.0` (heavy dependency, CPU only) |
 | Modulation too subtle | Increase min/max range in slot, or try a preset with wider range (e.g., `glitch_chaos`) |
+| Quiet passages not still enough | Normal in v0.8.6-; fixed in v0.8.7 via sub-floor blending — denoise values below the quality floor are now smoothly attenuated |
 | MP4 export fails | Install ffmpeg and ensure it's in PATH. Set `SDDJ_FFMPEG_PATH` if non-standard location |
 | Modulation too aggressive | Increase release frames (smoother decay), decrease max range |
 | "Analysis failed" | Check server logs; ensure librosa installed, audio file not corrupted |

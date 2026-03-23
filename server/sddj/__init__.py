@@ -1,3 +1,3 @@
 """SDDj — Local SOTA generation and animation server for Aseprite."""
 
-__version__ = "0.8.6"
+__version__ = "0.8.7"

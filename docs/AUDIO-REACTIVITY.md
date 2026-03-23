@@ -422,6 +422,7 @@ Optional CPU-based stem separation via demucs (htdemucs model).
 - **Low range (0.10-0.30)**: Stable, gradual evolution — good for ambient, backgrounds
 - **High range (0.40-0.80)**: Dynamic, each frame distinctly different — good for energetic music
 - **Rule of thumb**: Keep max below 0.70 for coherent animations
+- **Sub-floor blending** (v0.8.7): When audio modulation drives denoise below the quality floor (≥2 denoising steps), the engine generates at the floor and blends the result toward the source image — preserving full audio dynamic range without quality loss. Quiet passages now produce correctly attenuated visual change instead of being clamped.
 
 ### CFG Scale
 - **Low range (2-5)**: Dreamy, less prompt-bound — more abstract
