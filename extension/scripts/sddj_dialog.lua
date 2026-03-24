@@ -1074,6 +1074,8 @@ local function build_actions_panel()
               PT.audio.generating = false
               PT.audio.analyzing = false
               PT.stop_gen_timeout()
+              PT.stop_refresh_timer()
+              PT.clear_response_queue()
               PT.finalize_sequence()
               PT.update_status("Cancel timeout — UI reset")
               PT.reset_ui_buttons()
