@@ -122,7 +122,8 @@ class TestAnimationRequest:
 class TestPostProcessSpec:
     def test_defaults(self):
         pp = PostProcessSpec()
-        assert pp.pixelate.enabled is True
+        assert pp.pixelate.enabled is False
+        assert pp.quantize_enabled is False
         assert pp.quantize_colors == 32
         assert pp.dither == DitherMode.NONE
         assert pp.palette.mode == PaletteMode.AUTO

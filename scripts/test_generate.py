@@ -58,6 +58,7 @@ async def run():
         "cfg_scale": 5.0,
         "post_process": {
             "pixelate": {"enabled": True, "target_size": 64},
+            "quantize_enabled": True,
             "quantize_method": "kmeans",
             "quantize_colors": 16,
             "dither": "none",
@@ -105,6 +106,7 @@ async def run():
             "source_image": result_b64,
             "post_process": {
                 "pixelate": {"enabled": True, "target_size": 64},
+                "quantize_enabled": True,
                 "quantize_method": "kmeans",
                 "quantize_colors": 16,
                 "dither": "none",
@@ -163,6 +165,7 @@ async def run():
             "mask_image": mask_b64,
             "post_process": {
                 "pixelate": {"enabled": True, "target_size": 64},
+                "quantize_enabled": True,
                 "quantize_method": "kmeans",
                 "quantize_colors": 16,
                 "dither": "none",

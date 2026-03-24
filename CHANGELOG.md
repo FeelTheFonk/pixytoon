@@ -2,6 +2,25 @@
 
 All notable changes to SDDj are documented here.
 
+## [0.9.3] — 2026-03
+
+### Fixed
+- **Post-processing applied unconditionally** — color quantization (KMeans 32 colors) ran on every image even when disabled, silently degrading output quality
+- `PixelateSpec.enabled` defaulted to `True` in the protocol model while the Lua UI defaulted to `false` — mismatch caused hidden pixelation when presets omitted the field
+
+### Added
+- `quantize_enabled` flag in `PostProcessSpec` — explicit opt-in for color quantization (default: `false`)
+- "Quantize Colors" checkbox in post-process UI tab
+- Fast-path bypass in `postprocess.apply()` — returns image untouched if no processing flags are active
+- Preset loading/saving for `quantize_enabled` state
+- 3 new unit tests: passthrough identity, default-spec passthrough, quantize-disabled color preservation
+
+### Changed
+- **Default output is now raw SD quality** — zero compression, zero color limitation unless explicitly enabled
+- All 7 preset JSON files updated with explicit `quantize_enabled` field
+
+---
+
 ## [0.9.2] — 2026-03
 
 ### Fixed

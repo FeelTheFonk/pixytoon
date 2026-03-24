@@ -323,6 +323,12 @@ local function build_tab_postprocess()
     end,
   }
 
+  dlg:check{
+    id = "quantize_enabled",
+    label = "Quantize Colors",
+    selected = false,
+  }
+
   dlg:slider{
     id = "colors",
     label = "Colors (32)",

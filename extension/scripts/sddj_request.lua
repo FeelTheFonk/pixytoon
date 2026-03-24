@@ -69,6 +69,7 @@ function PT.build_post_process()
       enabled = d.pixelate,
       target_size = d.pixel_size,
     },
+    quantize_enabled = d.quantize_enabled,
     quantize_method = d.quantize_method,
     quantize_colors = d.colors,
     dither = d.dither,

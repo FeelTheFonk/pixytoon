@@ -12,6 +12,7 @@
   "clip_skip": 2,
   "post_process": {
     "pixelate": {"enabled": true, "target_size": 128},
+    "quantize_enabled": true,
     "quantize_method": "kmeans",
     "quantize_colors": 32,
     "dither": "none",

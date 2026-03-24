@@ -100,7 +100,7 @@ class EmbeddingSpec(BaseModel):
 
 
 class PixelateSpec(BaseModel):
-    enabled: bool = True
+    enabled: bool = False
     target_size: int = Field(128, ge=8, le=512)
 
 
@@ -112,6 +112,7 @@ class PaletteSpec(BaseModel):
 
 class PostProcessSpec(BaseModel):
     pixelate: PixelateSpec = Field(default_factory=PixelateSpec)
+    quantize_enabled: bool = False
     quantize_method: QuantizeMethod = QuantizeMethod.KMEANS
     quantize_colors: int = Field(32, ge=2, le=256)
     dither: DitherMode = DitherMode.NONE

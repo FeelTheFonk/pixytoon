@@ -413,6 +413,7 @@ handlers.preset = function(resp)
         PT.dlg:modify{ id = "pixelate", selected = px }
       end
     end
+    if pp.quantize_enabled ~= nil then PT.dlg:modify{ id = "quantize_enabled", selected = pp.quantize_enabled } end
     if pp.quantize_colors then
       PT.dlg:modify{ id = "colors", value = pp.quantize_colors }
       PT.dlg:modify{ id = "colors", label = "Colors (" .. pp.quantize_colors .. ")" }

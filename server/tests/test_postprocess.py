@@ -64,6 +64,7 @@ class TestQuantization:
         img = _make_test_image(64, 64)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=False),
+            quantize_enabled=True,
             quantize_method=QuantizeMethod.KMEANS,
             quantize_colors=8,
             dither=DitherMode.NONE,
@@ -79,6 +80,7 @@ class TestQuantization:
         img = _make_test_image(64, 64)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=False),
+            quantize_enabled=True,
             quantize_method=QuantizeMethod.OCTREE,
             quantize_colors=16,
             dither=DitherMode.NONE,
@@ -91,6 +93,7 @@ class TestQuantization:
         img = _make_test_image(64, 64)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=False),
+            quantize_enabled=True,
             quantize_method=QuantizeMethod.MEDIAN_CUT,
             quantize_colors=16,
             dither=DitherMode.NONE,
@@ -105,6 +108,7 @@ class TestDithering:
         img = _make_test_image(64, 64)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=False),
+            quantize_enabled=True,
             quantize_colors=8,
             dither=DitherMode.FLOYD_STEINBERG,
         )
@@ -116,6 +120,7 @@ class TestDithering:
         img = _make_test_image(64, 64)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=False),
+            quantize_enabled=True,
             quantize_colors=8,
             dither=DitherMode.BAYER_4X4,
         )
@@ -138,6 +143,7 @@ class TestDithering:
         img = _make_test_image(32, 32)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=False),
+            quantize_enabled=True,
             quantize_colors=2,
             dither=DitherMode.BAYER_4X4,
             palette=PaletteSpec(
@@ -182,6 +188,7 @@ class TestFullPipeline:
         img = _make_test_image(512, 512)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=True, target_size=64),
+            quantize_enabled=True,
             quantize_method=QuantizeMethod.KMEANS,
             quantize_colors=16,
             dither=DitherMode.FLOYD_STEINBERG,
@@ -193,13 +200,43 @@ class TestFullPipeline:
         assert result.mode == "RGBA"
 
     def test_passthrough_no_processing(self):
+        """With all processing disabled, image must be returned untouched (pixel-perfect)."""
         np.random.seed(42)
         img = _make_test_image(128, 128)
         spec = PostProcessSpec(
             pixelate=PixelateSpec(enabled=False),
+            quantize_enabled=False,
             dither=DitherMode.NONE,
             palette=PaletteSpec(mode=PaletteMode.AUTO),
             remove_bg=False,
         )
         result = apply(img, spec)
         assert result.size == (128, 128)
+        # Pixel-perfect identity: the returned object must be the exact same image
+        assert result is img
+
+    def test_default_spec_is_passthrough(self):
+        """Default PostProcessSpec must not alter the image (raw SD output)."""
+        np.random.seed(42)
+        img = _make_test_image(128, 128)
+        spec = PostProcessSpec()  # All defaults
+        result = apply(img, spec)
+        assert result is img
+
+    def test_quantize_disabled_preserves_all_colors(self):
+        """With quantize_enabled=False, all original colors must survive."""
+        np.random.seed(42)
+        img = _make_test_image(64, 64)
+        original_colors = set(img.convert("RGBA").getdata())
+        spec = PostProcessSpec(
+            pixelate=PixelateSpec(enabled=False),
+            quantize_enabled=False,
+            dither=DitherMode.NONE,
+            palette=PaletteSpec(mode=PaletteMode.AUTO),
+            remove_bg=False,
+        )
+        result = apply(img, spec)
+        # No processing active → same object returned
+        assert result is img
+        result_colors = set(result.convert("RGBA").getdata())
+        assert original_colors == result_colors

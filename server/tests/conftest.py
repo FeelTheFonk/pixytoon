@@ -66,6 +66,7 @@ def sample_preset_data() -> dict:
         "denoise_strength": 1.0,
         "post_process": {
             "pixelate": {"enabled": True, "target_size": 128},
+            "quantize_enabled": True,
             "quantize_method": "kmeans",
             "quantize_colors": 32,
             "dither": "none",

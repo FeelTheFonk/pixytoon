@@ -31,8 +31,30 @@ from . import palette_manager
 # PUBLIC ENTRY POINT
 # ─────────────────────────────────────────────────────────────
 
+def _any_processing_active(spec: PostProcessSpec) -> bool:
+    """Check if any post-processing stage is enabled."""
+    if spec.remove_bg:
+        return True
+    if spec.pixelate.enabled:
+        return True
+    if spec.quantize_enabled:
+        return True
+    if spec.palette.mode != PaletteMode.AUTO:
+        return True
+    if spec.dither != DitherMode.NONE:
+        return True
+    return False
+
+
 def apply(image: Image.Image, spec: PostProcessSpec) -> Image.Image:
-    """Apply the full post-processing pipeline."""
+    """Apply the full post-processing pipeline.
+
+    Returns the image untouched if no processing flags are active.
+    """
+    # Fast bypass: no processing enabled → return raw image
+    if not _any_processing_active(spec):
+        return image
+
     img = image.convert("RGBA")
 
     # 1. Background removal
@@ -43,8 +65,10 @@ def apply(image: Image.Image, spec: PostProcessSpec) -> Image.Image:
     if spec.pixelate.enabled:
         img = _pixelate(img, spec.pixelate.target_size)
 
-    # 3. Color quantization (returns image + optional extracted centers)
-    img, kmeans_centers = _quantize(img, spec.quantize_method, spec.quantize_colors)
+    # 3. Color quantization (only if explicitly enabled)
+    kmeans_centers = None
+    if spec.quantize_enabled:
+        img, kmeans_centers = _quantize(img, spec.quantize_method, spec.quantize_colors)
 
     # 4. Palette enforcement
     palette_rgb: Optional[list[tuple[int, int, int]]] = None

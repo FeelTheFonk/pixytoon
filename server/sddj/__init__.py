@@ -10,4 +10,4 @@ _os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 _os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 _os.environ.setdefault("DO_NOT_TRACK", "1")
 
-__version__ = "0.9.2"
+__version__ = "0.9.3"
