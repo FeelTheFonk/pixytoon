@@ -76,6 +76,8 @@ function PT.save_settings()
     expr_motion_y      = d.expr_motion_y,
     expr_motion_zoom   = d.expr_motion_zoom,
     expr_motion_rot    = d.expr_motion_rot,
+    expr_motion_tilt_x = d.expr_motion_tilt_x,
+    expr_motion_tilt_y = d.expr_motion_tilt_y,
     mod1_enable = d.mod1_enable, mod1_source = d.mod1_source, mod1_target = d.mod1_target,
     mod1_min = d.mod1_min, mod1_max = d.mod1_max, mod1_attack = d.mod1_attack, mod1_release = d.mod1_release,
     mod2_enable = d.mod2_enable, mod2_source = d.mod2_source, mod2_target = d.mod2_target,
@@ -140,6 +142,7 @@ function PT.apply_settings(s)
                    "expr_denoise", "expr_cfg", "expr_noise", "expr_controlnet", "expr_seed",
                    "expr_palette", "expr_cadence", "expr_motion_x", "expr_motion_y",
                    "expr_motion_zoom", "expr_motion_rot",
+                   "expr_motion_tilt_x", "expr_motion_tilt_y",
                    "ps1_time", "ps1_prompt", "ps2_time", "ps2_prompt",
                    "ps3_time", "ps3_prompt" }
   for _, id in ipairs(texts) do

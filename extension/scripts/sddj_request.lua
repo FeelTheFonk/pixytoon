@@ -134,11 +134,14 @@ function PT.build_audio_reactive_request()
         mn = mn * 10.0 - 5.0  -- 0%→-5, 100%→+5
         mx = mx * 10.0 - 5.0
       elseif target == "motion_zoom" then
-        mn = 0.95 + mn * 0.10 -- 0%→0.95, 100%→1.05
-        mx = 0.95 + mx * 0.10
+        mn = 0.92 + mn * 0.16 -- 0%→0.92, 100%→1.08
+        mx = 0.92 + mx * 0.16
       elseif target == "motion_rotation" then
         mn = mn * 4.0 - 2.0   -- 0%→-2, 100%→+2
         mx = mx * 4.0 - 2.0
+      elseif target == "motion_tilt_x" or target == "motion_tilt_y" then
+        mn = mn * 6.0 - 3.0   -- 0%→-3, 100%→+3
+        mx = mx * 6.0 - 3.0
       end
       slots[#slots + 1] = {
         source  = d[prefix .. "source"],
@@ -160,11 +163,13 @@ function PT.build_audio_reactive_request()
       "expr_denoise", "expr_cfg", "expr_noise",
       "expr_controlnet", "expr_seed", "expr_palette", "expr_cadence",
       "expr_motion_x", "expr_motion_y", "expr_motion_zoom", "expr_motion_rot",
+      "expr_motion_tilt_x", "expr_motion_tilt_y",
     }
     local expr_targets = {
       "denoise_strength", "cfg_scale", "noise_amplitude",
       "controlnet_scale", "seed_offset", "palette_shift", "frame_cadence",
       "motion_x", "motion_y", "motion_zoom", "motion_rotation",
+      "motion_tilt_x", "motion_tilt_y",
     }
     for idx, field in ipairs(expr_fields) do
       local val = d[field] or ""

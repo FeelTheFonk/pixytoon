@@ -6,7 +6,7 @@ return function(PT)
 
 -- ─── Constants ──────────────────────────────────────────────
 
-PT.VERSION = "0.9.33"
+PT.VERSION = "0.9.34"
 
 PT.cfg = {
   DEFAULT_SERVER_URL      = "ws://127.0.0.1:9876/ws",

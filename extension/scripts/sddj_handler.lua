@@ -640,8 +640,9 @@ handlers.modulation_preset_detail = function(resp)
     elseif target == "controlnet_scale" then return val / 2.0 * 100
     elseif target == "frame_cadence" then return (val - 1.0) / 7.0 * 100
     elseif target == "motion_x" or target == "motion_y" then return (val + 5.0) / 10.0 * 100
-    elseif target == "motion_zoom" then return (val - 0.95) / 0.10 * 100
+    elseif target == "motion_zoom" then return (val - 0.92) / 0.16 * 100
     elseif target == "motion_rotation" then return (val + 2.0) / 4.0 * 100
+    elseif target == "motion_tilt_x" or target == "motion_tilt_y" then return (val + 3.0) / 6.0 * 100
     else return val * 100  -- denoise_strength, noise_amplitude, palette_shift
     end
   end

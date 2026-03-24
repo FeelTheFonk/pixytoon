@@ -2,6 +2,25 @@
 
 All notable changes to SDDj are documented here.
 
+## [0.9.34] — 2026-03
+
+### Fixed
+- **Zoom inversion bug** — `cv2.warpAffine` uses inverse mapping; `zoom > 1.0` was producing zoom OUT instead of zoom IN. Fixed by inverting the scale factor before building the affine matrix (with div-by-zero guard).
+- Total motion threshold now uses the corrected inverted zoom value for accurate negligible-motion detection.
+
+### Added
+- **Perspective tilt** — faux 3D camera pitch/yaw via `cv2.warpPerspective` homography warp (`apply_perspective_tilt()`). Uses 3D rotation matrices (Rx·Ry) projected through a pinhole camera model: `H = K · R · K⁻¹`. Same denoise-correlation pattern and safety guards as affine warp.
+- `motion_tilt_x` and `motion_tilt_y` modulation targets (±3.0 degrees)
+- **Motion rate limiting** — `MOTION_MAX_DELTA` dict clamps frame-to-frame delta per motion channel. Total motion budget enforcement: if combined deltas exceed budget, all channels are scaled proportionally. Prevents saccade/jerk from rapid audio transients.
+- 4 new presets: `cinematic_tilt`, `zoom_breathe`, `parallax_drift`, `full_cinematic`
+- `cinematic_sweep`, `advanced_max`, `abstract_noise` enriched with tilt targets
+- Frontend: tilt expression entries, tilt slider scaling, tilt settings persistence, new presets in dropdown
+
+### Changed
+- `motion_zoom` range widened from (0.95, 1.05) to (0.92, 1.08) — more expressive zoom while staying within safe corridor
+- Frontend slider scaling updated for new zoom range: `0.92 + mn * 0.16` (was `0.95 + mn * 0.10`)
+- Inverse scaling `to_pct()` updated accordingly
+
 ## [0.9.33] — 2026-03
 
 ### Added

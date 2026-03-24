@@ -29,8 +29,22 @@ TARGET_RANGES: dict[str, tuple[float, float]] = {
     # Motion / camera (smooth Deforum-like, image-space affine)
     "motion_x": (-5.0, 5.0),          # pixels, horizontal translation
     "motion_y": (-5.0, 5.0),          # pixels, vertical translation
-    "motion_zoom": (0.95, 1.05),      # scale factor (1.0 = none)
+    "motion_zoom": (0.92, 1.08),      # scale factor (1.0 = none)
     "motion_rotation": (-2.0, 2.0),   # degrees, planar rotation
+    # Perspective tilt (faux 3D via homography)
+    "motion_tilt_x": (-3.0, 3.0),     # degrees, perspective pitch
+    "motion_tilt_y": (-3.0, 3.0),     # degrees, perspective yaw
+}
+
+# Max allowed frame-to-frame delta per motion parameter.
+# Prevents saccade/jerk from rapid audio transients.
+MOTION_MAX_DELTA: dict[str, float] = {
+    "motion_x": 2.0,
+    "motion_y": 2.0,
+    "motion_zoom": 0.015,
+    "motion_rotation": 0.8,
+    "motion_tilt_x": 1.0,
+    "motion_tilt_y": 1.0,
 }
 
 # Built-in modulation presets — organized by category
@@ -138,6 +152,8 @@ PRESETS: dict[str, list[dict]] = {
          "min_val": -1.0, "max_val": 1.0, "attack": 2, "release": 8, "enabled": True},
         {"source": "global_onset", "target": "motion_x",
          "min_val": -2.0, "max_val": 2.0, "attack": 1, "release": 5, "enabled": True},
+        {"source": "global_high", "target": "motion_tilt_x",
+         "min_val": -1.0, "max_val": 1.0, "attack": 2, "release": 8, "enabled": True},
     ],
     # ─── Complexity Levels ───────────────────────────────────────
     "one_click_easy": [
@@ -173,6 +189,8 @@ PRESETS: dict[str, list[dict]] = {
          "min_val": -2.0, "max_val": 2.0, "attack": 2, "release": 10, "enabled": True},
         {"source": "global_beat", "target": "motion_zoom",
          "min_val": 0.98, "max_val": 1.02, "attack": 1, "release": 8, "enabled": True},
+        {"source": "global_low", "target": "motion_tilt_x",
+         "min_val": -1.0, "max_val": 1.0, "attack": 3, "release": 15, "enabled": True},
     ],
     # ─── Target-Specific ─────────────────────────────────────────
     "controlnet_reactive": [
@@ -252,6 +270,45 @@ PRESETS: dict[str, list[dict]] = {
          "min_val": 0.99, "max_val": 1.01, "attack": 3, "release": 20, "enabled": True},
         {"source": "global_centroid", "target": "motion_rotation",
          "min_val": -0.5, "max_val": 0.5, "attack": 6, "release": 30, "enabled": True},
+        {"source": "global_centroid", "target": "motion_tilt_y",
+         "min_val": -0.8, "max_val": 0.8, "attack": 5, "release": 25, "enabled": True},
+    ],
+    # ─── Perspective / Advanced Camera ────────────────────────────
+    "cinematic_tilt": [
+        {"source": "global_rms", "target": "denoise_strength",
+         "min_val": 0.30, "max_val": 0.50, "attack": 3, "release": 15, "enabled": True},
+        {"source": "global_low", "target": "motion_tilt_x",
+         "min_val": -1.5, "max_val": 1.5, "attack": 4, "release": 25, "enabled": True},
+        {"source": "global_centroid", "target": "motion_tilt_y",
+         "min_val": -1.0, "max_val": 1.0, "attack": 5, "release": 25, "enabled": True},
+    ],
+    "zoom_breathe": [
+        {"source": "global_rms", "target": "denoise_strength",
+         "min_val": 0.30, "max_val": 0.45, "attack": 5, "release": 20, "enabled": True},
+        {"source": "global_rms", "target": "motion_zoom",
+         "min_val": 0.98, "max_val": 1.02, "attack": 6, "release": 30, "enabled": True},
+    ],
+    "parallax_drift": [
+        {"source": "global_rms", "target": "denoise_strength",
+         "min_val": 0.30, "max_val": 0.50, "attack": 3, "release": 15, "enabled": True},
+        {"source": "global_low", "target": "motion_x",
+         "min_val": -2.0, "max_val": 2.0, "attack": 4, "release": 20, "enabled": True},
+        {"source": "global_mid", "target": "motion_tilt_x",
+         "min_val": -1.0, "max_val": 1.0, "attack": 5, "release": 20, "enabled": True},
+    ],
+    "full_cinematic": [
+        {"source": "global_rms", "target": "denoise_strength",
+         "min_val": 0.30, "max_val": 0.50, "attack": 3, "release": 15, "enabled": True},
+        {"source": "global_low", "target": "motion_x",
+         "min_val": -1.5, "max_val": 1.5, "attack": 4, "release": 20, "enabled": True},
+        {"source": "global_mid", "target": "motion_y",
+         "min_val": -1.0, "max_val": 1.0, "attack": 4, "release": 20, "enabled": True},
+        {"source": "global_beat", "target": "motion_zoom",
+         "min_val": 0.99, "max_val": 1.01, "attack": 2, "release": 15, "enabled": True},
+        {"source": "global_centroid", "target": "motion_rotation",
+         "min_val": -0.5, "max_val": 0.5, "attack": 5, "release": 25, "enabled": True},
+        {"source": "global_low", "target": "motion_tilt_x",
+         "min_val": -1.0, "max_val": 1.0, "attack": 5, "release": 25, "enabled": True},
     ],
 }
 
@@ -509,5 +566,34 @@ class ModulationEngine:
                 params["seed_offset"] = float(int(params["seed_offset"]))
 
             schedule.frame_params.append(params)
+
+        # ── Post-pass: motion rate limiting ──────────────────────────
+        # Clamp frame-to-frame delta for motion params to prevent saccade.
+        if len(schedule.frame_params) > 1:
+            prev_motion: dict[str, float] = {}
+            # Total motion budget: sum of |delta/max_delta| per channel ≤ 1.0
+            for fidx, params in enumerate(schedule.frame_params):
+                budget_sum = 0.0
+                clamped: dict[str, float] = {}
+                for mkey, max_d in MOTION_MAX_DELTA.items():
+                    if mkey not in params:
+                        continue
+                    cur = params[mkey]
+                    prev = prev_motion.get(mkey, cur)  # first frame: no clamping
+                    delta = cur - prev
+                    if abs(delta) > max_d:
+                        delta = max_d if delta > 0 else -max_d
+                    clamped[mkey] = prev + delta
+                    budget_sum += abs(delta) / max_d if max_d > 0 else 0.0
+                # Scale proportionally if total budget exceeded
+                if budget_sum > 1.0 and budget_sum > 0:
+                    for mkey in clamped:
+                        prev = prev_motion.get(mkey, clamped[mkey])
+                        delta = clamped[mkey] - prev
+                        clamped[mkey] = prev + delta / budget_sum
+                # Write back and track
+                for mkey, val in clamped.items():
+                    params[mkey] = val
+                    prev_motion[mkey] = val
 
         return schedule

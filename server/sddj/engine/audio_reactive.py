@@ -27,6 +27,7 @@ from .. import pipeline_factory
 from ..animatediff_manager import get_uncompiled_unet
 from ..image_codec import (
     apply_motion_warp,
+    apply_perspective_tilt,
     apply_optical_flow_blend,
     composite_with_mask,
     decode_b64_image,
@@ -434,6 +435,15 @@ class AudioReactiveMixin:
                             denoise_strength=_raw_denoise,
                         )
 
+                    # Perspective tilt (applied after 2D affine — Deforum ordering)
+                    mtx = frame_params.get("motion_tilt_x", 0.0)
+                    mty = frame_params.get("motion_tilt_y", 0.0)
+                    if abs(mtx) > 0.01 or abs(mty) > 0.01:
+                        source = apply_perspective_tilt(
+                            source, tilt_x=mtx, tilt_y=mty,
+                            denoise_strength=_raw_denoise,
+                        )
+
                     # Noise amplitude modulation: inject noise into source.
                     # Auto coupling: when no noise_amplitude slot is active,
                     # inject subtle noise inversely proportional to denoise
@@ -801,6 +811,15 @@ class AudioReactiveMixin:
             if abs(mx) > 0.01 or abs(my) > 0.01 or abs(mz - 1.0) > 0.001 or abs(mr) > 0.01:
                 pil_img = apply_motion_warp(
                     pil_img, tx=mx, ty=my, zoom=mz, rotation=mr,
+                    denoise_strength=ad_denoise,
+                )
+
+            # Perspective tilt (applied after 2D affine — Deforum ordering)
+            mtx = frame_params.get("motion_tilt_x", 0.0)
+            mty = frame_params.get("motion_tilt_y", 0.0)
+            if abs(mtx) > 0.01 or abs(mty) > 0.01:
+                pil_img = apply_perspective_tilt(
+                    pil_img, tilt_x=mtx, tilt_y=mty,
                     denoise_strength=ad_denoise,
                 )
 

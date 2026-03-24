@@ -32,13 +32,13 @@ Parameter Schedule (per-frame or per-chunk values)
     |
     +--- Frame Chain (img2img from previous frame)
     |      - Frame 0: txt2img / img2img / inpaint / ControlNet
-    |      - Frame 1+: motion warp (pan/zoom/rotate) -> img2img chain with modulated params
+    |      - Frame 1+: motion warp (pan/zoom/rotate/tilt) -> img2img chain with modulated params
     |
     +--- AnimateDiff + Audio (v0.7.3+)
     |      - 16-frame temporal batches with 4-frame overlap
     |      - Per-chunk averaged parameters
     |      - Alpha-blended inter-batch transitions
-    |      - Per-frame motion warp (pan/zoom/rotate) applied post-generation
+    |      - Per-frame motion warp (pan/zoom/rotate/tilt) applied post-generation
     |      - FreeInit on first chunk (optional)
     |
     v
@@ -131,10 +131,12 @@ Inference parameters that can be modulated per-frame:
 | `frame_cadence` | 1 - 8 | Frame skip cadence. Higher = fewer generated frames (GPU savings). |
 | `motion_x` | -5.0 - 5.0 | Horizontal camera pan (pixels). Smooth Deforum-like 2D warp. |
 | `motion_y` | -5.0 - 5.0 | Vertical camera pan (pixels). Smooth Deforum-like 2D warp. |
-| `motion_zoom` | 0.95 - 1.05 | Camera zoom (1.0 = none, >1 = in, <1 = out). Compounds over frames. |
+| `motion_zoom` | 0.92 - 1.08 | Camera zoom (1.0 = none, >1 = in, <1 = out). Compounds over frames. |
 | `motion_rotation` | -2.0 - 2.0 | Camera rotation (degrees). Smooth planar rotation. |
+| `motion_tilt_x` | -3.0 - 3.0 | Perspective pitch (degrees). Faux 3D via homography warp. |
+| `motion_tilt_y` | -3.0 - 3.0 | Perspective yaw (degrees). Faux 3D via homography warp. |
 
-> **Motion anti-spaghetti**: Motion amplitude is automatically scaled by `denoise_strength` (clamped 0.1-0.8) — lower denoise = less motion. This prevents visual artifacts at low denoising levels. Border reflection and Lanczos4 interpolation ensure clean edges.
+> **Motion anti-spaghetti**: Motion amplitude is automatically scaled by `denoise_strength` (clamped 0.15-0.8) — lower denoise = less motion. Frame-to-frame deltas are rate-limited per channel (`MOTION_MAX_DELTA`) with total motion budget enforcement. Border replication and Lanczos4 interpolation ensure clean edges.
 
 ### Attack / Release
 
@@ -165,7 +167,7 @@ Typical values: attack=2, release=8 (responsive but smooth).
 | `smooth_morph` | rms->denoise, centroid->cfg, rms->motion_zoom | Gentle transitions, slow evolve |
 | `rhythmic_pulse` | beat->denoise, onset->cfg, beat->motion_zoom | Beat-synced pulsing |
 | `atmospheric` | rms->denoise, mid->cfg, high->noise, mid->motion_x | Moody, cinematic, textural |
-| `abstract_noise` | rms->noise, onset->denoise, centroid->seed, high->cfg, high->motion_rot, onset->motion_x | Abstract, generative, noisy |
+| `abstract_noise` | rms->noise, onset->denoise, centroid->seed, high->cfg, high->motion_rot, onset->motion_x, high->tilt_x | Abstract, generative, noisy |
 
 ### Complexity Levels
 
@@ -174,7 +176,7 @@ Typical values: attack=2, release=8 (responsive but smooth).
 | `one_click_easy` | 1 (rms->denoise) | First-time users, simple reactivity |
 | `beginner_balanced` | 2 (rms->denoise, onset->cfg) | Good starting point |
 | `intermediate_full` | 3+1 (rms->denoise, onset->cfg, low->noise, beat->motion_zoom) | Rich modulation |
-| `advanced_max` | 4+2 (all targets including seed, low->motion_x, beat->motion_zoom) | Maximum expressiveness |
+| `advanced_max` | 4+3 (all targets including seed, low->motion_x, beat->motion_zoom, low->tilt_x) | Maximum expressiveness |
 
 ### Target-Specific
 
@@ -184,16 +186,20 @@ Typical values: attack=2, release=8 (responsive but smooth).
 | `seed_scatter` | onset->seed, rms->denoise | Visual variety per beat |
 | `noise_sculpt` | rms->noise, onset->denoise, centroid->cfg, rms->motion_zoom | Noise-driven textures |
 
-### Motion / Camera (v0.7.4)
+### Motion / Camera (v0.7.4+)
 
 | Preset | Slots | Best For |
 |--------|-------|----------|
 | `gentle_drift` | rms->denoise, low->motion_x, mid->motion_y | Slow horizontal/vertical drift |
 | `pulse_zoom` | rms->denoise, beat->motion_zoom | Beat-synced zoom pulse |
 | `slow_rotate` | rms->denoise, centroid->motion_rotation | Gentle rotation driven by timbre |
-| `cinematic_sweep` | rms->denoise, low->motion_x, beat->zoom, centroid->rotation | Full cinematic camera |
+| `cinematic_sweep` | rms->denoise, low->motion_x, beat->zoom, centroid->rotation, centroid->tilt_y | Full cinematic camera |
+| `cinematic_tilt` | rms->denoise, low->tilt_x, centroid->tilt_y | Perspective tilt from bass/timbre |
+| `zoom_breathe` | rms->denoise, rms->motion_zoom | Gentle RMS-driven zoom oscillation |
+| `parallax_drift` | rms->denoise, low->motion_x, mid->tilt_x | Parallax effect (pan + tilt) |
+| `full_cinematic` | rms->denoise, low->motion_x, mid->motion_y, beat->zoom, centroid->rotation, low->tilt_x | All 6 motion channels |
 
-> Many existing presets (electronic_pulse, rock_energy, hiphop_bounce, ambient_drift, etc.) were enriched with subtle motion in v0.7.4. The motion is automatic and smooth — no configuration needed.
+> Many existing presets (electronic_pulse, rock_energy, hiphop_bounce, ambient_drift, etc.) were enriched with subtle motion in v0.7.4. `cinematic_sweep`, `advanced_max`, and `abstract_noise` were enriched with perspective tilt in v0.9.34. The motion is automatic and smooth — no configuration needed.
 
 ### Legacy
 
@@ -438,12 +444,15 @@ Optional CPU-based stem separation via demucs (htdemucs model).
 - Large range (0-1000): Dramatic visual jumps, especially on beats
 
 ### Motion / Camera
-- Motion targets (`motion_x/y/zoom/rotation`) create smooth Deforum-like camera movement
+- Motion targets (`motion_x/y/zoom/rotation/tilt_x/tilt_y`) create smooth Deforum-like camera movement
+- Perspective tilt (`motion_tilt_x/y`) adds faux 3D pitch/yaw via homography warp
 - Motion is **automatically dampened** by denoise strength — low denoise = minimal movement
+- Frame-to-frame deltas are **rate-limited** per channel to prevent saccade from audio transients
 - Use motion presets (`gentle_drift`, `pulse_zoom`, `slow_rotate`, `cinematic_sweep`) for quick results
+- Use tilt presets (`cinematic_tilt`, `parallax_drift`, `full_cinematic`) for perspective effects
 - For custom motion, use high attack (4-6) and release (20-30) for ultra-smooth movement
 - Combining `motion_zoom` with `global_beat` creates satisfying pulse-zoom effects on beats
-- Keep ranges conservative: ±2-3px translation, zoom 0.99-1.01, rotation ±1deg for pixel art
+- Keep ranges conservative: ±2-3px translation, zoom 0.99-1.01, rotation ±1deg, tilt ±1.5deg for pixel art
 
 ### Attack/Release Tuning
 - **Fast music**: attack=1, release=3-6 (snappy response)

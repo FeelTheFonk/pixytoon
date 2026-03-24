@@ -10,6 +10,7 @@ from sddj.modulation_engine import (
     ExpressionEvaluator,
     ModulationEngine,
     ModulationSlot,
+    MOTION_MAX_DELTA,
     ParameterSchedule,
     PRESETS,
     TARGET_RANGES,
@@ -403,11 +404,13 @@ class TestPresets:
         assert TARGET_RANGES["frame_cadence"] == (1.0, 8.0)
 
     def test_motion_targets_in_ranges(self):
-        """v0.7.4: motion_x, motion_y, motion_zoom, motion_rotation in TARGET_RANGES."""
+        """v0.7.4+: motion targets including tilt in TARGET_RANGES."""
         assert TARGET_RANGES["motion_x"] == (-5.0, 5.0)
         assert TARGET_RANGES["motion_y"] == (-5.0, 5.0)
-        assert TARGET_RANGES["motion_zoom"] == (0.95, 1.05)
+        assert TARGET_RANGES["motion_zoom"] == (0.92, 1.08)
         assert TARGET_RANGES["motion_rotation"] == (-2.0, 2.0)
+        assert TARGET_RANGES["motion_tilt_x"] == (-3.0, 3.0)
+        assert TARGET_RANGES["motion_tilt_y"] == (-3.0, 3.0)
 
     def test_motion_presets_exist(self):
         """v0.7.4: 4 dedicated motion presets."""
@@ -416,8 +419,28 @@ class TestPresets:
             assert len(slots) > 0, f"Preset {name!r} has no slots"
             targets = {s.target for s in slots}
             # Each motion preset must have at least one motion target
-            motion_targets = targets & {"motion_x", "motion_y", "motion_zoom", "motion_rotation"}
+            motion_targets = targets & {"motion_x", "motion_y", "motion_zoom", "motion_rotation",
+                                        "motion_tilt_x", "motion_tilt_y"}
             assert len(motion_targets) > 0, f"Preset {name!r} has no motion targets"
+
+    def test_perspective_presets_exist(self):
+        """New perspective/advanced camera presets."""
+        for name in ("cinematic_tilt", "zoom_breathe", "parallax_drift", "full_cinematic"):
+            slots = ModulationEngine.get_preset(name)
+            assert len(slots) > 0, f"Preset {name!r} has no slots"
+
+    def test_cinematic_tilt_has_tilt(self):
+        slots = ModulationEngine.get_preset("cinematic_tilt")
+        targets = {s.target for s in slots}
+        assert "motion_tilt_x" in targets or "motion_tilt_y" in targets
+
+    def test_enriched_presets_have_tilt(self):
+        """Enriched presets should have tilt targets."""
+        for name in ("cinematic_sweep", "advanced_max", "abstract_noise"):
+            slots = ModulationEngine.get_preset(name)
+            targets = {s.target for s in slots}
+            tilt_targets = targets & {"motion_tilt_x", "motion_tilt_y"}
+            assert len(tilt_targets) > 0, f"Preset {name!r} should have tilt"
 
     def test_enriched_presets_have_motion(self):
         """v0.7.4: existing presets enriched with motion slots."""
@@ -427,7 +450,8 @@ class TestPresets:
             "atmospheric", "abstract_noise", "intermediate_full", "advanced_max",
             "noise_sculpt", "energetic", "ambient", "bass_driven",
         ]
-        motion_set = {"motion_x", "motion_y", "motion_zoom", "motion_rotation"}
+        motion_set = {"motion_x", "motion_y", "motion_zoom", "motion_rotation",
+                      "motion_tilt_x", "motion_tilt_y"}
         for name in enriched:
             slots = ModulationEngine.get_preset(name)
             targets = {s.target for s in slots}
@@ -436,7 +460,8 @@ class TestPresets:
     def test_presets_without_motion(self):
         """v0.7.4: beginner presets deliberately have no motion."""
         no_motion = ["one_click_easy", "beginner_balanced", "controlnet_reactive", "seed_scatter"]
-        motion_set = {"motion_x", "motion_y", "motion_zoom", "motion_rotation"}
+        motion_set = {"motion_x", "motion_y", "motion_zoom", "motion_rotation",
+                      "motion_tilt_x", "motion_tilt_y"}
         for name in no_motion:
             slots = ModulationEngine.get_preset(name)
             targets = {s.target for s in slots}
@@ -473,6 +498,33 @@ class TestPresets:
         lo, hi = TARGET_RANGES["denoise_strength"]
         assert lo >= 0.20, f"Denoise lower bound {lo} < 0.20"
         assert hi <= 0.95
+
+    def test_motion_rate_limiting_clamps_delta(self):
+        """Rate limiting should clamp frame-to-frame motion deltas."""
+        engine = ModulationEngine()
+        # Step function: zoom jumps from 1.0 to 1.06 instantly at frame 5
+        raw = np.zeros(20, dtype=np.float32)
+        raw[5:] = 1.0
+        analysis = AudioAnalysis(
+            fps=24.0, duration=20/24.0, total_frames=20,
+            sample_rate=22050, audio_path="test.wav",
+            features={"global_rms": raw},
+            raw_features={"global_rms": raw},
+        )
+        slots = [ModulationSlot(
+            source="global_rms", target="motion_zoom",
+            min_val=1.0, max_val=1.06, attack=1, release=1,
+        )]
+        schedule = engine.compute_schedule(analysis, slots)
+        # Frame-to-frame delta should be clamped to MOTION_MAX_DELTA["motion_zoom"]
+        max_d = MOTION_MAX_DELTA["motion_zoom"]
+        for i in range(1, 20):
+            prev = schedule.get_params(i - 1).get("motion_zoom", 1.0)
+            cur = schedule.get_params(i).get("motion_zoom", 1.0)
+            delta = abs(cur - prev)
+            assert delta <= max_d + 1e-6, (
+                f"Frame {i}: delta {delta:.4f} exceeds max {max_d}"
+            )
 
 
 # ─── Validate Expressions ──────────────────────────────────

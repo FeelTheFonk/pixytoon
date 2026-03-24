@@ -512,6 +512,7 @@ local MOD_TARGETS = {
   "frame_cadence",
   -- Motion / camera (smooth Deforum-like)
   "motion_x", "motion_y", "motion_zoom", "motion_rotation",
+  "motion_tilt_x", "motion_tilt_y",
 }
 
 local function build_tab_audio()
@@ -640,6 +641,7 @@ local function build_tab_audio()
       "controlnet_reactive", "seed_scatter", "noise_sculpt",
       -- Motion / camera
       "gentle_drift", "pulse_zoom", "slow_rotate", "cinematic_sweep",
+      "cinematic_tilt", "zoom_breathe", "parallax_drift", "full_cinematic",
       -- Legacy
       "energetic", "ambient", "bass_driven",
     },
@@ -804,6 +806,18 @@ local function build_tab_audio()
   dlg:entry{
     id = "expr_motion_rot",
     label = "rotation",
+    text = "",
+    hexpand = true,
+  }
+  dlg:entry{
+    id = "expr_motion_tilt_x",
+    label = "tilt_x",
+    text = "",
+    hexpand = true,
+  }
+  dlg:entry{
+    id = "expr_motion_tilt_y",
+    label = "tilt_y",
     text = "",
     hexpand = true,
   }

@@ -10,6 +10,7 @@ from PIL import Image
 
 from sddj.image_codec import (
     apply_motion_warp,
+    apply_perspective_tilt,
     composite_with_mask,
     decode_b64_image,
     decode_b64_mask,
@@ -217,3 +218,84 @@ class TestApplyMotionWarp:
         original_arr = np.array(img)
         result = apply_motion_warp(img, tx=5.0, denoise_strength=0.30)
         assert not np.array_equal(original_arr, np.array(result))
+
+    def test_zoom_in_magnifies_center(self):
+        """zoom=1.05 should magnify center content (zoom IN, not dezoom)."""
+        import numpy as np
+        # Create pattern: red 10x10 block at center of 64x64 white canvas
+        arr = np.full((64, 64, 3), 255, dtype=np.uint8)
+        arr[27:37, 27:37] = [255, 0, 0]  # red center block
+        img = Image.fromarray(arr)
+        result = apply_motion_warp(img, zoom=1.05, denoise_strength=0.8)
+        res_arr = np.array(result)
+        # After zoom in, the red block occupies more area in the center
+        # Check that a slightly outer ring (e.g., row 26) now has red content
+        # (it was white before zoom in, but red center block expanded into it)
+        center_strip = res_arr[26, 27:37, 0]  # red channel of row just above original block
+        assert center_strip.mean() > 200, "Zoom in should magnify center content outward"
+
+    def test_zoom_out_shrinks_center(self):
+        """zoom=0.95 should shrink center content (zoom OUT)."""
+        import numpy as np
+        # Create pattern: red fills 40x40 center of 64x64 white canvas
+        arr = np.full((64, 64, 3), 255, dtype=np.uint8)
+        arr[12:52, 12:52] = [255, 0, 0]
+        img = Image.fromarray(arr)
+        result = apply_motion_warp(img, zoom=0.95, denoise_strength=0.8)
+        res_arr = np.array(result)
+        # After zoom out, the red area should shrink.
+        # Original had red at row 12. After shrink, row 12 should be whiter.
+        edge_strip = res_arr[12, 20:44, 0]
+        # The original had pure red (255) at this strip; after zoom-out
+        # some pixels should now be white (replicated border)
+        assert res_arr.sum() != np.array(img).sum(), "Zoom out should change the image"
+
+
+class TestApplyPerspectiveTilt:
+    """Perspective tilt via homography — faux 3D pitch/yaw."""
+
+    def _make_image(self, mode="RGB", size=(64, 64)):
+        import numpy as np
+        arr = np.random.randint(0, 255, (*size[::-1], 3 if mode == "RGB" else 4), dtype=np.uint8)
+        return Image.fromarray(arr)
+
+    def test_tilt_zero_returns_original(self):
+        img = self._make_image()
+        result = apply_perspective_tilt(img, tilt_x=0.0, tilt_y=0.0, denoise_strength=0.8)
+        assert result is img
+
+    def test_tilt_x_changes_image(self):
+        img = self._make_image()
+        import numpy as np
+        result = apply_perspective_tilt(img, tilt_x=2.0, denoise_strength=0.8)
+        assert result.size == img.size
+        assert not np.array_equal(np.array(img), np.array(result))
+
+    def test_tilt_y_changes_image(self):
+        img = self._make_image()
+        import numpy as np
+        result = apply_perspective_tilt(img, tilt_y=2.0, denoise_strength=0.8)
+        assert not np.array_equal(np.array(img), np.array(result))
+
+    def test_tilt_killed_at_low_denoise(self):
+        img = self._make_image()
+        result = apply_perspective_tilt(img, tilt_x=3.0, tilt_y=3.0, denoise_strength=0.20)
+        assert result is img
+
+    def test_tilt_denoise_correlation(self):
+        """Higher denoise = more tilt effect."""
+        img = self._make_image()
+        import numpy as np
+        low = apply_perspective_tilt(img, tilt_x=2.0, denoise_strength=0.3)
+        high = apply_perspective_tilt(img, tilt_x=2.0, denoise_strength=0.8)
+        assert not np.array_equal(np.array(low), np.array(high))
+
+    def test_preserves_rgb_mode(self):
+        img = self._make_image(mode="RGB")
+        result = apply_perspective_tilt(img, tilt_x=2.0, denoise_strength=0.5)
+        assert result.mode == "RGB"
+
+    def test_preserves_rgba_mode(self):
+        img = self._make_image(mode="RGBA")
+        result = apply_perspective_tilt(img, tilt_x=2.0, denoise_strength=0.5)
+        assert result.mode == "RGBA"

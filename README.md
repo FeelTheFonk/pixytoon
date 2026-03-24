@@ -28,7 +28,7 @@ Aseprite (Lua WebSocket) <-> SDDj Server (Python FastAPI)
                                   |
                      Modulation Engine (synth matrix + expressions)
                                   |
-                     Motion Warp (Deforum-like smooth 2D affine, cv2)
+                     Motion Warp (Deforum-like 2D affine + perspective tilt, cv2)
                                   |
                             Post-Processing Pipeline
 ```
@@ -99,7 +99,7 @@ sddj/
 │       ├── lora_fuser.py        # LoRA fuse/unfuse with dynamo reset
 │       ├── freeu_applicator.py  # FreeU v2 application
 │       ├── postprocess.py       # 6-stage post-processing pipeline
-│       ├── image_codec.py       # Base64 encode/decode, resize, composite, motion warp
+│       ├── image_codec.py       # Base64 encode/decode, resize, composite, motion warp, perspective tilt
 │       ├── rembg_wrapper.py     # Background removal (CPU, lazy-load)
 │       ├── validation.py        # Shared input validation (path traversal guard)
 │       ├── lora_manager.py      # LoRA discovery (path-validated)
@@ -126,7 +126,7 @@ sddj/
 - **Lock Subject** (v0.5.0) — Keep a fixed subject (character, object) while randomizing style, mood, lighting, etc.
 - **Presets** (v0.4.0) — Save/load generation settings; built-in presets for pixel art, anime, character, landscape, and more
 - **Audio Reactivity** (v0.7.0-v0.7.4) — Synth-style modulation matrix: map audio features (RMS, onset, spectral, beat, per-stem, sub-bass, upper-mid, presence) to inference parameters (denoise, CFG, noise, ControlNet, seed, palette shift, frame cadence, **motion/camera**). BPM detection + auto-calibration recommends best preset. 24 built-in presets (genre/style/complexity/target/motion). Prompt scheduling for per-segment prompts. Deforum-inspired math expressions with BPM variable. Optional CPU stem separation (demucs). AnimateDiff + Audio mode for temporal coherence (16-frame chunked batches with overlap blending). **Frame limit** control (0 = all, or exact count).
-- **Audio-Reactive Motion** (v0.7.4) — Smooth Deforum-like camera: pan, zoom, rotation driven by audio features. 2D affine warp with 7-layer anti-spaghetti protection (denoise correlation, conservative ranges, EMA smoothing, border reflection, Lanczos4, no 3D, warp-before-img2img). 4 dedicated motion presets + 14 existing presets enriched with subtle motion.
+- **Audio-Reactive Motion** (v0.7.4+) — Smooth Deforum-like camera: pan, zoom, rotation, **perspective tilt** (faux 3D pitch/yaw via homography warp) driven by audio features. 2D affine warp + perspective tilt with anti-spaghetti protection (denoise correlation, rate limiting with total motion budget, EMA smoothing, border replication, Lanczos4, warp-before-img2img). 4 dedicated motion presets + 4 advanced camera presets (`cinematic_tilt`, `zoom_breathe`, `parallax_drift`, `full_cinematic`) + 14 existing presets enriched with motion.
 - **Animation** — Dual-method: Frame Chain (img2img chaining) + AnimateDiff (motion module temporal consistency)
 - **AnimateDiff** — Motion adapter v1-5-3, FreeInit support, auto DeepCache disable/re-enable, ControlNet compatible
 - **LoRA stacking** — Hyper-SD (speed) + style LoRA (±2.0 weight range)

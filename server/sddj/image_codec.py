@@ -158,8 +158,13 @@ def apply_motion_warp(
     eff_zoom = 1.0 + (zoom - 1.0) * scale
     eff_rot = rotation * scale
 
+    # warpAffine uses inverse mapping (dst→src): scale > 1 in the matrix
+    # means each dst pixel samples from MORE src pixels = zoom OUT.
+    # Invert so zoom > 1 = zoom IN (Deforum convention).
+    inv_zoom = 1.0 / eff_zoom if abs(eff_zoom) > 1e-6 else 1.0
+
     # Skip if negligible motion (saves CPU)
-    total_motion = abs(eff_tx) + abs(eff_ty) + abs(eff_zoom - 1.0) * 100.0 + abs(eff_rot)
+    total_motion = abs(eff_tx) + abs(eff_ty) + abs(inv_zoom - 1.0) * 100.0 + abs(eff_rot)
     if total_motion < 0.05:
         return image
 
@@ -167,8 +172,8 @@ def apply_motion_warp(
     cx, cy = w / 2.0, h / 2.0
 
     # Build combined affine matrix: translate to center, rotate+scale, translate back + pan
-    cos_a = math.cos(math.radians(eff_rot)) * eff_zoom
-    sin_a = math.sin(math.radians(eff_rot)) * eff_zoom
+    cos_a = math.cos(math.radians(eff_rot)) * inv_zoom
+    sin_a = math.sin(math.radians(eff_rot)) * inv_zoom
 
     # 2x3 affine matrix
     M = np.array([
@@ -177,7 +182,6 @@ def apply_motion_warp(
     ], dtype=np.float64)
 
     # Convert PIL -> numpy (preserve alpha if present)
-    has_alpha = image.mode == "RGBA"
     arr = np.array(image)
 
     # Apply warp with edge replication (Deforum pattern — avoids
@@ -185,6 +189,81 @@ def apply_motion_warp(
     # denoising cannot fully absorb the warp).
     warped = cv2.warpAffine(
         arr, M, (w, h),
+        flags=cv2.INTER_LANCZOS4,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+
+    return Image.fromarray(warped)
+
+
+def apply_perspective_tilt(
+    image: Image.Image,
+    tilt_x: float = 0.0,
+    tilt_y: float = 0.0,
+    denoise_strength: float = 0.5,
+) -> Image.Image:
+    """Apply faux-3D perspective tilt via homography warp.
+
+    Inspired by Deforum's perspective_flip_phi/theta. Uses a rotation
+    matrix projected through a virtual camera to produce a 3×3
+    homography, giving the illusion of 3D pitch/yaw on a 2D canvas.
+
+    Args:
+        tilt_x: Pitch angle in degrees (positive = tilt top away).
+        tilt_y: Yaw angle in degrees (positive = tilt right side away).
+        denoise_strength: Current denoise value — scales effective tilt.
+
+    Returns:
+        Warped PIL image (same size and mode).
+    """
+    if denoise_strength < 0.25:
+        return image
+
+    scale = max(0.15, min(0.8, denoise_strength))
+    eff_tx = tilt_x * scale
+    eff_ty = tilt_y * scale
+
+    if abs(eff_tx) + abs(eff_ty) < 0.01:
+        return image
+
+    w, h = image.size
+    cx, cy = w / 2.0, h / 2.0
+    # Focal length in pixels — larger = subtler perspective
+    fv = float(max(w, h))
+
+    # Build 3D rotation matrix (pitch around X, yaw around Y)
+    ax = math.radians(eff_tx)
+    ay = math.radians(eff_ty)
+
+    # Rotation around X axis (pitch)
+    Rx = np.array([
+        [1, 0,            0],
+        [0, math.cos(ax), -math.sin(ax)],
+        [0, math.sin(ax),  math.cos(ax)],
+    ], dtype=np.float64)
+
+    # Rotation around Y axis (yaw)
+    Ry = np.array([
+        [ math.cos(ay), 0, math.sin(ay)],
+        [ 0,            1, 0],
+        [-math.sin(ay), 0, math.cos(ay)],
+    ], dtype=np.float64)
+
+    R = Ry @ Rx
+
+    # Camera intrinsic matrix (pinhole model)
+    K = np.array([
+        [fv, 0,  cx],
+        [0,  fv, cy],
+        [0,  0,  1],
+    ], dtype=np.float64)
+
+    # Homography: H = K · R · K⁻¹
+    H = K @ R @ np.linalg.inv(K)
+
+    arr = np.array(image)
+    warped = cv2.warpPerspective(
+        arr, H, (w, h),
         flags=cv2.INTER_LANCZOS4,
         borderMode=cv2.BORDER_REPLICATE,
     )
