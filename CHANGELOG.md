@@ -2,6 +2,41 @@
 
 All notable changes to SDDj are documented here.
 
+## [0.9.2] — 2026-03
+
+### Fixed
+- Version drift: all manifests synchronized (were stuck at 0.8.9 since v0.8.8)
+- `AudioReactiveRequest` field ordering normalized (fields declared before validators)
+- `frame_duration_ms` lower bound inconsistency unified to 30ms across all request models
+- Missing palette save count limit added (max 100, parity with presets)
+- `round8` edge case: clamp minimum to 8 (prevent 0-size from tiny inputs)
+- Hue shift guard for 0-pixel images
+- Export handler uses typed attribute access instead of `getattr`
+- Duplicated audio validation extracted into shared helper
+- Added `.gemini/` to `.gitignore`
+
+---
+
+## [0.9.1] — 2026-03
+
+### Changed
+- Optimized generation-to-display pipeline
+
+---
+
+## [0.9.0] — 2026-03
+
+### Fixed
+- Cleanup refresh timer and queue in cancel safety timeout
+- Eliminated C stack overflow in audio reactive chain mode
+
+### Changed
+- Real-time frame display with decoupled refresh timer
+- Cleaned dead Live Paint traces from documentation
+- Added temporal coherence config and expanded troubleshooting docs
+
+---
+
 ## [0.8.9] — 2026-03
 
 ### Added
@@ -10,9 +45,20 @@ All notable changes to SDDj are documented here.
 
 ### Changed
 - Engine refactored from single `engine.py` to modular `engine/` package (core, animation, audio_reactive, helpers)
+- Enforced 100% offline mode — no HuggingFace fetches at runtime
+- Eliminated `uv run` at runtime — direct venv Python execution
+- Hardened all Lua modules against stack overflow
 
 ### Removed
 - Live Paint mode (event-driven real-time painting) — removed entirely
+
+---
+
+## [0.8.8] — 2026-02
+
+### Fixed
+- Audio reactivity bypass after parameter change
+- Combobox selection preservation
 
 ---
 

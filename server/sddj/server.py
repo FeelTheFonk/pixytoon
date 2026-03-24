@@ -56,6 +56,32 @@ logging.basicConfig(
 )
 log = logging.getLogger("sddj.server")
 
+_SUPPORTED_AUDIO_EXTS = frozenset({".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"})
+
+
+async def _validate_audio_path(websocket: WebSocket, audio_path: str) -> str | None:
+    """Validate audio path: realpath, existence, extension, size.
+
+    Returns validated real path on success, or None after sending error.
+    """
+    real_path = os.path.realpath(audio_path)
+    if not os.path.isfile(real_path):
+        await _send(websocket, ErrorResponse(
+            code="INVALID_REQUEST", message=f"Audio file not found: {audio_path}"))
+        return None
+    ext = os.path.splitext(real_path)[1].lower()
+    if ext not in _SUPPORTED_AUDIO_EXTS:
+        await _send(websocket, ErrorResponse(
+            code="INVALID_REQUEST", message=f"Unsupported audio format: {ext}"))
+        return None
+    size_mb = os.path.getsize(real_path) / (1024 * 1024)
+    if size_mb > settings.audio_max_file_size_mb:
+        await _send(websocket, ErrorResponse(
+            code="INVALID_REQUEST",
+            message=f"Audio file too large: {size_mb:.0f}MB (max {settings.audio_max_file_size_mb}MB)"))
+        return None
+    return real_path
+
 # ─────────────────────────────────────────────────────────────
 # APPLICATION
 # ─────────────────────────────────────────────────────────────
@@ -637,23 +663,8 @@ async def _handle_analyze_audio(websocket: WebSocket, req: Request) -> None:
         await _send(websocket, ErrorResponse(
             code="INVALID_REQUEST", message="audio_path required"))
         return
-    # Validate path security
-    real_path = os.path.realpath(audio_req.audio_path)
-    if not os.path.isfile(real_path):
-        await _send(websocket, ErrorResponse(
-            code="INVALID_REQUEST", message=f"Audio file not found: {audio_req.audio_path}"))
-        return
-    ext = os.path.splitext(real_path)[1].lower()
-    if ext not in {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}:
-        await _send(websocket, ErrorResponse(
-            code="INVALID_REQUEST", message=f"Unsupported audio format: {ext}"))
-        return
-    # Check file size
-    size_mb = os.path.getsize(real_path) / (1024 * 1024)
-    if size_mb > settings.audio_max_file_size_mb:
-        await _send(websocket, ErrorResponse(
-            code="INVALID_REQUEST",
-            message=f"Audio file too large: {size_mb:.0f}MB (max {settings.audio_max_file_size_mb}MB)"))
+    real_path = await _validate_audio_path(websocket, audio_req.audio_path)
+    if real_path is None:
         return
 
     loop = asyncio.get_running_loop()
@@ -716,11 +727,11 @@ async def _handle_export_mp4(websocket: WebSocket, req: Request) -> None:
         return
 
     # Extract parameters from request
-    output_dir = getattr(req, "output_dir", None)
-    audio_path = getattr(req, "audio_path", None)
-    fps = getattr(req, "fps", None) or 24.0
-    scale_factor = getattr(req, "scale_factor", None) or 4
-    quality = getattr(req, "quality", None) or "high"
+    output_dir = req.output_dir
+    audio_path = req.audio_path
+    fps = req.fps or 24.0
+    scale_factor = req.scale_factor or 4
+    quality = req.quality or "high"
 
     if not output_dir:
         await _send(websocket, ExportMp4ErrorResponse(
@@ -792,22 +803,8 @@ async def _handle_generate_audio_reactive(
             code="INVALID_REQUEST", message="audio_path required"))
         return
 
-    # Validate audio path (same checks as analyze_audio)
-    real_path = os.path.realpath(audio_req.audio_path)
-    if not os.path.isfile(real_path):
-        await _send(websocket, ErrorResponse(
-            code="INVALID_REQUEST", message=f"Audio file not found: {audio_req.audio_path}"))
-        return
-    ext = os.path.splitext(real_path)[1].lower()
-    if ext not in {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}:
-        await _send(websocket, ErrorResponse(
-            code="INVALID_REQUEST", message=f"Unsupported audio format: {ext}"))
-        return
-    size_mb = os.path.getsize(real_path) / (1024 * 1024)
-    if size_mb > settings.audio_max_file_size_mb:
-        await _send(websocket, ErrorResponse(
-            code="INVALID_REQUEST",
-            message=f"Audio file too large: {size_mb:.0f}MB (max {settings.audio_max_file_size_mb}MB)"))
+    real_path = await _validate_audio_path(websocket, audio_req.audio_path)
+    if real_path is None:
         return
     audio_req.audio_path = real_path
 

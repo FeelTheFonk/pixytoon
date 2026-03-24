@@ -11,6 +11,8 @@ from .validation import validate_resource_name as _validate_name
 
 log = logging.getLogger("sddj.palette")
 
+_MAX_PALETTES = 100
+
 
 def _hex_to_rgb(h: str) -> tuple[int, int, int]:
     h = h.lstrip("#")
@@ -62,6 +64,8 @@ def save_palette(name: str, colors: list[str]) -> None:
     d = settings.palettes_dir
     d.mkdir(parents=True, exist_ok=True)
     path = d / f"{name}.json"
+    if not path.is_file() and len(list(d.glob("*.json"))) >= _MAX_PALETTES:
+        raise ValueError(f"Maximum number of palettes ({_MAX_PALETTES}) reached")
     data = {"name": name, "colors": colors}
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     log.info("Palette saved: %s (%d colors)", name, len(colors))

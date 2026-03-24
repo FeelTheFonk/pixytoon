@@ -17,6 +17,10 @@ def _apply_hue_shift(image: Image.Image, shift: float) -> Image.Image:
 
     Preserves alpha channel. Used for audio-driven palette shift modulation.
     """
+    if image.size[0] == 0 or image.size[1] == 0:
+        return image
+    if abs(shift) < 1e-6:
+        return image
     has_alpha = image.mode == "RGBA"
     alpha = image.split()[-1] if has_alpha else None
     hsv = image.convert("HSV")

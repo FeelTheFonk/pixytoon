@@ -29,7 +29,12 @@ class TestRound8:
         assert round8(inp) == expected
 
     def test_round8_zero(self):
-        assert round8(0) == 0
+        assert round8(0) == 8  # Minimum clamp: prevents 0-dimension VAE tensors
+
+    def test_round8_small_clamps_to_8(self):
+        assert round8(1) == 8
+        assert round8(3) == 8
+        assert round8(7) == 8
 
 
 class TestDecodeEncodeRoundtrip:

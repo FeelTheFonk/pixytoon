@@ -181,7 +181,7 @@ class AnimationRequest(BaseModel):
     post_process: PostProcessSpec = Field(default_factory=PostProcessSpec)
     # Animation-specific
     frame_count: int = Field(8, ge=2, le=120)
-    frame_duration_ms: int = Field(100, ge=50, le=2000)
+    frame_duration_ms: int = Field(100, ge=30, le=2000)
     seed_strategy: SeedStrategy = SeedStrategy.INCREMENT
     tag_name: Optional[str] = Field(None, max_length=64)
     # AnimateDiff-specific
@@ -350,13 +350,6 @@ class AudioReactiveRequest(BaseModel):
     expressions: Optional[dict[str, str]] = None
     modulation_preset: Optional[str] = None
     prompt_segments: list[dict] = Field(default_factory=list)
-
-    @field_validator("modulation_slots", "prompt_segments", mode="before")
-    @classmethod
-    def _empty_dict_to_list(cls, v: Any) -> Any:
-        if isinstance(v, dict) and len(v) == 0:
-            return []
-        return v
     randomness: int = Field(0, ge=0, le=20)
     max_frames: Optional[int] = Field(None, ge=1, le=3600)
     # Animation method: chain (default) or animatediff_audio
@@ -383,6 +376,13 @@ class AudioReactiveRequest(BaseModel):
     post_process: PostProcessSpec = Field(default_factory=PostProcessSpec)
     frame_duration_ms: int = Field(100, ge=30, le=2000)
     tag_name: Optional[str] = Field(None, max_length=64)
+
+    @field_validator("modulation_slots", "prompt_segments", mode="before")
+    @classmethod
+    def _empty_dict_to_list(cls, v: Any) -> Any:
+        if isinstance(v, dict) and len(v) == 0:
+            return []
+        return v
 
 
 # ─────────────────────────────────────────────────────────────

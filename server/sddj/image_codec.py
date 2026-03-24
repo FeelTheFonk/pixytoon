@@ -12,8 +12,8 @@ from PIL import Image
 
 
 def round8(v: int) -> int:
-    """Round to nearest multiple of 8 (SD1.5 VAE requirement), clamped to 2048."""
-    return min(2048, ((v + 4) // 8) * 8)
+    """Round to nearest multiple of 8 (SD1.5 VAE requirement), clamped 8–2048."""
+    return max(8, min(2048, ((v + 4) // 8) * 8))
 
 
 _MAX_IMAGE_PIXELS = 2048 * 2048  # 4M pixels max
