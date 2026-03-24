@@ -331,8 +331,8 @@ def _make_thread_callback(websocket: WebSocket, loop: asyncio.AbstractEventLoop,
             except AttributeError:
                 return
             asyncio.run_coroutine_threadsafe(_send(websocket, response), loop)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Frame callback send failed: %s", e)
     return callback
 
 

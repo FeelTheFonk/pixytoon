@@ -71,6 +71,9 @@ function PT.start_gen_timeout(override_seconds)
         PT.timers.loop = PT.stop_timer(PT.timers.loop)
         PT.state.gen_step_start = nil
         PT.reset_sequence()
+        -- Reset anim tracking fields
+        PT.anim.last_frame_index = -1
+        PT.anim.decode_failures = 0
         if PT.dlg then
           PT.update_status("Timed out — no response from server")
           PT.reset_ui_buttons()
@@ -122,6 +125,8 @@ function PT.set_connected(is_connected)
     PT.anim.output_dir = nil
     PT.anim.output_count = 0
     PT.anim.last_saved_frame = nil
+    PT.anim.last_frame_index = -1
+    PT.anim.decode_failures = 0
     -- Reset sequence state
     PT.reset_sequence()
     -- Reset audio state

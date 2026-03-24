@@ -164,7 +164,9 @@ function PT.import_animation_frame(resp)
   resp._decoded_bytes = decoded_bytes
 
   if not img then
-    PT.update_status("Frame " .. (resp.frame_index + 1) .. " decode failed — skipped")
+    PT.anim.decode_failures = PT.anim.decode_failures + 1
+    PT.update_status("Frame " .. (resp.frame_index + 1) .. " decode failed ("
+      .. PT.anim.decode_failures .. " total) — skipped")
     return
   end
 

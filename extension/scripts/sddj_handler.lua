@@ -140,6 +140,12 @@ handlers.animation_frame = function(resp)
   if resp.frame_index ~= nil then
     -- Start refresh timer on first frame
     if resp.frame_index == 0 then PT.start_refresh_timer() end
+    -- Gap detection: check frame index continuity
+    if PT.anim.last_frame_index >= 0 and resp.frame_index ~= PT.anim.last_frame_index + 1 then
+      local gap = resp.frame_index - PT.anim.last_frame_index - 1
+      PT.update_status("Warning: " .. gap .. " frame(s) dropped before F" .. (resp.frame_index + 1))
+    end
+    PT.anim.last_frame_index = resp.frame_index
     PT.import_animation_frame(resp)
     -- Write frame to output directory incrementally (no memory accumulation)
     PT.save_animation_frame(resp)
@@ -160,12 +166,14 @@ handlers.animation_complete = function(resp)
   if resp.total_frames and PT.anim.frame_count ~= resp.total_frames then
     PT.update_status("Warning: received " .. PT.anim.frame_count .. "/" .. resp.total_frames .. " frames")
   end
+  local decode_note = PT.anim.decode_failures > 0
+    and " (" .. PT.anim.decode_failures .. " decode failures)" or ""
 
   if PT.dlg then
     local tag_str = ""
     if resp.tag_name and resp.tag_name ~= "" then tag_str = ", tag=" .. resp.tag_name end
     PT.update_status("Animation done (" .. tostring(resp.total_frames or "?") .. " frames, "
-      .. tostring(resp.total_time_ms or "?") .. "ms" .. tag_str .. ")")
+      .. tostring(resp.total_time_ms or "?") .. "ms" .. tag_str .. decode_note .. ")")
     PT.reset_ui_buttons()
   end
 
@@ -196,6 +204,8 @@ handlers.animation_complete = function(resp)
   PT.anim.output_dir = nil
   PT.anim.output_count = 0
   PT.anim.last_saved_frame = nil
+  PT.anim.last_frame_index = -1
+  PT.anim.decode_failures = 0
 end
 
 -- ─── Error ──────────────────────────────────────────────────
@@ -239,6 +249,8 @@ handlers.error = function(resp)
     PT.anim.output_dir = nil
     PT.anim.output_count = 0
     PT.anim.last_saved_frame = nil
+    PT.anim.last_frame_index = -1
+    PT.anim.decode_failures = 0
   end
 
   -- Finalize partial sequence on error
@@ -269,8 +281,12 @@ handlers.list = function(resp)
       for _, n in ipairs(items) do opts[#opts + 1] = n end
       PT.dlg:modify{ id = "palette_name", options = opts }
       if prev then
+        local found = false
         for _, o in ipairs(opts) do
-          if o == prev then PT.dlg:modify{ id = "palette_name", option = prev }; break end
+          if o == prev then PT.dlg:modify{ id = "palette_name", option = prev }; found = true; break end
+        end
+        if not found then
+          PT.update_status("Palette '" .. prev .. "' no longer available")
         end
       end
     end
@@ -282,8 +298,12 @@ handlers.list = function(resp)
       for _, n in ipairs(items) do opts[#opts + 1] = n end
       PT.dlg:modify{ id = "lora_name", options = opts }
       if prev then
+        local found = false
         for _, o in ipairs(opts) do
-          if o == prev then PT.dlg:modify{ id = "lora_name", option = prev }; break end
+          if o == prev then PT.dlg:modify{ id = "lora_name", option = prev }; found = true; break end
+        end
+        if not found and prev ~= "(default)" then
+          PT.update_status("LoRA '" .. prev .. "' no longer available")
         end
       end
     end
@@ -297,8 +317,12 @@ handlers.list = function(resp)
       for _, n in ipairs(items) do opts[#opts + 1] = n end
       PT.dlg:modify{ id = "preset_name", options = opts }
       if prev then
+        local found = false
         for _, o in ipairs(opts) do
-          if o == prev then PT.dlg:modify{ id = "preset_name", option = prev }; break end
+          if o == prev then PT.dlg:modify{ id = "preset_name", option = prev }; found = true; break end
+        end
+        if not found and prev ~= "(none)" then
+          PT.update_status("Preset '" .. prev .. "' no longer available")
         end
       end
     end
@@ -420,6 +444,22 @@ handlers.preset = function(resp)
     end
     if pp.quantize_method then PT.dlg:modify{ id = "quantize_method", option = pp.quantize_method } end
     if pp.dither then PT.dlg:modify{ id = "dither", option = pp.dither } end
+    if pp.remove_bg ~= nil then PT.dlg:modify{ id = "remove_bg", selected = pp.remove_bg } end
+    if pp.palette then
+      if pp.palette.mode then PT.dlg:modify{ id = "palette_mode", option = pp.palette.mode } end
+      if pp.palette.name and pp.palette.mode == "preset" then
+        PT.dlg:modify{ id = "palette_name", option = pp.palette.name }
+      end
+    end
+  end
+  -- LoRA
+  if d.lora then
+    if d.lora.name then PT.dlg:modify{ id = "lora_name", option = d.lora.name } end
+    if d.lora.weight then
+      local w = math.floor(d.lora.weight * 100)
+      PT.dlg:modify{ id = "lora_weight", value = w }
+      PT.dlg:modify{ id = "lora_weight", label = string.format("Weight (%.2f)", w / 100.0) }
+    end
   end
   PT.update_status("Preset '" .. tostring(resp.name or "?") .. "' loaded")
 end
@@ -471,6 +511,9 @@ handlers.audio_analysis = function(resp)
   PT.audio.stems_available = resp.stems_available or false
   PT.audio.stems = resp.stems or {}
   PT.audio.bpm = resp.bpm or 0
+  PT.audio.lufs = resp.lufs or -24
+  PT.audio.sample_rate = resp.sample_rate or 44100
+  PT.audio.hop_length = resp.hop_length or 256
   PT.audio.recommended_preset = resp.recommended_preset or ""
   PT.audio.waveform = resp.waveform or {}
 
@@ -478,9 +521,10 @@ handlers.audio_analysis = function(resp)
     local dur_str = string.format("%.1fs", PT.audio.duration)
     local stems_str = PT.audio.stems_available and " | Stems" or ""
     local bpm_str = PT.audio.bpm > 0 and string.format(" | %.0f BPM", PT.audio.bpm) or ""
+    local lufs_str = PT.audio.lufs > -90 and string.format(" | %.0f LUFS", PT.audio.lufs) or ""
     PT.dlg:modify{ id = "audio_status",
       text = dur_str .. " | " .. PT.audio.total_frames .. " frames | "
-        .. #PT.audio.features .. " features" .. stems_str .. bpm_str }
+        .. #PT.audio.features .. " features" .. stems_str .. bpm_str .. lufs_str }
     PT.dlg:modify{ id = "audio_analyze_btn", enabled = true }
 
     -- Update source dropdowns with available features (preserve selection)
@@ -512,7 +556,7 @@ handlers.audio_analysis = function(resp)
     local rec_str = PT.audio.recommended_preset ~= ""
       and " — preset: " .. PT.audio.recommended_preset or ""
     PT.update_status("Audio analyzed: " .. dur_str .. ", " .. PT.audio.total_frames
-      .. " frames" .. bpm_str .. rec_str)
+      .. " frames" .. bpm_str .. lufs_str .. rec_str)
   end
 end
 
@@ -524,6 +568,12 @@ handlers.audio_reactive_frame = function(resp)
   if resp.frame_index ~= nil then
     -- Start refresh timer on first frame
     if resp.frame_index == 0 then PT.start_refresh_timer() end
+    -- Gap detection: check frame index continuity
+    if PT.anim.last_frame_index >= 0 and resp.frame_index ~= PT.anim.last_frame_index + 1 then
+      local gap = resp.frame_index - PT.anim.last_frame_index - 1
+      PT.update_status("Warning: " .. gap .. " frame(s) dropped before F" .. (resp.frame_index + 1))
+    end
+    PT.anim.last_frame_index = resp.frame_index
     -- Status with percentage and ETA
     local total = resp.total_frames or 1
     local idx = resp.frame_index + 1
@@ -555,11 +605,18 @@ handlers.audio_reactive_complete = function(resp)
   PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
   PT.stop_refresh_timer()
 
+  -- Frame count validation (parity with animation_complete)
+  if resp.total_frames and PT.anim.frame_count ~= resp.total_frames then
+    PT.update_status("Warning: received " .. PT.anim.frame_count .. "/" .. resp.total_frames .. " frames")
+  end
+  local decode_note = PT.anim.decode_failures > 0
+    and " (" .. PT.anim.decode_failures .. " decode failures)" or ""
+
   if PT.dlg then
     local tag_str = ""
     if resp.tag_name and resp.tag_name ~= "" then tag_str = ", tag=" .. resp.tag_name end
     PT.update_status("Audio animation done (" .. tostring(resp.total_frames or "?") .. " frames, "
-      .. tostring(resp.total_time_ms or "?") .. "ms" .. tag_str .. ")")
+      .. tostring(resp.total_time_ms or "?") .. "ms" .. tag_str .. decode_note .. ")")
     PT.reset_ui_buttons()
     PT.dlg:modify{ id = "action_btn", enabled = PT.state.connected }
     -- Enable MP4 export (output dir preserved in audio.last_output_dir after reset)
@@ -599,6 +656,8 @@ handlers.audio_reactive_complete = function(resp)
   PT.anim.output_dir = nil
   PT.anim.output_count = 0
   PT.anim.last_saved_frame = nil
+  PT.anim.last_frame_index = -1
+  PT.anim.decode_failures = 0
 end
 
 handlers.stems_available = function(resp)

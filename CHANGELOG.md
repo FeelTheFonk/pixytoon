@@ -2,6 +2,19 @@
 
 All notable changes to SDDj are documented here.
 
+## [0.9.39] — 2026-03
+
+### Fixed
+- **Silent frame drops undetected** — `animation_frame` and `audio_reactive_frame` handlers now track frame index continuity and warn when gaps are detected (fire-and-forget WebSocket sends can silently fail under load)
+- **`audio_reactive_complete` missing frame count validation** — added parity with `animation_complete` to compare received vs expected frame count and warn on mismatch
+- **Decode failure silent count mismatch** — `import_animation_frame` now increments a `decode_failures` counter when image decode fails, surfacing cumulative failure count in status and completion messages
+- **Preset handler missing fields** — loading a preset now correctly restores `remove_bg`, `palette.mode`, `palette.name` (when preset mode), and LoRA `name`/`weight` settings; previously only post-process pixelate/quantize/dither were restored
+- **Audio analysis dropped fields** — `lufs`, `sample_rate`, and `hop_length` from `AudioAnalysisResponse` are now stored in `PT.audio` and displayed in the audio status bar (LUFS shown when > -90)
+- **List stale selection silent** — palette, LoRA, and preset combobox handlers now notify the user when a previously-selected item disappears from an updated resource list
+- **Server frame callback logging** — `_make_thread_callback` bare `except: pass` replaced with `log.debug` for post-mortem visibility into dropped frames
+- **State reset consistency** — new `last_frame_index` and `decode_failures` tracking fields are reset in all 5 state reset paths (animation_complete, audio_reactive_complete, error, disconnect, gen_timeout)
+- **`PT.audio` undeclared fields** — added `lufs`, `sample_rate`, `hop_length` initial values to `PT.audio` state table for declaration consistency
+
 ## [0.9.38] — 2026-03
 
 ### Fixed

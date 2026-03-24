@@ -6,7 +6,7 @@ return function(PT)
 
 -- ─── Constants ──────────────────────────────────────────────
 
-PT.VERSION = "0.9.36"
+PT.VERSION = "0.9.39"
 
 PT.cfg = {
   DEFAULT_SERVER_URL      = "ws://127.0.0.1:9876/ws",
@@ -48,6 +48,8 @@ PT.anim = {
   output_dir       = nil,   -- incremental output directory (set on first frame)
   output_count     = 0,     -- frames written to output_dir
   last_saved_frame = nil,   -- path to last written frame (for gap-fill fallback)
+  last_frame_index = -1,    -- last received frame_index (gap detection)
+  decode_failures  = 0,     -- frames that failed to decode (diagnostics)
 }
 
 PT.seq = {
@@ -98,6 +100,9 @@ PT.audio = {
   stems            = {},
   mod_presets       = {},
   bpm              = 0,
+  lufs             = -24,
+  sample_rate      = 44100,
+  hop_length       = 256,
   recommended_preset = "",
   waveform         = {},
   last_output_dir  = nil,
