@@ -127,6 +127,9 @@ function PT.set_connected(is_connected)
     PT.audio.analyzing = false
     PT.audio.generating = false
     PT.audio.analyzed = false
+    -- Stop refresh timer and clear queued messages
+    if PT.stop_refresh_timer then PT.stop_refresh_timer() end
+    if PT.clear_response_queue then PT.clear_response_queue() end
   end
 end
 

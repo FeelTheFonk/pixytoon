@@ -138,6 +138,8 @@ handlers.animation_frame = function(resp)
     return
   end
   if resp.frame_index ~= nil then
+    -- Start refresh timer on first frame
+    if resp.frame_index == 0 then PT.start_refresh_timer() end
     PT.import_animation_frame(resp)
     -- Write frame to output directory incrementally (no memory accumulation)
     PT.save_animation_frame(resp)
@@ -152,6 +154,7 @@ handlers.animation_complete = function(resp)
   PT.stop_gen_timeout()
   PT.state.cancel_pending = false
   PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
+  PT.stop_refresh_timer()
 
   -- Validate frame count
   if resp.total_frames and PT.anim.frame_count ~= resp.total_frames then
@@ -212,6 +215,8 @@ handlers.error = function(resp)
   PT.stop_gen_timeout()
   PT.state.cancel_pending = false
   PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
+  PT.stop_refresh_timer()
+  PT.clear_response_queue()
 
   -- Finalize partial animation on error
   if was_animating and PT.anim.frame_count > 0 then
@@ -516,6 +521,8 @@ handlers.audio_reactive_frame = function(resp)
     return
   end
   if resp.frame_index ~= nil then
+    -- Start refresh timer on first frame
+    if resp.frame_index == 0 then PT.start_refresh_timer() end
     -- Status with percentage and ETA
     local total = resp.total_frames or 1
     local idx = resp.frame_index + 1
@@ -545,6 +552,7 @@ handlers.audio_reactive_complete = function(resp)
   PT.stop_gen_timeout()
   PT.state.cancel_pending = false
   PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
+  PT.stop_refresh_timer()
 
   if PT.dlg then
     local tag_str = ""
@@ -643,18 +651,89 @@ handlers.shutdown_ack = function(resp)
   if PT.dlg then PT.update_status("Server shutting down...") end
 end
 
--- ─── Dispatch (anti-re-entrancy queue) ──────────────────────
--- app.refresh() / app.transaction() pump Aseprite's event loop,
--- which can deliver the next WebSocket message while we're still
--- processing the current one. Without this guard, each re-entrant
--- call adds C stack frames until the ~200-frame limit is hit
--- (observed at frame ~80 in audio reactive chain mode).
--- Fix: queue any response that arrives while we're already inside
--- a handler, then drain the queue iteratively after the current
--- handler returns.
+-- ─── Decoupled Refresh Timer ────────────────────────────────
+-- Frame imports no longer call app.refresh() directly (that caused
+-- re-entrant event pumping → stack overflow or frame batching).
+-- Instead, a ~30fps timer repaints the canvas independently.
+-- This yields to the event loop between repaints, so each frame
+-- appears on canvas in real-time with zero overhead per import.
+
+local _frame_dirty = false
+local _refresh_timer = nil
+
+function PT.mark_frame_dirty()
+  _frame_dirty = true
+end
+
+function PT.start_refresh_timer()
+  if _refresh_timer then return end
+  local ok, t = pcall(Timer, {
+    interval = 0.033,  -- ~30fps visual refresh
+    ontick = function()
+      if _frame_dirty then
+        _frame_dirty = false
+        pcall(app.refresh)
+      end
+    end,
+  })
+  if ok and t then _refresh_timer = t; t:start() end
+end
+
+function PT.stop_refresh_timer()
+  if _refresh_timer then
+    pcall(function() if _refresh_timer.isRunning then _refresh_timer:stop() end end)
+    _refresh_timer = nil
+  end
+  -- Final refresh to flush last frame
+  if _frame_dirty then
+    _frame_dirty = false
+    pcall(app.refresh)
+  end
+end
+
+-- ─── Dispatch (anti-re-entrancy safety) ─────────────────────
+-- With app.refresh() removed from frame imports, re-entrance should
+-- not occur. The guard + timer drain remain as a safety net in case
+-- app.transaction() or dlg:modify() pump the event loop internally.
 
 local _response_queue = {}
 local _processing = false
+local _drain_timer = nil
+
+local function _schedule_drain()  -- forward declaration filled below
+end
+
+local function _drain_next()
+  if #_response_queue == 0 then return end
+  local queued = table.remove(_response_queue, 1)
+  _processing = true
+  local ok, err = pcall(function()
+    local handler = handlers[queued.type]
+    if handler then handler(queued) end
+  end)
+  _processing = false
+  if not ok then
+    pcall(PT.update_status, "Handler error: " .. tostring(err))
+  end
+  if #_response_queue > 0 then
+    _schedule_drain()
+  end
+end
+
+_schedule_drain = function()
+  if _drain_timer then return end
+  local ok, t = pcall(Timer, {
+    interval = 0.001,  -- 1ms — minimal yield to event loop
+    ontick = function()
+      if _drain_timer then
+        pcall(function() _drain_timer:stop() end)
+      end
+      _drain_timer = nil
+      _drain_next()
+    end,
+  })
+  if ok and t then _drain_timer = t; t:start() end
+end
 
 function PT.handle_response(resp)
   if _processing then
@@ -666,21 +745,23 @@ function PT.handle_response(resp)
     local handler = handlers[resp.type]
     if handler then handler(resp) end
   end)
+  _processing = false
   if not ok then
     pcall(PT.update_status, "Handler error: " .. tostring(err))
   end
-  -- Drain queued messages iteratively (FIFO — no recursion)
-  while #_response_queue > 0 do
-    local queued = table.remove(_response_queue, 1)
-    local qok, qerr = pcall(function()
-      local handler = handlers[queued.type]
-      if handler then handler(queued) end
-    end)
-    if not qok then
-      pcall(PT.update_status, "Handler error: " .. tostring(qerr))
-    end
+  -- If messages queued during processing, drain via timer
+  -- (one per event loop turn — allows repaint between messages)
+  if #_response_queue > 0 then
+    _schedule_drain()
   end
-  _processing = false
+end
+
+function PT.clear_response_queue()
+  for i = #_response_queue, 1, -1 do _response_queue[i] = nil end
+  if _drain_timer then
+    pcall(function() _drain_timer:stop() end)
+    _drain_timer = nil
+  end
 end
 
 end

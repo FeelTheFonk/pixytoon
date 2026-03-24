@@ -217,7 +217,7 @@ function PT.import_animation_frame(resp)
     end)
 
     PT.anim.frame_count = PT.anim.frame_count + 1
-    app.refresh()
+    PT.mark_frame_dirty()
 
     if PT.dlg then
       PT.update_status("Frame " .. (resp.frame_index + 1) .. "/" .. tostring(resp.total_frames or "?")
