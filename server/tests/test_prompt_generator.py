@@ -175,8 +175,9 @@ class TestRandomness:
         gen = PromptGenerator(tmp_prompts_dir)
         _, negative, _ = gen.generate()
         assert isinstance(negative, str)
+        # Auto-matching may pick a specialized set (pixel_art, anime, etc.)
+        # — just verify a non-empty negative is always returned.
         assert len(negative) > 0
-        assert "worst quality" in negative  # universal set
 
     def test_negative_prompt_named_set(self, tmp_prompts_dir: Path):
         gen = PromptGenerator(tmp_prompts_dir)

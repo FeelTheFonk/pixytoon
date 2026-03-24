@@ -464,18 +464,22 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         strength = max(req.denoise_strength, min_denoise)
         scaled_steps = scale_steps_for_denoise(req.steps, strength)
         torch.compiler.cudagraph_mark_step_begin()
-        return self._img2img_pipe(
-            prompt=req.prompt,
-            negative_prompt=effective_neg,
-            image=source,
-            num_inference_steps=scaled_steps,
-            guidance_scale=req.cfg_scale,
-            strength=strength,
-            generator=generator,
-            clip_skip=req.clip_skip,
-            callback_on_step_end=callback,
-            output_type="pil",
-        ).images[0]
+        # DeepCache hooks reference the txt2img scheduler's timesteps, but
+        # img2img builds its own truncated schedule → timestep lookup crash.
+        # Suspend DeepCache for the img2img call to avoid the mismatch.
+        with deepcache_manager.suspended(self._deepcache_helper):
+            return self._img2img_pipe(
+                prompt=req.prompt,
+                negative_prompt=effective_neg,
+                image=source,
+                num_inference_steps=scaled_steps,
+                guidance_scale=req.cfg_scale,
+                strength=strength,
+                generator=generator,
+                clip_skip=req.clip_skip,
+                callback_on_step_end=callback,
+                output_type="pil",
+            ).images[0]
 
     def _inpaint(self, req, generator, callback, effective_neg):
         """Inpaint: img2img full image, then composite via mask."""
@@ -498,18 +502,20 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         strength = max(req.denoise_strength, min_denoise)
         scaled_steps = scale_steps_for_denoise(req.steps, strength)
         torch.compiler.cudagraph_mark_step_begin()
-        inpainted = self._img2img_pipe(
-            prompt=req.prompt,
-            negative_prompt=effective_neg,
-            image=source,
-            num_inference_steps=scaled_steps,
-            guidance_scale=req.cfg_scale,
-            strength=strength,
-            generator=generator,
-            clip_skip=req.clip_skip,
-            callback_on_step_end=callback,
-            output_type="pil",
-        ).images[0]
+        # Same DeepCache suspension as _img2img — shared UNet, different scheduler.
+        with deepcache_manager.suspended(self._deepcache_helper):
+            inpainted = self._img2img_pipe(
+                prompt=req.prompt,
+                negative_prompt=effective_neg,
+                image=source,
+                num_inference_steps=scaled_steps,
+                guidance_scale=req.cfg_scale,
+                strength=strength,
+                generator=generator,
+                clip_skip=req.clip_skip,
+                callback_on_step_end=callback,
+                output_type="pil",
+            ).images[0]
 
         # Composite: keep original where mask is black, use inpainted where white
         return composite_with_mask(source, inpainted, mask)

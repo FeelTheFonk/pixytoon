@@ -2,6 +2,12 @@
 
 All notable changes to SDDj are documented here.
 
+## [0.9.40] — 2026-03
+
+### Fixed
+- **DeepCache crash on img2img/inpaint** — `ValueError: 311 is not in list` caused by DeepCache's `wrapped_forward` looking up timesteps in the txt2img scheduler while img2img uses a different scheduler with a truncated schedule (`strength < 1.0` + `scale_steps_for_denoise`). Fixed by suspending DeepCache around `_img2img` and `_inpaint` calls via `deepcache_manager.suspended()`. Animation and audio-reactive paths were already correct (they suspend DeepCache as part of the UNet swap + dynamo reset flow)
+- **Flaky `test_negative_prompt_default`** — test asserted `"worst quality" in negative` but auto-negative matching may return a specialized set (pixel_art, anime, etc.) depending on the randomly generated prompt; fixed to assert non-empty negative instead
+
 ## [0.9.39] — 2026-03
 
 ### Fixed
