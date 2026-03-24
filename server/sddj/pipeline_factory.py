@@ -57,6 +57,7 @@ def load_base_pipeline() -> StableDiffusionPipeline:
             torch_dtype=torch.float16,
             safety_checker=None,
             variant="fp16",
+            local_files_only=True,
         )
     pipe.to("cuda")
     return pipe
@@ -108,6 +109,7 @@ def setup_hyper_sd(pipe: StableDiffusionPipeline) -> None:
             settings.hyper_sd_repo,
             weight_name=settings.hyper_sd_lora_file,
             adapter_name="hyper_sd",
+            local_files_only=True,
         )
         pipe.fuse_lora(lora_scale=settings.hyper_sd_fuse_scale)
         pipe.unload_lora_weights()
@@ -187,6 +189,7 @@ def create_controlnet_pipeline(
     controlnet = ControlNetModel.from_pretrained(
         model_id,
         torch_dtype=torch.float16,
+        local_files_only=True,
     ).to("cuda")
 
     cn_pipe = StableDiffusionControlNetPipeline(

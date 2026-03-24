@@ -44,12 +44,24 @@ Pop-Location
 Ok "torch, diffusers, triton installed"
 
 # --- 3. Download models -----------------------------------------------------
-Step 3 6 "Downloading models (~10 GB)"
-Push-Location "$Root/server"
-uv run python "$Root/scripts/download_models.py" --all
-if ($LASTEXITCODE -ne 0) { Pop-Location; Fail "Model download failed" }
-Pop-Location
-Ok "Models ready"
+Step 3 6 "Checking / downloading models (~10 GB first time)"
+
+# If --skip-models flag was passed, skip download
+$skipModels = $args -contains "--skip-models"
+if ($skipModels) {
+    Ok "Skipped (--skip-models)"
+} else {
+    Push-Location "$Root/server"
+    uv run python "$Root/scripts/download_models.py" --all
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        Warn "Model download had errors — you can retry later or place models manually"
+        Warn "Re-run: uv run python scripts/download_models.py --all"
+    } else {
+        Pop-Location
+        Ok "Models ready"
+    }
+}
 
 # --- 4. Build extension ------------------------------------------------------
 Step 4 6 "Building Aseprite extension"

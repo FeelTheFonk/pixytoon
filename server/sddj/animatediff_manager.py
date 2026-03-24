@@ -84,6 +84,7 @@ class AnimateDiffManager:
             self.motion_adapter = MotionAdapter.from_pretrained(
                 settings.animatediff_model,
                 torch_dtype=torch.float16,
+                local_files_only=True,
             ).to("cuda")
 
             unet = get_uncompiled_unet(base_pipe)
@@ -164,6 +165,7 @@ class AnimateDiffManager:
             log.info("Loading ControlNet for AnimateDiff: %s", model_id)
             controlnet = ControlNetModel.from_pretrained(
                 model_id, torch_dtype=torch.float16,
+                local_files_only=True,
             ).to("cuda")
 
         # UNet already PEFT-stripped by ensure_base() above

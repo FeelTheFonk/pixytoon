@@ -14,10 +14,24 @@ function Warn($msg) { Write-Host "  ${Y}!${R}  $msg" }
 
 $Root = $PSScriptRoot
 
+# --- Force offline mode: never contact HuggingFace Hub at runtime ------------
+$env:HF_HUB_OFFLINE = "1"
+$env:TRANSFORMERS_OFFLINE = "1"
+$env:HF_HUB_DISABLE_TELEMETRY = "1"
+$env:DO_NOT_TRACK = "1"
+
 Write-Host ""
 Write-Host "  ${B}${W}SDDj${R}  ${D}Launch${R}"
 Write-Host "  ${D}$('-' * 36)${R}"
 Write-Host ""
+
+# --- Preflight: verify venv exists -------------------------------------------
+$venvPython = "$Root/server/.venv/Scripts/python.exe"
+if (-not (Test-Path $venvPython)) {
+    Write-Host "  ${Y}!${R}  Virtual environment not found. Run ${C}./setup.ps1${R} first."
+    Read-Host "`n  Press Enter to exit"
+    exit 1
+}
 
 # --- Check server already running --------------------------------------------
 $running = $false
@@ -33,7 +47,7 @@ if ($running) {
 } else {
     # --- Start server --------------------------------------------------------
     Write-Host "  ${D}Starting server...${R}"
-    $serverProc = Start-Process pwsh -ArgumentList "-NoExit", "-Command", "`$Host.UI.RawUI.WindowTitle='SDDj Server'; Set-Location '$Root/server'; uv run python run.py" -WindowStyle Minimized -PassThru
+    $serverProc = Start-Process pwsh -ArgumentList "-NoExit", "-Command", "`$Host.UI.RawUI.WindowTitle='SDDj Server'; `$env:HF_HUB_OFFLINE='1'; `$env:TRANSFORMERS_OFFLINE='1'; `$env:HF_HUB_DISABLE_TELEMETRY='1'; `$env:DO_NOT_TRACK='1'; Set-Location '$Root/server'; uv run python run.py" -WindowStyle Minimized -PassThru
 
     # --- Wait for ready ------------------------------------------------------
     Write-Host "  ${D}Waiting for engine to load...${R}"
