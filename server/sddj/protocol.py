@@ -502,6 +502,9 @@ class AudioAnalysisResponse(BaseModel):
     total_frames: int
     features: list[str]
     bpm: float = 0.0
+    lufs: float = -24.0
+    sample_rate: int = 44100
+    hop_length: int = 256
     recommended_preset: str = ""
     stems_available: bool = False
     stems: Optional[list[str]] = None

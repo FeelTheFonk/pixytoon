@@ -2,6 +2,38 @@
 
 All notable changes to SDDj are documented here.
 
+## [0.9.35] — 2026-03
+
+### Added
+- **Pinnacle audio DSP pipeline** — complete rewrite of `audio_analyzer.py`
+  - 44100 Hz sample rate (full 22.05 kHz Nyquist, was 22050)
+  - 256 hop length (~172 Hz feature rate, was 512 / ~43 Hz — 4× improvement)
+  - 4096 n_fft (93 ms window preserved via upsampled rate)
+  - 256 mel bands (was 128 — 2× frequency resolution)
+- **9-band frequency segmentation** — sub_bass, bass, low_mid, mid, upper_mid, presence, brilliance, air, ultrasonic (was 6 bands). Backward-compatible aliases `global_low`, `global_mid`, `global_high` preserved
+- **5 new spectral timbral features** — `spectral_contrast`, `spectral_flatness`, `spectral_bandwidth`, `spectral_rolloff`, `spectral_flux`
+- **12-bin CQT chromagram** — individual pitch classes (C through B) + aggregate `chroma_energy`
+- **SuperFlux onset detection** — vibrato suppression via configurable `lag` and `max_size` parameters
+- **ITU-R BS.1770 K-weighting pre-filter** — perceptual loudness weighting for energy-based features (configurable, enabled by default)
+- **Savitzky-Golay smoothing** — causal, right-edge aligned polynomial filter as alternative to EMA (better transient preservation). Selectable via `audio_smoothing_mode` config
+- **Optional madmom RNN beat tracking** — auto-detected at runtime, falls back to librosa. Manual install: `pip install madmom`
+- **Integrated LUFS measurement** — per-file reference loudness via pyloudnorm, exposed in `AudioAnalysisResponse`
+- **Percentile-clipped normalization** — prevents single-spike distortion on onset and flux features (99th percentile)
+- **Full stem feature expansion** — stems now get all 34 features (was only rms/onset)
+- 4 new modulation presets: `spectral_sculptor`, `tonal_drift`, `ultra_precision`, `micro_reactive`
+- 4 new auto-calibrate genres using spectral features for nuanced detection
+- `AudioAnalysisResponse` gains `lufs`, `sample_rate`, `hop_length` fields
+- 10 new DSP config settings with validation: `audio_sample_rate`, `audio_hop_length`, `audio_n_fft`, `audio_n_mels`, `audio_perceptual_weighting`, `audio_smoothing_mode`, `audio_beat_backend`, `audio_superflux_lag`, `audio_superflux_max_size`
+- 14 new unit tests (40 total for audio analyzer)
+- `pyloudnorm>=0.1` added to core dependencies
+- Lua frontend: 34 audio sources in dropdown (was 10), 4 new presets
+
+### Changed
+- `auto_calibrate.py` decision tree uses spectral_flatness, spectral_contrast, spectral_flux, chroma_energy, and brilliance for more accurate genre detection
+- Cache key now includes `sr`, `hop_length`, `n_fft`, `n_mels`, `perceptual_weighting` — DSP config changes auto-invalidate stale caches
+- STFT computed once and reused for all spectral features (was computed twice, ~15% compute saved)
+- Test warnings suppressed: librosa `n_fft` and pitch tuning warnings on short test WAV files
+
 ## [0.9.34] — 2026-03
 
 ### Fixed

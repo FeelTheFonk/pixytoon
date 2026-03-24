@@ -310,6 +310,45 @@ PRESETS: dict[str, list[dict]] = {
         {"source": "global_low", "target": "motion_tilt_x",
          "min_val": -1.0, "max_val": 1.0, "attack": 5, "release": 25, "enabled": True},
     ],
+    # ─── Spectral / Pinnacle Quality ──────────────────────────────
+    "spectral_sculptor": [
+        {"source": "global_spectral_flatness", "target": "noise_amplitude",
+         "min_val": 0.0, "max_val": 0.35, "attack": 2, "release": 8, "enabled": True},
+        {"source": "global_spectral_contrast", "target": "denoise_strength",
+         "min_val": 0.30, "max_val": 0.65, "attack": 2, "release": 10, "enabled": True},
+        {"source": "global_spectral_bandwidth", "target": "cfg_scale",
+         "min_val": 3.0, "max_val": 7.0, "attack": 3, "release": 12, "enabled": True},
+    ],
+    "tonal_drift": [
+        {"source": "global_chroma_energy", "target": "denoise_strength",
+         "min_val": 0.30, "max_val": 0.55, "attack": 3, "release": 15, "enabled": True},
+        {"source": "global_centroid", "target": "cfg_scale",
+         "min_val": 3.0, "max_val": 7.0, "attack": 4, "release": 15, "enabled": True},
+        {"source": "global_spectral_rolloff", "target": "palette_shift",
+         "min_val": 0.0, "max_val": 0.5, "attack": 5, "release": 20, "enabled": True},
+        {"source": "global_spectral_bandwidth", "target": "motion_zoom",
+         "min_val": 0.99, "max_val": 1.01, "attack": 4, "release": 20, "enabled": True},
+    ],
+    "ultra_precision": [
+        {"source": "global_onset", "target": "denoise_strength",
+         "min_val": 0.30, "max_val": 0.70, "attack": 1, "release": 3, "enabled": True},
+        {"source": "global_spectral_contrast", "target": "cfg_scale",
+         "min_val": 3.0, "max_val": 8.0, "attack": 1, "release": 6, "enabled": True},
+        {"source": "global_sub_bass", "target": "motion_zoom",
+         "min_val": 0.98, "max_val": 1.02, "attack": 2, "release": 10, "enabled": True},
+        {"source": "global_presence", "target": "noise_amplitude",
+         "min_val": 0.0, "max_val": 0.25, "attack": 1, "release": 5, "enabled": True},
+    ],
+    "micro_reactive": [
+        {"source": "global_bass", "target": "motion_zoom",
+         "min_val": 0.98, "max_val": 1.02, "attack": 1, "release": 6, "enabled": True},
+        {"source": "global_low_mid", "target": "denoise_strength",
+         "min_val": 0.30, "max_val": 0.60, "attack": 2, "release": 8, "enabled": True},
+        {"source": "global_brilliance", "target": "noise_amplitude",
+         "min_val": 0.0, "max_val": 0.3, "attack": 1, "release": 4, "enabled": True},
+        {"source": "global_spectral_flux", "target": "cfg_scale",
+         "min_val": 3.0, "max_val": 8.0, "attack": 1, "release": 5, "enabled": True},
+    ],
 }
 
 

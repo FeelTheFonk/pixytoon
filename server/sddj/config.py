@@ -93,6 +93,16 @@ class Settings(BaseSettings):
     audio_default_release: int = 8
     stem_model: str = "htdemucs"
     stem_device: str = "cpu"  # always CPU — keep GPU free for diffusion
+    # DSP precision (pinnacle quality)
+    audio_sample_rate: int = Field(44100, ge=22050, le=96000)
+    audio_hop_length: int = Field(256, ge=64, le=1024)
+    audio_n_fft: int = Field(4096, ge=512, le=8192)
+    audio_n_mels: int = Field(256, ge=64, le=512)
+    audio_perceptual_weighting: bool = True   # K-weighting pre-filter (ITU-R BS.1770)
+    audio_smoothing_mode: Literal["ema", "savgol"] = "ema"
+    audio_beat_backend: Literal["auto", "librosa", "madmom"] = "auto"
+    audio_superflux_lag: int = Field(2, ge=1, le=5)
+    audio_superflux_max_size: int = Field(3, ge=1, le=7)
 
     # ── Temporal Coherence ──────────────────────────────────────
     # Step scaling cap for distilled models (Hyper-SD): max multiplier on steps.

@@ -500,10 +500,24 @@ end
 -- ─── Tab: Audio ───────────────────────────────────────────
 
 local GLOBAL_SOURCES = {
-  "global_rms", "global_onset", "global_centroid",
-  "global_low", "global_mid", "global_high",
-  "global_sub_bass", "global_upper_mid", "global_presence",
-  "global_beat",
+  -- Energy & dynamics
+  "global_rms", "global_onset", "global_centroid", "global_beat",
+  -- 9-band frequency segmentation
+  "global_sub_bass", "global_bass", "global_low_mid",
+  "global_mid", "global_upper_mid", "global_presence",
+  "global_brilliance", "global_air", "global_ultrasonic",
+  -- Backward-compat aliases
+  "global_low", "global_high",
+  -- Spectral timbral features
+  "global_spectral_contrast", "global_spectral_flatness",
+  "global_spectral_bandwidth", "global_spectral_rolloff",
+  "global_spectral_flux",
+  -- CQT chromagram (12 pitch classes + aggregate)
+  "global_chroma_energy",
+  "global_chroma_C", "global_chroma_Cs", "global_chroma_D",
+  "global_chroma_Ds", "global_chroma_E", "global_chroma_F",
+  "global_chroma_Fs", "global_chroma_G", "global_chroma_Gs",
+  "global_chroma_A", "global_chroma_As", "global_chroma_B",
 }
 
 local MOD_TARGETS = {
@@ -642,6 +656,8 @@ local function build_tab_audio()
       -- Motion / camera
       "gentle_drift", "pulse_zoom", "slow_rotate", "cinematic_sweep",
       "cinematic_tilt", "zoom_breathe", "parallax_drift", "full_cinematic",
+      -- Spectral / pinnacle quality
+      "spectral_sculptor", "tonal_drift", "ultra_precision", "micro_reactive",
       -- Legacy
       "energetic", "ambient", "bass_driven",
     },

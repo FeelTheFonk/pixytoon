@@ -40,5 +40,5 @@ _warnings.filterwarnings("ignore", category=DeprecationWarning, module="audiorea
 _warnings.filterwarnings("ignore", category=DeprecationWarning, module="standard_aifc")
 _warnings.filterwarnings("ignore", category=DeprecationWarning, module="standard_sunau")
 
-__version__ = "0.9.34"
+__version__ = "0.9.35"
 

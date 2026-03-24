@@ -1,6 +1,6 @@
 [project]
 name = "sddj-server"
-version = "0.9.34"
+version = "0.9.35"
 description = "Local SOTA generation and animation server for Aseprite via Stable Diffusion"
 requires-python = ">=3.11,<3.14"
 license = "MIT"
@@ -38,6 +38,7 @@ dependencies = [
     "librosa>=0.10,<1.0",
     "simpleeval>=1.0.5,<2.0",
     "soundfile>=0.12",
+    "pyloudnorm>=0.1",
 ]
 
 [project.optional-dependencies]
@@ -65,5 +66,9 @@ filterwarnings = [
     "ignore::DeprecationWarning:audioread",
     "ignore::DeprecationWarning:standard_aifc",
     "ignore::DeprecationWarning:standard_sunau",
+    # librosa n_fft warnings on short test WAV files (not production audio)
+    "ignore:n_fft=.*too large:UserWarning:librosa",
+    # librosa pitch tuning warning on silence / very short signals
+    "ignore:Trying to estimate tuning:UserWarning:librosa",
 ]
 

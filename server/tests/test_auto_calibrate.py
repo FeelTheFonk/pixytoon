@@ -96,7 +96,7 @@ class TestRecommendPreset:
         assert result == "hiphop_bounce"
 
     def test_rock_energy(self):
-        """High onset + loud peaks → rock_energy."""
+        """High onset + loud peaks + high contrast → rock_energy."""
         rms = _const(0.6)
         rms[50] = 0.9  # loud peak
         features = {
@@ -105,6 +105,11 @@ class TestRecommendPreset:
             "global_centroid": _const(0.4),
             "global_low": _const(0.3),
             "global_beat": _const(0.0),
+            "global_spectral_contrast": _const(0.7),
+            "global_spectral_flatness": _const(0.1),
+            "global_spectral_flux": _const(0.2),
+            "global_chroma_energy": _const(0.2),
+            "global_brilliance": _const(0.2),
         }
         result = recommend_preset(_make_analysis(bpm=90, features=features))
         assert result == "rock_energy"
@@ -177,4 +182,6 @@ class TestRecommendPreset:
             "ambient_drift", "electronic_pulse", "hiphop_bounce",
             "rock_energy", "bass_driven", "rhythmic_pulse",
             "classical_flow", "glitch_chaos", "beginner_balanced",
+            "micro_reactive", "spectral_sculptor", "tonal_drift",
+            "ultra_precision",
         }

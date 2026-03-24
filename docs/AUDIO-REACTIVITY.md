@@ -16,12 +16,15 @@ Audio reactivity maps characteristics of an audio file (energy, beats, spectral 
 Audio File (.wav/.mp3/.flac/.ogg)
     |
     v
-Audio Analyzer (librosa)
-    |  - RMS energy, onset strength, spectral centroid
-    |  - Multi-band energy (low/mid/high + sub_bass/upper_mid/presence)
-    |  - BPM detection + beat signal
+Audio Analyzer (librosa, 44100 Hz)
+    |  - RMS energy (K-weighted), onset strength (SuperFlux)
+    |  - Spectral centroid, contrast, flatness, bandwidth, rolloff, flux
+    |  - 9-band mel energy (sub_bass through ultrasonic) + backward-compat aliases
+    |  - 12-bin CQT chromagram (individual pitch classes)
+    |  - BPM detection (librosa + optional madmom RNN) + beat signal
+    |  - Integrated LUFS (pyloudnorm)
     |  - Waveform preview (100-point RMS)
-    |  - Optional: per-stem features (demucs)
+    |  - Optional: per-stem features with full feature set (demucs)
     v
 Modulation Engine (synth-style matrix)
     |  - Source -> Target routing with min/max range
@@ -65,11 +68,12 @@ That's it. The auto-calibration system picks the best preset for your audio.
 
 Click **Analyze** after selecting a file. The server:
 
-- Loads the audio (mono, 22050 Hz)
-- Extracts 10 global features (11 with beat detection) normalized to [0, 1]
-- Detects BPM via `librosa.beat.beat_track`
-- Optionally separates stems (drums, bass, vocals, other) via demucs — adds 8 more features
-- Caches results for 24 hours (subsequent analyses of the same file are instant)
+- Loads the audio (mono, 44100 Hz — configurable)
+- Extracts 34 global features normalized to [0, 1] (9 frequency bands, 5 spectral timbral, 12 chroma, 4 core, 3 backward-compat aliases, beat)
+- Applies K-weighting pre-filter (ITU-R BS.1770) for perceptual loudness on energy features
+- Detects BPM via librosa (or madmom RNN if installed)
+- Optionally separates stems (drums, bass, vocals, other) via demucs — each stem gets all 34 features
+- Caches results for 24 hours (cache key includes DSP config — changing settings auto-invalidates)
 
 The status bar shows: `12.5s | 300 frames | 8 features | 128 BPM`
 
@@ -96,25 +100,41 @@ Audio features extracted per frame, normalized to [0, 1]:
 
 | Source | Description | Best For |
 |--------|-------------|----------|
-| `global_rms` | Overall energy (loudness) | General reactivity |
-| `global_onset` | Transient/attack strength | Beat-driven effects |
+| `global_rms` | Overall energy (K-weighted loudness) | General reactivity |
+| `global_onset` | Transient/attack strength (SuperFlux) | Beat-driven effects |
 | `global_centroid` | Spectral brightness | Timbral changes |
-| `global_low` | Low-frequency energy (20-300 Hz) | Bass-driven effects |
-| `global_mid` | Mid-frequency energy (300-2 kHz) | Melodic content |
-| `global_high` | High-frequency energy (2k-16 kHz) | Hi-hat, cymbal reactivity |
+| `global_beat` | Beat impulse (BPM-aligned) | Rhythmic sync |
+| **9-band segmentation** | | |
 | `global_sub_bass` | Sub-bass energy (20-60 Hz) | Deep bass, kick drums |
+| `global_bass` | Bass energy (60-150 Hz) | Bass lines |
+| `global_low_mid` | Low-mid energy (150-400 Hz) | Warmth, body |
+| `global_mid` | Mid energy (400-2 kHz) | Melodic content |
 | `global_upper_mid` | Upper-mid energy (2-4 kHz) | Vocal presence, guitar |
 | `global_presence` | Presence energy (4-8 kHz) | Clarity, sibilance |
-| `global_beat` | Beat impulse (BPM-aligned) | Rhythmic sync |
+| `global_brilliance` | Brilliance energy (8-12 kHz) | Shimmer, harmonics |
+| `global_air` | Air energy (12-20 kHz) | Airiness, spatial |
+| `global_ultrasonic` | Ultrasonic energy (20-22 kHz) | Edge detection |
+| **Backward-compat aliases** | |
+| `global_low` | sub_bass + bass + low_mid average | Bass-driven effects |
+| `global_high` | presence + brilliance + air + ultrasonic average | Hi-hat, cymbal reactivity |
+| **Spectral timbral** | | |
+| `global_spectral_contrast` | Peak-vs-valley across bands | Timbral dynamics |
+| `global_spectral_flatness` | Tonality (0=tone, 1=noise) | Noise-driven effects |
+| `global_spectral_bandwidth` | Frequency spread around centroid | Timbral width |
+| `global_spectral_rolloff` | Frequency below which 85% energy | Brightness ceiling |
+| `global_spectral_flux` | Frame-to-frame timbral change | Timbral transitions |
+| **CQT chromagram** | | |
+| `global_chroma_C` ... `global_chroma_B` | 12 individual pitch classes | Key-aware modulation |
+| `global_chroma_energy` | Aggregate chroma energy | Harmonic density |
 
-With stems enabled (demucs, CPU):
+With stems enabled (demucs, CPU), each stem gets **all features** above with its name as prefix:
 
 | Source | Description |
 |--------|-------------|
-| `drums_rms` / `drums_onset` | Drum track energy and attacks |
-| `bass_rms` / `bass_onset` | Bass line energy and attacks |
-| `vocals_rms` / `vocals_onset` | Vocal track energy and attacks |
-| `other_rms` / `other_onset` | Everything else |
+| `drums_rms` / `drums_onset` / `drums_spectral_flux` / ... | Full feature set for drum track |
+| `bass_rms` / `bass_onset` / `bass_chroma_energy` / ... | Full feature set for bass line |
+| `vocals_rms` / `vocals_spectral_contrast` / ... | Full feature set for vocal track |
+| `other_rms` / `other_onset` / ... | Full feature set for everything else |
 
 ### Targets
 
@@ -198,6 +218,15 @@ Typical values: attack=2, release=8 (responsive but smooth).
 | `zoom_breathe` | rms->denoise, rms->motion_zoom | Gentle RMS-driven zoom oscillation |
 | `parallax_drift` | rms->denoise, low->motion_x, mid->tilt_x | Parallax effect (pan + tilt) |
 | `full_cinematic` | rms->denoise, low->motion_x, mid->motion_y, beat->zoom, centroid->rotation, low->tilt_x | All 6 motion channels |
+
+### Spectral / Pinnacle Quality (v0.9.35+)
+
+| Preset | Slots | Best For |
+|--------|-------|----------|
+| `spectral_sculptor` | flatness->noise, contrast->denoise, bandwidth->cfg | Timbral sculpting, textural content |
+| `tonal_drift` | chroma->denoise, centroid->cfg, rolloff->palette, bandwidth->zoom | Melodic, harmonic content |
+| `ultra_precision` | onset(1/3)->denoise, contrast->cfg, sub_bass->zoom, presence->noise | Maximum attack precision |
+| `micro_reactive` | bass->zoom, low_mid->denoise, brilliance->noise, flux->cfg | Sub-band micro-reactivity |
 
 > Many existing presets (electronic_pulse, rock_energy, hiphop_bounce, ambient_drift, etc.) were enriched with subtle motion in v0.7.4. `cinematic_sweep`, `advanced_max`, and `abstract_noise` were enriched with perspective tilt in v0.9.34. The motion is automatic and smooth — no configuration needed.
 

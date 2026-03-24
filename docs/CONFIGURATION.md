@@ -92,6 +92,15 @@ All environment variables are prefixed with `SDDJ_`. Example: `SDDJ_PORT=8080`.
 | `SDDJ_AUDIO_DEFAULT_RELEASE` | `8` | Default EMA release frames |
 | `SDDJ_STEM_MODEL` | `htdemucs` | Demucs model for stem separation |
 | `SDDJ_STEM_DEVICE` | `cpu` | Stem separation device (always CPU) |
+| `SDDJ_AUDIO_SAMPLE_RATE` | `44100` | Analysis sample rate in Hz (22050-96000). Higher = fuller spectrum |
+| `SDDJ_AUDIO_HOP_LENGTH` | `256` | STFT hop length in samples (64-1024). Lower = more temporal precision |
+| `SDDJ_AUDIO_N_FFT` | `4096` | FFT window size (512-8192). Higher = better frequency resolution |
+| `SDDJ_AUDIO_N_MELS` | `256` | Number of mel bands (64-512). Higher = finer band boundaries |
+| `SDDJ_AUDIO_PERCEPTUAL_WEIGHTING` | `True` | Apply ITU-R BS.1770 K-weighting pre-filter for perceptual loudness |
+| `SDDJ_AUDIO_SMOOTHING_MODE` | `ema` | Smoothing algorithm: `ema` (default) or `savgol` (better transient preservation) |
+| `SDDJ_AUDIO_BEAT_BACKEND` | `auto` | Beat tracking: `auto` (madmom if available), `librosa`, or `madmom` |
+| `SDDJ_AUDIO_SUPERFLUX_LAG` | `2` | SuperFlux onset detection lag (1-5) |
+| `SDDJ_AUDIO_SUPERFLUX_MAX_SIZE` | `3` | SuperFlux maximum filter size (1-7) |
 | `SDDJ_FFMPEG_PATH` | `""` (auto-detect) | Path to ffmpeg binary for MP4 export |
 
 ## Temporal Coherence

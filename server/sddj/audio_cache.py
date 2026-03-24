@@ -22,7 +22,9 @@ _HASH_CHUNK = 1024 * 1024
 
 
 def _cache_key(audio_path: str, fps: float, enable_stems: bool) -> str:
-    """Compute a cache key from file content hash + fps + stems flag."""
+    """Compute a cache key from file content hash + fps + stems + DSP config."""
+    from .config import settings
+
     p = Path(audio_path)
     hasher = hashlib.sha256()
     with open(p, "rb") as f:
@@ -30,6 +32,12 @@ def _cache_key(audio_path: str, fps: float, enable_stems: bool) -> str:
     hasher.update(str(p.stat().st_size).encode())
     hasher.update(f"{fps:.2f}".encode())
     hasher.update(b"stems" if enable_stems else b"nostem")
+    # DSP config — changing these invalidates the cache
+    hasher.update(f"sr{settings.audio_sample_rate}".encode())
+    hasher.update(f"hop{settings.audio_hop_length}".encode())
+    hasher.update(f"nfft{settings.audio_n_fft}".encode())
+    hasher.update(f"nmel{settings.audio_n_mels}".encode())
+    hasher.update(b"kw" if settings.audio_perceptual_weighting else b"nokw")
     return hasher.hexdigest()[:24]
 
 
