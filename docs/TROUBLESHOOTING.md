@@ -72,6 +72,31 @@ The server logs to stdout with timestamps. Key log patterns:
 - `WARNING: Expression error at frame N` — Custom expression syntax error
 - `ERROR: CUDA out of memory` — Reduce resolution or steps
 
+## Setup
+
+| Problem | Solution |
+|---------|----------|
+| Extension not in Aseprite | Re-run `setup.ps1`; check `%APPDATA%/Aseprite/extensions/sddj/` exists with 13 .lua files |
+| Model download hangs | Interrupt, re-run `setup.ps1` — downloads resume. Manually place models in `server/models/` if needed |
+| CUDA version mismatch | Run `python -c "import torch; print(torch.version.cuda)"` — must match your NVIDIA driver. SDDj requires CUDA 12.8 |
+| `uv` not found | Install uv: `irm https://astral.sh/uv/install.ps1 \| iex` |
+
+## Cache
+
+| Problem | Solution |
+|---------|----------|
+| torch.compile cache stale | Delete `%LOCALAPPDATA%\torch_extensions\` and restart server |
+| Audio analysis cache stale | Delete NPZ files in `SDDJ_AUDIO_CACHE_DIR` (defaults to system temp) |
+| Numba JIT recompiling every launch | Check Numba cache dir (`__pycache__/` in server modules); ensure write permissions |
+
+## Advanced
+
+| Problem | Solution |
+|---------|----------|
+| MP4 export: audio/video desync | Ensure audio FPS and generation FPS match. Use `SDDJ_FFMPEG_PATH` if ffmpeg auto-detect fails |
+| Color drift in long chains | Increase `SDDJ_COLOR_COHERENCE_STRENGTH` (0.3-0.7). Prevents LAB color drift between frames |
+| Animation too jittery | Enable `SDDJ_OPTICAL_FLOW_BLEND=0.2` for temporal smoothing. Lower denoise strength (0.15-0.25) |
+
 ---
 
 **[README](../README.md)** | **[Guide](GUIDE.md)** | **[Cookbook](COOKBOOK.md)** | **[Audio Reactivity](AUDIO-REACTIVITY.md)** | **[API Reference](API-REFERENCE.md)** | **[Configuration](CONFIGURATION.md)** | **[Troubleshooting](TROUBLESHOOTING.md)**

@@ -94,6 +94,15 @@ All environment variables are prefixed with `SDDJ_`. Example: `SDDJ_PORT=8080`.
 | `SDDJ_STEM_DEVICE` | `cpu` | Stem separation device (always CPU) |
 | `SDDJ_FFMPEG_PATH` | `""` (auto-detect) | Path to ffmpeg binary for MP4 export |
 
+## Temporal Coherence
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SDDJ_DISTILLED_STEP_SCALE_CAP` | `2` | Max step multiplier for distilled models (Hyper-SD). E.g. cap=2 means steps=8 can scale to at most 16 |
+| `SDDJ_COLOR_COHERENCE_STRENGTH` | `0.5` | LAB color matching between consecutive frames. 0 = disabled, 0.3-0.7 recommended. Prevents color drift in chains |
+| `SDDJ_AUTO_NOISE_COUPLING` | `True` | Auto noise-denoise coupling (Deforum pattern). Less denoise → more stabilizing noise for smoother transitions |
+| `SDDJ_OPTICAL_FLOW_BLEND` | `0.0` | Optical flow temporal blending strength. 0 = disabled, 0.1-0.3 recommended. Adds ~10-20ms per frame |
+
 ---
 
 **[README](../README.md)** | **[Guide](GUIDE.md)** | **[Cookbook](COOKBOOK.md)** | **[Audio Reactivity](AUDIO-REACTIVITY.md)** | **[API Reference](API-REFERENCE.md)** | **[Configuration](CONFIGURATION.md)** | **[Troubleshooting](TROUBLESHOOTING.md)**

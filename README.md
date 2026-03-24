@@ -46,7 +46,7 @@ sddj/
 ├── extension/
 │   ├── package.json             # Extension manifest
 │   ├── keys/
-│   │   └── sddj.aseprite-keys  # F5 hotkey for Live Send
+│   │   └── sddj.aseprite-keys  # Keyboard shortcuts
 │   └── scripts/
 │       ├── json.lua             # Pure Lua JSON parser
 │       ├── sddj.lua             # Plugin entry point (init/exit + module loader)
@@ -57,8 +57,7 @@ sddj/
 │       ├── sddj_ws.lua          # WebSocket transport + connection mgmt
 │       ├── sddj_capture.lua     # Image capture (active layer, flattened, mask)
 │       ├── sddj_request.lua     # Request builders (parse, attach, build)
-│       ├── sddj_import.lua      # Import result, animation frame, live preview
-│       ├── sddj_live.lua        # Live paint system (event-driven, F5 hotkey, ROI)
+│       ├── sddj_import.lua      # Import result, animation frame, preview
 │       ├── sddj_handler.lua     # Response dispatch table
 │       ├── sddj_output.lua      # Output directory management + metadata
 │       └── sddj_dialog.lua      # Dialog construction (tabs + actions)
@@ -71,7 +70,6 @@ sddj/
 ├── docs/
 │   ├── GUIDE.md                 # Complete user guide
 │   ├── COOKBOOK.md               # Recipes and workflows
-│   ├── LIVE-PAINT.md            # Live paint technical deep-dive
 │   ├── AUDIO-REACTIVITY.md      # Audio reactivity guide (presets, expressions, BPM)
 │   ├── API-REFERENCE.md         # WebSocket protocol specification
 │   ├── CONFIGURATION.md         # Environment variables reference
@@ -89,7 +87,11 @@ sddj/
 │       ├── __init__.py          # Package version
 │       ├── config.py            # Pydantic Settings (env vars)
 │       ├── protocol.py          # WebSocket schemas (Pydantic v2)
-│       ├── engine.py            # SD1.5 SOTA pipeline orchestrator
+│       ├── engine/              # SD1.5 SOTA pipeline orchestrator
+│       │   ├── core.py          # Single-frame generation (txt2img/img2img/inpaint/ControlNet)
+│       │   ├── animation.py     # Multi-frame animation (chain + AnimateDiff)
+│       │   ├── audio_reactive.py # Audio-reactive generation (modulation + motion warp)
+│       │   └── helpers.py       # Shared engine utilities
 │       ├── server.py            # FastAPI WebSocket + HTTP server
 │       ├── pipeline_factory.py  # Pipeline construction, compile, scheduler
 │       ├── animatediff_manager.py # AnimateDiff lifecycle (load/inject/eject)
@@ -117,7 +119,6 @@ sddj/
 ## Features
 
 - **txt2img / img2img / inpaint / ControlNet** — OpenPose, Canny, Scribble, Lineart (v1.1)
-- **Live Paint** (v0.3.0, v0.6.0 rewrite) — Event-driven SD-assisted painting: Auto mode (sends after each brush stroke) + Manual mode (F5 hotkey), zero CPU when idle, ROI dirty-region detection, debounced stroke detection via `sprite.events:on('change')`
 - **Sequence Output** (v0.6.1) — Choose per-generation output: new layer (default) or new frame in the timeline — ideal for img2img iteration and loop workflows
 - **Loop Mode** (v0.4.0) — Continuous generation with random seeds for rapid variation exploration
 - **Random Loop** (v0.5.0) — Continuous generation with auto-randomized prompts; lock subject/elements while randomizing the rest
@@ -140,7 +141,7 @@ sddj/
 - **Cancellation** (v0.6.1, v0.7.3 fix) — Robust multi-layered cancel: immediate server ACK, 30s safety timer fallback, GPU cleanup on timeout; concurrent receive loop handles cancel during long-running generations (audio-reactive, AnimateDiff). Works across all modes.
 - **Auto-reconnect** (v0.6.1) — Exponential backoff reconnection (2s → 30s max) with heartbeat pong watchdog (3× interval unresponsive → disconnect + reconnect)
 - **Generation timeout** — Configurable max time per generation (default 10min, auto-scaled for animation); sends cancel to server to free the GPU
-- **Contextual Action Button** (v0.7.7) — Single action button that adapts to the active tab: GENERATE, ANIMATE, START LIVE, AUDIO GEN. Action bar moved to top for instant access.
+- **Contextual Action Button** (v0.7.7) — Single action button that adapts to the active tab: GENERATE, ANIMATE, AUDIO GEN. Action bar moved to top for instant access.
 - **Universal Randomize** (v0.7.7) — Randomize checkbox works across all pipelines (Generate, Animation, Audio). Generates a random prompt before executing any pipeline action.
 - **Randomness Slider** (v0.7.7) — 0-20 scale controlling prompt diversity: Off (0), Subtle (5), Moderate (10), Wild (15), Chaos (20). Chaos mode combines multiple items per category; Wild mode favors rare items and random templates.
 - **Dedicated Pipeline Sliders** (v0.7.7) — Animation and Audio tabs have their own Steps, CFG, and Strength sliders, independent from the Generate tab. Fixes the shared-slider bug where changing Generate settings silently affected other pipelines.
@@ -226,7 +227,6 @@ See **[Troubleshooting](docs/TROUBLESHOOTING.md)** for the full list. Most commo
 |----------|-------------|
 | **[User Guide](docs/GUIDE.md)** | First launch, modes, parameters, post-processing, LoRA, performance |
 | **[Cookbook](docs/COOKBOOK.md)** | Tested recipes by creative intention |
-| **[Live Paint Guide](docs/LIVE-PAINT.md)** | Real-time SD-assisted painting |
 | **[Audio Reactivity](docs/AUDIO-REACTIVITY.md)** | Audio-driven animation — modulation matrix, presets, expressions, BPM sync |
 | **[API Reference](docs/API-REFERENCE.md)** | WebSocket protocol specification |
 | **[Configuration](docs/CONFIGURATION.md)** | Environment variables reference |
