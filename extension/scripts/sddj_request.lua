@@ -105,8 +105,18 @@ function PT.build_audio_reactive_request()
   if not PT.dlg then return nil end
   local d = PT.dlg.data
   local gw, gh = PT.parse_size()
-  local tag_name = d.anim_tag or ""
+  local tag_name = d.audio_tag or ""
   if tag_name == "" then tag_name = nil end
+
+  -- Inject fixed_subject into prompt for audio-linked prompt generation.
+  -- The server parses base_prompt to extract and lock the subject; ensure
+  -- the user's explicit subject override is present in the prompt text.
+  local effective_prompt = d.prompt
+  if d.lock_subject and d.fixed_subject and d.fixed_subject ~= "" then
+    if not effective_prompt:find(d.fixed_subject, 1, true) then
+      effective_prompt = d.fixed_subject .. ", " .. effective_prompt
+    end
+  end
 
   -- Build modulation slots from UI (4 slots)
   local slots = {}
@@ -238,7 +248,7 @@ function PT.build_audio_reactive_request()
     method            = method,
     enable_freeinit   = enable_freeinit,
     freeinit_iterations = freeinit_iters,
-    prompt            = d.prompt,
+    prompt            = effective_prompt,
     negative_prompt   = d.negative_prompt,
     mode              = d.mode,
     width             = gw,

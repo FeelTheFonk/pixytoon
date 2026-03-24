@@ -295,7 +295,13 @@ function PT.apply_metadata(meta)
   if meta.method then PT.dlg:modify{ id = "anim_method", option = meta.method } end
   if meta.frame_count then PT.dlg:modify{ id = "anim_frames", value = meta.frame_count } end
   if meta.seed_strategy then PT.dlg:modify{ id = "anim_seed_strategy", option = meta.seed_strategy } end
-  if meta.tag_name then PT.dlg:modify{ id = "anim_tag", text = meta.tag_name } end
+  if meta.tag_name then
+    if meta.action == "generate_audio_reactive" then
+      pcall(function() PT.dlg:modify{ id = "audio_tag", text = meta.tag_name } end)
+    else
+      PT.dlg:modify{ id = "anim_tag", text = meta.tag_name }
+    end
+  end
 
   PT.update_status("Metadata loaded (seed=" .. tostring(meta.seed or "?") .. ")")
 end

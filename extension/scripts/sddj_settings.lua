@@ -61,6 +61,7 @@ function PT.save_settings()
     audio_stems_enable = d.audio_stems_enable,
     audio_frame_duration = d.audio_frame_duration,
     audio_max_frames   = d.audio_max_frames,
+    audio_tag          = d.audio_tag,
     audio_mod_preset   = d.audio_mod_preset,
     mod_slot_count     = d.mod_slot_count,
     audio_advanced     = d.audio_advanced,
@@ -138,7 +139,7 @@ end
 function PT.apply_settings(s)
   if not s or not PT.dlg then return end
   -- Text fields
-  local texts = { "server_url", "prompt", "negative_prompt", "seed", "fixed_subject", "palette_custom_colors", "anim_tag", "audio_file",
+  local texts = { "server_url", "prompt", "negative_prompt", "seed", "fixed_subject", "palette_custom_colors", "anim_tag", "audio_file", "audio_tag",
                    "expr_denoise", "expr_cfg", "expr_noise", "expr_controlnet", "expr_seed",
                    "expr_palette", "expr_cadence", "expr_motion_x", "expr_motion_y",
                    "expr_motion_zoom", "expr_motion_rot",

@@ -2,6 +2,20 @@
 
 All notable changes to SDDj are documented here.
 
+## [0.9.36] — 2026-03
+
+### Fixed
+- **Lock Subject in audio mode** — `fixed_subject` is now injected into the prompt sent for audio-reactive generation, ensuring the server's prompt schedule correctly preserves the user's locked subject across auto-generated segments
+- **Randomize before audio hang** — pre-validates that audio analysis is complete before dispatching randomize+generate in audio mode; previously caused a silent UI hang if audio was not yet analyzed
+- **Export MP4 button stale state** — disconnect now resets `export_mp4_btn` and clears `audio.last_output_dir`, preventing orphaned enabled state after connection loss
+
+### Added
+- **Dedicated audio tag name** — audio tab now has its own `audio_tag` entry field instead of borrowing from the Animation tab's `anim_tag`; persisted in settings
+- **FPS 4 and 60** — expanded audio FPS dropdown with time-lapse (4) and high-fluidity (60) options
+
+### Changed
+- **Loop controls disabled in audio tab** — Loop and Random Loop checkboxes are now grayed out when the audio tab is active (no loop logic exists in the audio handler; was silently ignored)
+
 ## [0.9.35] — 2026-03
 
 ### Added

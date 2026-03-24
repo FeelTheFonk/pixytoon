@@ -102,6 +102,7 @@ function PT.set_connected(is_connected)
     PT.update_action_button(PT.dlg.data.main_tabs or "tab_gen")
     PT.dlg:modify{ id = "action_btn", enabled = false }
     PT.dlg:modify{ id = "cancel_btn", enabled = false }
+    pcall(function() PT.dlg:modify{ id = "export_mp4_btn", enabled = false } end)
     if PT.state.generating then PT.state.generating = false end
     if PT.state.animating then PT.state.animating = false end
     PT.stop_gen_timeout()
@@ -127,6 +128,7 @@ function PT.set_connected(is_connected)
     PT.audio.analyzing = false
     PT.audio.generating = false
     PT.audio.analyzed = false
+    PT.audio.last_output_dir = nil
     -- Stop refresh timer and clear queued messages
     if PT.stop_refresh_timer then PT.stop_refresh_timer() end
     if PT.clear_response_queue then PT.clear_response_queue() end

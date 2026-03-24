@@ -573,10 +573,12 @@ local function build_tab_audio()
     end,
   }
 
+  dlg:entry{ id = "audio_tag", label = "Tag Name", text = "", hexpand = true }
+
   dlg:combobox{
     id = "audio_fps",
     label = "FPS",
-    options = { "8", "12", "15", "24", "30" },
+    options = { "4", "8", "12", "15", "24", "30", "60" },
     option = "24",
   }
   dlg:slider{
@@ -1042,6 +1044,10 @@ function PT.update_action_button(tab)
     tab_audio = "AUDIO GEN",
   }
   PT.dlg:modify{ id = "action_btn", text = texts[tab] or "GENERATE" }
+  -- Loop controls: not supported in audio mode (no loop logic in audio handler)
+  local loop_enabled = (tab ~= "tab_audio")
+  PT.dlg:modify{ id = "loop_check", enabled = loop_enabled }
+  PT.dlg:modify{ id = "random_loop_check", enabled = loop_enabled }
 end
 
 -- ─── Actions Panel ─────────────────────────────────────────
@@ -1069,6 +1075,10 @@ local function build_actions_panel()
         elseif tab == "tab_anim" then
           PT.state.pending_action = "animate"
         elseif tab == "tab_audio" then
+          if not PT.audio.analyzed then
+            app.alert("Analyze the audio file first.")
+            return
+          end
           PT.state.pending_action = "audio"
         end
         local locked = {}
