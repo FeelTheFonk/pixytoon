@@ -4,7 +4,7 @@ import json
 import sys
 from pathlib import Path
 
-PROMPTS_DIR = Path(r"C:\Users\CleS\Desktop\SDDj\server\data\prompts")
+PROMPTS_DIR = Path(__file__).parent.parent / "data" / "prompts"
 errors = []
 warnings = []
 stats = {}
@@ -128,7 +128,7 @@ for name in expected:
         print(f"  ✗ {name}.json MISSING")
 
 # ── 4. Stats summary ──
-print(f"\n=== 4. STATS ===")
+print("\n=== 4. STATS ===")
 total_items = sum(v for k,v in stats.items() if k not in ("templates","negatives"))
 print(f"  Total data items: {total_items}")
 print(f"  Templates: {stats.get('templates', 0)}")
@@ -138,7 +138,7 @@ for k, v in sorted(stats.items()):
         print(f"  {k}: {v}")
 
 # ── 5. Results ──
-print(f"\n=== RESULTS ===")
+print("\n=== RESULTS ===")
 print(f"  Errors: {len(errors)}")
 for e in errors:
     print(f"    ✗ {e}")

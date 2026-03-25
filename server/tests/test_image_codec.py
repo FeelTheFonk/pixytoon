@@ -245,7 +245,7 @@ class TestApplyMotionWarp:
         res_arr = np.array(result)
         # After zoom out, the red area should shrink.
         # Original had red at row 12. After shrink, row 12 should be whiter.
-        edge_strip = res_arr[12, 20:44, 0]
+        _ = res_arr[12, 20:44, 0]
         # The original had pure red (255) at this strip; after zoom-out
         # some pixels should now be white (replicated border)
         assert res_arr.sum() != np.array(img).sum(), "Zoom out should change the image"

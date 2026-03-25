@@ -40,6 +40,16 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# --- Preflight: verify models exist (offline mode safety) -------------------
+$modelsDir = "$Root/server/models"
+$modelFiles = Get-ChildItem "$modelsDir" -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "\.(safetensors|ckpt|bin)$" }
+if (-not $modelFiles) {
+    Write-Host "  ${Y}!${R}  Model weights missing in server/models/. Offline mode cannot start."
+    Write-Host "  ${Y}!${R}  Run ${C}./setup.ps1${R} to download required weights."
+    Read-Host "`n  Press Enter to exit"
+    exit 1
+}
+
 # --- Check server already running --------------------------------------------
 $running = $false
 try {

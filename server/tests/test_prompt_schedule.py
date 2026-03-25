@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from unittest.mock import MagicMock
 
 import numpy as np
-import pytest
 
 from sddj.prompt_schedule import (
     PromptSchedule,

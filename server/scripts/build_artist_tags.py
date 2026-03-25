@@ -11,7 +11,7 @@ import json
 import urllib.request
 from pathlib import Path
 
-ARTIST_PATH = Path(r"C:\Users\CleS\Desktop\SDDj\server\data\prompts\artist.json")
+ARTIST_PATH = Path(__file__).parent.parent / "data" / "prompts" / "artist.json"
 OBP_URL = "https://raw.githubusercontent.com/AIrjen/OneButtonPrompt/main/csvfiles/artists_and_category.csv"
 
 

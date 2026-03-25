@@ -8,7 +8,7 @@ SDDj uses `uv` for lightning-fast Python dependency management and builds.
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/your-username/sddj.git
+   git clone https://github.com/FeelTheFonk/sddj.git
    cd sddj
    ```
 2. **Install dependencies**

@@ -14,7 +14,7 @@ import re
 import urllib.request
 from pathlib import Path
 
-PROMPTS_DIR = Path(r"C:\Users\CleS\Desktop\SDDj\server\data\prompts")
+PROMPTS_DIR = Path(__file__).parent.parent / "data" / "prompts"
 OBP_RAW = "https://raw.githubusercontent.com/AIrjen/OneButtonPrompt/main/csvfiles"
 
 # OBP CSV → our JSON mapping
@@ -38,7 +38,7 @@ def download_csv(url: str) -> list[str]:
     try:
         with urllib.request.urlopen(url, timeout=15) as resp:
             raw = resp.read().decode("utf-8", errors="ignore")
-        lines = [l.strip() for l in raw.splitlines() if l.strip()]
+        lines = [line.strip() for line in raw.splitlines() if line.strip()]
         return lines
     except Exception as e:
         print(f"  WARN: Failed to download {url}: {e}")

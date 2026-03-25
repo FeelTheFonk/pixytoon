@@ -2,6 +2,14 @@
 
 All notable changes to SDDj are documented here.
 
+## [0.9.45] — 2026-03
+
+### Changed
+- **Pre-Release Pinnacle Audit** — Eradicated hidden edge cases before 0.9.45 deployment.
+- **Portability Hardening** — Removed absolute `C:\` paths from all data processing scripts (`classify_subjects.py`, `build_prompt_data.py`, `build_artist_tags.py`, `audit_data.py`), ensuring cross-platform stability.
+- **Model Preflight Safety** — `start.ps1` now explicitly verifies local model weights exist before launching in `HF_HUB_OFFLINE` mode, intercepting cryptic HuggingFace offline crashes if `setup.ps1` was skipped or aborted.
+- **CI/CD Stabilization** — Added `ruff` to explicit dev dependencies in `pyproject.toml` to prevent static analysis failures on fresh installs.
+
 ## [0.9.44] — 2026-03
 
 ### Fixed

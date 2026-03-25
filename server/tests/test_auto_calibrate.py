@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from sddj.audio_analyzer import AudioAnalysis
 from sddj.auto_calibrate import recommend_preset

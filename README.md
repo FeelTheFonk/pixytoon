@@ -1,12 +1,8 @@
 # SDDj
 
-![demo1](https://github.com/user-attachments/assets/0ca19204-fdcd-46fb-86d1-23a48226f9ef)
-
-![Version](https://img.shields.io/badge/version-0.9.42-blue) ![Python](https://img.shields.io/badge/python-3.11--3.13-green) ![CUDA](https://img.shields.io/badge/CUDA-12.8-brightgreen) ![License](https://img.shields.io/badge/license-MIT-orange)
-
 ---
 
-Local SOTA generation and animation for Aseprite via Stable Diffusion 1.5 + AnimateDiff.
+Local SOTA generation and animation for Aseprite via Stable Diffusion + AnimateDiff.
 
 ---
 

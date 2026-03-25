@@ -8,7 +8,7 @@ import json
 import re
 from pathlib import Path
 
-SUBJECT_PATH = Path(r"C:\Users\CleS\Desktop\SDDj\server\data\prompts\subject.json")
+SUBJECT_PATH = Path(__file__).parent.parent / "data" / "prompts" / "subject.json"
 
 # Keyword patterns for classification (order matters: first match wins)
 HUMANOID_PATTERNS = [

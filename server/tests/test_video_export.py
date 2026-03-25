@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-from pathlib import Path
 from PIL import Image
 
 from sddj.video_export import (
@@ -13,7 +12,6 @@ from sddj.video_export import (
     _SAFE_METADATA_RE,
     _fill_frame_gaps,
     export_mp4,
-    find_ffmpeg,
 )
 
 
