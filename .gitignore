@@ -62,6 +62,7 @@ test_output/
 .env.local
 .env.*.local
 
+docs/plans/
 .claude/
 .serena/
 .gemini/
