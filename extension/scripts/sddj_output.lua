@@ -120,7 +120,7 @@ function PT.save_animation_frame(resp)
     end
 
     -- Write frame to disk immediately
-    local frame_name = string.format("frame_%03d.png", resp.frame_index + 1)
+    local frame_name = string.format("frame_%05d.png", resp.frame_index + 1)
     local frame_path = app.fs.joinPath(PT.anim.output_dir, frame_name)
 
     -- Reuse decoded bytes from import_animation_frame (B3: no double decode)

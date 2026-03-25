@@ -10,6 +10,7 @@ from sddj.video_export import (
     ExportResult,
     _FRAME_NUM_RE,
     _SAFE_METADATA_RE,
+    _detect_digit_width,
     _fill_frame_gaps,
     export_mp4,
 )
@@ -61,6 +62,39 @@ class TestFrameNumRegex:
     def test_no_match_non_frame(self):
         assert _FRAME_NUM_RE.search("other_file.png") is None
 
+    def test_matches_5_digit_frame(self):
+        """5-digit frame names produced by %05d must match."""
+        m = _FRAME_NUM_RE.search("frame_01000.png")
+        assert m and m.group(1) == "01000"
+
+    def test_matches_4_digit_frame(self):
+        """4-digit numbers (edge case from old %03d overflow) must still match."""
+        m = _FRAME_NUM_RE.search("frame_1000.png")
+        assert m and m.group(1) == "1000"
+
+
+class TestDetectDigitWidth:
+    def test_3_digit_returns_5(self, tmp_path):
+        """Old %03d frames should return 5 (never shrink below minimum)."""
+        p = tmp_path / "frame_001.png"
+        p.touch()
+        assert _detect_digit_width([p]) == 5
+
+    def test_5_digit_returns_5(self, tmp_path):
+        """New %05d frames should return 5."""
+        p = tmp_path / "frame_00001.png"
+        p.touch()
+        assert _detect_digit_width([p]) == 5
+
+    def test_6_digit_returns_6(self, tmp_path):
+        """If someone has 6-digit frames, respect that."""
+        p = tmp_path / "frame_000001.png"
+        p.touch()
+        assert _detect_digit_width([p]) == 6
+
+    def test_empty_returns_5(self):
+        assert _detect_digit_width([]) == 5
+
 
 class TestFillFrameGaps:
     def test_no_gaps_unchanged(self, tmp_path):
@@ -83,7 +117,7 @@ class TestFillFrameGaps:
         frames = [tmp_path / "frame_001.png", tmp_path / "frame_003.png"]
         result = _fill_frame_gaps(tmp_path, frames)
         assert len(result) == 3
-        assert (tmp_path / "frame_002.png").exists()
+        assert (tmp_path / "frame_00002.png").exists()
 
     def test_fills_multiple_gaps(self, tmp_path):
         """Gaps at 002 and 004 are both filled."""
@@ -94,8 +128,8 @@ class TestFillFrameGaps:
         frames = [tmp_path / f"frame_{i:03d}.png" for i in [1, 3, 5]]
         result = _fill_frame_gaps(tmp_path, frames)
         assert len(result) == 5
-        assert (tmp_path / "frame_002.png").exists()
-        assert (tmp_path / "frame_004.png").exists()
+        assert (tmp_path / "frame_00002.png").exists()
+        assert (tmp_path / "frame_00004.png").exists()
 
     def test_empty_list_returns_empty(self, tmp_path):
         result = _fill_frame_gaps(tmp_path, [])
@@ -107,6 +141,28 @@ class TestFillFrameGaps:
         img.save(p)
         result = _fill_frame_gaps(tmp_path, [p])
         assert len(result) == 1
+
+    def test_fills_gap_with_5_digit_names(self, tmp_path):
+        """Gaps in 5-digit frame sequences are filled with 5-digit names."""
+        for i in [1, 3]:
+            p = tmp_path / f"frame_{i:05d}.png"
+            img = Image.new("RGB", (4, 4), (0, 0, 0))
+            img.save(p)
+        frames = [tmp_path / f"frame_{i:05d}.png" for i in [1, 3]]
+        result = _fill_frame_gaps(tmp_path, frames)
+        assert len(result) == 3
+        assert (tmp_path / "frame_00002.png").exists()
+
+    def test_fills_gap_above_999(self, tmp_path):
+        """Gap-fill works correctly for frame numbers >999."""
+        for i in [999, 1001]:
+            p = tmp_path / f"frame_{i:05d}.png"
+            img = Image.new("RGB", (4, 4), (0, 0, 0))
+            img.save(p)
+        frames = [tmp_path / f"frame_{i:05d}.png" for i in [999, 1001]]
+        result = _fill_frame_gaps(tmp_path, frames)
+        assert len(result) == 3
+        assert (tmp_path / "frame_01000.png").exists()
 
 
 class TestExportValidation:
@@ -136,3 +192,4 @@ class TestExportValidation:
         img.save(frame_dir / "frame_001.png")
         with pytest.raises((FileNotFoundError, RuntimeError)):
             export_mp4(frame_dir, None, ffmpeg_path="/nonexistent/ffmpeg")
+

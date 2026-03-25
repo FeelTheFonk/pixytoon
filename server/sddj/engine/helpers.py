@@ -97,3 +97,83 @@ def make_step_callback(cancel_event, on_progress, total_steps,
             ))
         return callback_kwargs
     return _callback
+
+
+# ── Shared frame-processing helpers ────────────────────────
+
+
+def apply_temporal_coherence(
+    image: Image.Image,
+    prev_image: Image.Image,
+) -> Image.Image:
+    """Apply color coherence + optical flow blending between consecutive frames.
+
+    Uses ``settings.color_coherence_strength`` and ``settings.optical_flow_blend``
+    to control intensity.  Both are no-ops when their setting is 0.
+    """
+    from ..image_codec import match_color_lab, apply_optical_flow_blend
+    if settings.color_coherence_strength > 0:
+        image = match_color_lab(image, prev_image, settings.color_coherence_strength)
+    if settings.optical_flow_blend > 0:
+        image = apply_optical_flow_blend(image, prev_image, settings.optical_flow_blend)
+    return image
+
+
+def apply_frame_motion(
+    image: Image.Image,
+    frame_params: dict[str, float],
+    denoise_strength: float,
+) -> Image.Image:
+    """Apply 2D affine motion warp + perspective tilt from modulation params.
+
+    Applies motion_x/y/zoom/rotation (2D affine) first, then
+    tilt_x/tilt_y (perspective) — matching Deforum ordering.
+    """
+    from ..image_codec import apply_motion_warp, apply_perspective_tilt
+
+    mx = frame_params.get("motion_x", 0.0)
+    my = frame_params.get("motion_y", 0.0)
+    mz = frame_params.get("motion_zoom", 1.0)
+    mr = frame_params.get("motion_rotation", 0.0)
+    if abs(mx) > 0.01 or abs(my) > 0.01 or abs(mz - 1.0) > 0.001 or abs(mr) > 0.01:
+        image = apply_motion_warp(
+            image, tx=mx, ty=my, zoom=mz, rotation=mr,
+            denoise_strength=denoise_strength,
+        )
+
+    mtx = frame_params.get("motion_tilt_x", 0.0)
+    mty = frame_params.get("motion_tilt_y", 0.0)
+    if abs(mtx) > 0.01 or abs(mty) > 0.01:
+        image = apply_perspective_tilt(
+            image, tilt_x=mtx, tilt_y=mty,
+            denoise_strength=denoise_strength,
+        )
+    return image
+
+
+def apply_noise_injection(
+    image: Image.Image,
+    frame_params: dict[str, float],
+    seed: int,
+    denoise_strength: float,
+) -> Image.Image:
+    """Inject noise into a frame image for temporal variation.
+
+    Auto-coupling: when no ``noise_amplitude`` slot is active, injects subtle
+    noise inversely proportional to denoise strength — gated at 0.35 to prevent
+    artifact accumulation at low denoise values.
+    """
+    noise_amp = max(0.0, min(1.0, frame_params.get("noise_amplitude", 0.0)))
+    if settings.auto_noise_coupling and "noise_amplitude" not in frame_params:
+        if denoise_strength >= 0.35:
+            noise_amp = max(0.0, (0.9 - denoise_strength) * 0.1)
+        else:
+            noise_amp = 0.0
+    if noise_amp > 0:
+        arr = np.array(image, dtype=np.float32) / 255.0
+        noise = np.random.default_rng(seed).standard_normal(
+            arr.shape, dtype=np.float32) * noise_amp
+        arr = np.clip(arr + noise, 0.0, 1.0)
+        image = Image.fromarray((arr * 255).astype(np.uint8))
+    return image
+

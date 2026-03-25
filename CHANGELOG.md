@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.9.50] — 2026-03
+### Changed
+- **DRY: Unified generation helpers** — `compute_effective_denoise()` and `make_step_callback()` (previously dead code in `helpers.py`) now wired into `animation.py` and `audio_reactive.py`, replacing 8 inline duplications.
+- **DRY: Frame processing helpers** — extracted `apply_temporal_coherence()`, `apply_frame_motion()`, `apply_noise_injection()` into `helpers.py`, replacing 7 copy-pasted blocks across chain and AnimateDiff loops.
+- **DRY: Unified `ResourceManager`** — new generic `resource_manager.py` replaces cloned `lora_manager.py` (43→11 LOC) and `ti_manager.py` (43→11 LOC) with thin wrappers.
+- **DRY: Protocol `BaseGenerationParams`** — 15 shared fields extracted into base class; `GenerateRequest`, `AnimationRequest`, `AudioReactiveRequest` now inherit. `_check_generation_mode_images()` extracted as shared validator.
+- **Stale imports cleaned** — removed 7 unused imports across `animation.py` and `audio_reactive.py` (`match_color_lab`, `apply_optical_flow_blend`, `apply_motion_warp`, `apply_perspective_tilt`, `numpy`).
+
+### Fixed
+- **`auto_calibrate.py` dead branch** — both branches of `avg_chroma > 0.4` returned `"classical_flow"`; high-chroma path now returns `"atmospheric"`.
+- **Version drift** — harmonized Lua extension version (was 0.9.48) with server (0.9.50).
+
+### Added
+- `test_helpers.py` — 25 tests covering all engine helper functions (previously untested dead code).
+- `test_resource_manager.py` — 7 tests for unified ResourceManager (list, resolve, extensions, path traversal guard).
+- Test suite: 483 → 509 tests (+26).
+
 ## [0.9.49] — 2026-03
 ### Added
 - **Centralized VRAM management** — new `vram_utils.py` module: `vram_cleanup()`, `get_vram_info()`, `move_to_cpu()`, `check_vram_budget()`. Single source of truth for GPU memory management; all ad-hoc `gc.collect()`/`empty_cache()` patterns eliminated.

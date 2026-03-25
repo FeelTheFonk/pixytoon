@@ -934,7 +934,7 @@ local function build_tab_audio()
       PT.send({
         action       = "export_mp4",
         output_dir   = out_dir,
-        audio_path   = d.audio_file or nil,
+        audio_path   = (d.audio_file ~= "" and d.audio_file) or nil,
         fps          = tonumber(d.audio_fps) or 24,
         scale_factor = scale,
         quality      = d.mp4_quality or "high",

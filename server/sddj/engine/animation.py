@@ -31,12 +31,10 @@ from ..image_codec import (
     decode_b64_image,
     decode_b64_mask,
     encode_image_raw_b64,
-    match_color_lab,
-    apply_optical_flow_blend,
     resize_to_target,
     round8,
 )
-from .helpers import GenerationCancelled, scale_steps_for_denoise
+from .helpers import GenerationCancelled, apply_temporal_coherence, compute_effective_denoise, make_step_callback, scale_steps_for_denoise
 
 log = logging.getLogger("sddj.engine")
 
@@ -142,10 +140,7 @@ class AnimationMixin:
 
         # Clamp: ensure at least 2 effective denoising steps for img2img
         # (int(steps * strength) == 0 → empty latents → VAE crash)
-        _cap = max(settings.distilled_step_scale_cap, 1)
-        min_denoise = min(1.0, 2.0 / max(req.steps * _cap, 1) + 1e-3)
-        chain_denoise = max(req.denoise_strength, min_denoise)
-        chain_scaled_steps = scale_steps_for_denoise(req.steps, chain_denoise)
+        chain_denoise, chain_scaled_steps, _ = compute_effective_denoise(req.steps, req.denoise_strength)
 
         log.info("Chain animation: %d frames, mode=%s, steps=%d (scaled=%d), denoise=%.2f, seed_base=%d",
                  req.frame_count, req.mode.value, req.steps, chain_scaled_steps, chain_denoise, base_seed)
@@ -168,16 +163,10 @@ class AnimationMixin:
                 generator = torch.Generator("cuda").manual_seed(frame_seed)
 
                 # Progress callback with frame context
-                # Default args capture frame_idx by value (closure would capture by reference)
-                def step_callback(pipe, step_idx, timestep, callback_kwargs, _fi=frame_idx, _fc=req.frame_count):
-                    if self._cancel_event.is_set():
-                        raise GenerationCancelled("Animation cancelled by client")
-                    if on_progress:
-                        on_progress(ProgressResponse(
-                            step=step_idx + 1, total=req.steps,
-                            frame_index=_fi, total_frames=_fc,
-                        ))
-                    return callback_kwargs
+                step_callback = make_step_callback(
+                    self._cancel_event, on_progress, req.steps,
+                    frame_idx=frame_idx, total_frames=req.frame_count,
+                )
 
                 # Frame 0: initial generation (direct pipeline call — NO cudagraph markers)
                 # Chain mode uses raw (non-compiled) UNet, so _txt2img/_img2img
@@ -300,16 +289,7 @@ class AnimationMixin:
 
                 # Temporal coherence: color matching + optical flow (frame 1+)
                 if frame_idx > 0 and chain_source is not None:
-                    if settings.color_coherence_strength > 0:
-                        image = match_color_lab(
-                            image, chain_source,
-                            settings.color_coherence_strength,
-                        )
-                    if settings.optical_flow_blend > 0:
-                        image = apply_optical_flow_blend(
-                            image, chain_source,
-                            settings.optical_flow_blend,
-                        )
+                    image = apply_temporal_coherence(image, chain_source)
 
                 # Store pre-postprocess image for next frame's img2img source
                 # (full-resolution, RGB, no pixelation/quantization artifacts)
@@ -415,15 +395,10 @@ class AnimationMixin:
         target_w, target_h = round8(req.width), round8(req.height)
 
         # Progress callback
-        def step_callback(pipe_ref, step_idx, timestep, callback_kwargs):
-            if self._cancel_event.is_set():
-                raise GenerationCancelled("Animation cancelled by client")
-            if on_progress:
-                on_progress(ProgressResponse(
-                    step=step_idx + 1, total=effective_steps,
-                    frame_index=0, total_frames=req.frame_count,
-                ))
-            return callback_kwargs
+        step_callback = make_step_callback(
+            self._cancel_event, on_progress, effective_steps,
+            frame_idx=0, total_frames=req.frame_count,
+        )
 
         t0 = time.perf_counter()
 
@@ -437,10 +412,7 @@ class AnimationMixin:
                 # Repeat source image as input "video"
                 video_input = [source] * req.frame_count
 
-                _cap = max(settings.distilled_step_scale_cap, 1)
-                min_denoise = min(1.0, 2.0 / max(effective_steps * _cap, 1) + 1e-3)
-                strength = max(req.denoise_strength, min_denoise)
-                scaled_steps = scale_steps_for_denoise(effective_steps, strength)
+                strength, scaled_steps, _ = compute_effective_denoise(effective_steps, req.denoise_strength)
 
                 log.info("AnimateDiff img2img: %d frames, steps=%d (scaled=%d), strength=%.2f",
                          req.frame_count, effective_steps, scaled_steps, strength)

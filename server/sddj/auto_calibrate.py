@@ -83,7 +83,7 @@ def recommend_preset(analysis: AudioAnalysis) -> str:
     # Moderate BPM + low energy -> classical
     if avg_rms < 0.3 and rms_variance < 0.02:
         if avg_chroma > 0.4:
-            return "classical_flow"
+            return "atmospheric"
         return "classical_flow"
 
     # Very percussive -> glitch

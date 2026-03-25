@@ -1,42 +1,11 @@
-"""Textual Inversion embedding discovery and resolution."""
+"""Textual Inversion embedding discovery — thin wrapper over ResourceManager."""
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from .config import settings
-from .validation import validate_resource_name as _validate_name
+from .resource_manager import ResourceManager
 
+_mgr = ResourceManager("embedding", settings.embeddings_dir)
 
-_TI_EXTENSIONS = {".safetensors", ".bin", ".pt"}
-
-
-def list_embeddings() -> list[str]:
-    d = settings.embeddings_dir
-    if not d.is_dir():
-        return []
-    try:
-        return sorted(
-            p.stem
-            for p in d.iterdir()
-            if p.is_file() and p.suffix.lower() in _TI_EXTENSIONS
-        )
-    except OSError:
-        return []
-
-
-def resolve_embedding_path(name: str) -> Path:
-    _validate_name(name, "embedding")
-    d = settings.embeddings_dir
-    for ext in _TI_EXTENSIONS:
-        candidate = d / f"{name}{ext}"
-        if candidate.is_file():
-            # Path traversal guard: resolved path must stay inside embeddings_dir
-            resolved = candidate.resolve()
-            if not str(resolved).startswith(str(d.resolve())):
-                raise ValueError(f"Embedding path escapes embeddings_dir: {resolved}")
-            return candidate
-    raise FileNotFoundError(
-        f"Embedding '{name}' not found in {d}. "
-        f"Available: {list_embeddings()}"
-    )
+list_embeddings = _mgr.list
+resolve_embedding_path = _mgr.resolve

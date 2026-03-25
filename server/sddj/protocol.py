@@ -135,40 +135,21 @@ _DEFAULT_NEGATIVE = (
 )
 
 
-class GenerateRequest(BaseModel):
-    action: Action = Action.GENERATE
-    prompt: str = ""
-    negative_prompt: str = _DEFAULT_NEGATIVE
-    mode: GenerationMode = GenerationMode.TXT2IMG
-    width: int = Field(512, ge=64, le=2048)
-    height: int = Field(512, ge=64, le=2048)
-    source_image: Optional[str] = None      # base64 PNG (img2img / inpaint)
-    mask_image: Optional[str] = None        # base64 PNG (inpaint) — white=repaint, black=keep
-    control_image: Optional[str] = None     # base64 PNG (ControlNet)
-    seed: int = -1
-    steps: int = Field(8, ge=1, le=100)
-    cfg_scale: float = Field(5.0, ge=0.0, le=30.0)
-    denoise_strength: float = Field(1.0, ge=0.0, le=1.0)
-    clip_skip: int = Field(2, ge=1, le=12)
-    lora: Optional[LoRASpec] = None
-    negative_ti: Optional[list[EmbeddingSpec]] = None
-    post_process: PostProcessSpec = Field(default_factory=PostProcessSpec)
-
-    @model_validator(mode='after')
-    def _check_mode_images(self):
-        if self.mode == GenerationMode.IMG2IMG and self.source_image is None:
-            raise ValueError("img2img mode requires source_image")
-        if self.mode == GenerationMode.INPAINT:
-            if self.source_image is None or self.mask_image is None:
-                raise ValueError("inpaint mode requires source_image and mask_image")
-        if self.mode.value.startswith("controlnet_") and self.control_image is None:
-            raise ValueError(f"{self.mode.value} requires control_image")
-        return self
+def _check_generation_mode_images(model: BaseModel, context: str = "") -> BaseModel:
+    """Shared validator: check source/mask/control images align with mode."""
+    pfx = f"{context} " if context else ""
+    if model.mode == GenerationMode.IMG2IMG and model.source_image is None:
+        raise ValueError(f"{pfx}img2img mode requires source_image")
+    if model.mode == GenerationMode.INPAINT:
+        if model.source_image is None or model.mask_image is None:
+            raise ValueError(f"{pfx}inpaint mode requires source_image and mask_image")
+    if model.mode.value.startswith("controlnet_") and model.control_image is None:
+        raise ValueError(f"{pfx}{model.mode.value} requires control_image")
+    return model
 
 
-class AnimationRequest(BaseModel):
-    action: Action = Action.GENERATE_ANIMATION
-    method: AnimationMethod = AnimationMethod.CHAIN
+class BaseGenerationParams(BaseModel):
+    """Shared generation parameters — inherited by Generate, Animation, AudioReactive."""
     prompt: str = ""
     negative_prompt: str = _DEFAULT_NEGATIVE
     mode: GenerationMode = GenerationMode.TXT2IMG
@@ -185,6 +166,20 @@ class AnimationRequest(BaseModel):
     lora: Optional[LoRASpec] = None
     negative_ti: Optional[list[EmbeddingSpec]] = None
     post_process: PostProcessSpec = Field(default_factory=PostProcessSpec)
+
+
+class GenerateRequest(BaseGenerationParams):
+    action: Action = Action.GENERATE
+    denoise_strength: float = Field(1.0, ge=0.0, le=1.0)
+
+    @model_validator(mode='after')
+    def _check_mode_images(self):
+        return _check_generation_mode_images(self)
+
+
+class AnimationRequest(BaseGenerationParams):
+    action: Action = Action.GENERATE_ANIMATION
+    method: AnimationMethod = AnimationMethod.CHAIN
     # Animation-specific
     frame_count: int = Field(8, ge=2, le=120)
     frame_duration_ms: int = Field(100, ge=30, le=2000)
@@ -196,14 +191,8 @@ class AnimationRequest(BaseModel):
 
     @model_validator(mode='after')
     def _check_mode_images(self):
-        if self.mode == GenerationMode.IMG2IMG and self.source_image is None:
-            raise ValueError("img2img animation requires source_image")
-        if self.mode == GenerationMode.INPAINT:
-            if self.source_image is None or self.mask_image is None:
-                raise ValueError("inpaint animation requires source_image and mask_image")
-        if self.mode.value.startswith("controlnet_") and self.control_image is None:
-            raise ValueError(f"{self.mode.value} animation requires control_image")
-        return self
+        return _check_generation_mode_images(self, "animation")
+
 
 
 class Request(BaseModel):
@@ -354,7 +343,7 @@ class AnalyzeAudioRequest(BaseModel):
     enable_stems: bool = False
 
 
-class AudioReactiveRequest(BaseModel):
+class AudioReactiveRequest(BaseGenerationParams):
     action: Action = Action.GENERATE_AUDIO_REACTIVE
     audio_path: str = ""
     fps: float = Field(24.0, ge=1.0, le=120.0)
@@ -371,23 +360,6 @@ class AudioReactiveRequest(BaseModel):
     # AnimateDiff-specific
     enable_freeinit: bool = False
     freeinit_iterations: int = Field(2, ge=1, le=3)
-    # Generation parameters (same as AnimationRequest)
-    prompt: str = ""
-    negative_prompt: str = _DEFAULT_NEGATIVE
-    mode: GenerationMode = GenerationMode.TXT2IMG
-    width: int = Field(512, ge=64, le=2048)
-    height: int = Field(512, ge=64, le=2048)
-    source_image: Optional[str] = None
-    mask_image: Optional[str] = None
-    control_image: Optional[str] = None
-    seed: int = -1
-    steps: int = Field(8, ge=1, le=100)
-    cfg_scale: float = Field(5.0, ge=0.0, le=30.0)
-    denoise_strength: float = Field(0.30, ge=0.0, le=1.0)
-    clip_skip: int = Field(2, ge=1, le=12)
-    lora: Optional[LoRASpec] = None
-    negative_ti: Optional[list[EmbeddingSpec]] = None
-    post_process: PostProcessSpec = Field(default_factory=PostProcessSpec)
     # Deprecated: audio-reactive uses fps exclusively. Kept for metadata backward compat.
     frame_duration_ms: Optional[int] = Field(None, ge=30, le=2000)
     tag_name: Optional[str] = Field(None, max_length=64)

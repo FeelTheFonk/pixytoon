@@ -7,7 +7,6 @@ import random
 import time
 from typing import Callable, Optional
 
-import numpy as np
 import torch
 import torch.compiler
 from PIL import Image
@@ -27,18 +26,14 @@ from ..animatediff_manager import get_uncompiled_unet
 from .compile_utils import eager_pipeline
 from ..vram_utils import vram_cleanup
 from ..image_codec import (
-    apply_motion_warp,
-    apply_perspective_tilt,
-    apply_optical_flow_blend,
     composite_with_mask,
     decode_b64_image,
     decode_b64_mask,
     encode_image_raw_b64,
-    match_color_lab,
     resize_to_target,
     round8,
 )
-from .helpers import GenerationCancelled, _apply_hue_shift, scale_steps_for_denoise
+from .helpers import GenerationCancelled, _apply_hue_shift, apply_frame_motion, apply_noise_injection, apply_temporal_coherence, compute_effective_denoise, make_step_callback, scale_steps_for_denoise
 
 log = logging.getLogger("sddj.engine")
 
@@ -286,19 +281,8 @@ class AudioReactiveMixin:
                 eff_denoise = frame_params.get("denoise_strength", req.denoise_strength)
                 _raw_denoise = eff_denoise
                 # Sub-floor blending: guarantee ≥2 effective denoising steps
-                # while preserving full audio dynamic range.  When audio
-                # modulation requests below the floor (quiet passages), we
-                # generate at the floor and blend the result toward the source
-                # — the visual change is attenuated without quality loss.
-                _cap = max(settings.distilled_step_scale_cap, 1)
-                min_denoise = min(1.0, 2.0 / max(req.steps * _cap, 1) + 1e-3)
-                _sub_floor_alpha = 1.0
-                if eff_denoise < min_denoise:
-                    _sub_floor_alpha = eff_denoise / min_denoise
-                    eff_denoise = min_denoise
-                else:
-                    eff_denoise = min(1.0, eff_denoise)
-                eff_scaled_steps = scale_steps_for_denoise(req.steps, eff_denoise)
+                # while preserving full audio dynamic range.
+                eff_denoise, eff_scaled_steps, _sub_floor_alpha = compute_effective_denoise(req.steps, eff_denoise)
                 eff_cfg = frame_params.get("cfg_scale", req.cfg_scale)
                 seed_offset = int(frame_params.get("seed_offset", frame_idx))
                 frame_seed = (base_seed + seed_offset) % (2**32)
@@ -312,16 +296,10 @@ class AudioReactiveMixin:
                 )
 
                 # Progress callback
-                def step_callback(pipe, step_idx, timestep, callback_kwargs,
-                                  _fi=frame_idx, _fc=total_frames):
-                    if self._cancel_event.is_set():
-                        raise GenerationCancelled("Audio-reactive animation cancelled")
-                    if on_progress:
-                        on_progress(ProgressResponse(
-                            step=step_idx + 1, total=req.steps,
-                            frame_index=_fi, total_frames=_fc,
-                        ))
-                    return callback_kwargs
+                step_callback = make_step_callback(
+                    self._cancel_event, on_progress, req.steps,
+                    frame_idx=frame_idx, total_frames=total_frames,
+                )
 
                 # Reset scheduler for frame 1+
                 if frame_idx > 0:
@@ -409,44 +387,10 @@ class AudioReactiveMixin:
                     source = resize_to_target(chain_source, target_w, target_h)
 
                     # Motion warp: Deforum-like smooth camera (applied BEFORE img2img)
-                    mx = frame_params.get("motion_x", 0.0)
-                    my = frame_params.get("motion_y", 0.0)
-                    mz = frame_params.get("motion_zoom", 1.0)
-                    mr = frame_params.get("motion_rotation", 0.0)
-                    if abs(mx) > 0.01 or abs(my) > 0.01 or abs(mz - 1.0) > 0.001 or abs(mr) > 0.01:
-                        source = apply_motion_warp(
-                            source, tx=mx, ty=my, zoom=mz, rotation=mr,
-                            denoise_strength=_raw_denoise,
-                        )
+                    source = apply_frame_motion(source, frame_params, _raw_denoise)
 
-                    # Perspective tilt (applied after 2D affine — Deforum ordering)
-                    mtx = frame_params.get("motion_tilt_x", 0.0)
-                    mty = frame_params.get("motion_tilt_y", 0.0)
-                    if abs(mtx) > 0.01 or abs(mty) > 0.01:
-                        source = apply_perspective_tilt(
-                            source, tilt_x=mtx, tilt_y=mty,
-                            denoise_strength=_raw_denoise,
-                        )
-
-                    # Noise amplitude modulation: inject noise into source.
-                    # Auto coupling: when no noise_amplitude slot is active,
-                    # inject subtle noise inversely proportional to denoise
-                    # strength — but ONLY when denoise is high enough for the
-                    # model to resolve the injected noise (≥0.35 → ≥5 effective
-                    # steps at 8-step/cap-2).  Below this, noise accumulates
-                    # frame-over-frame causing spaghetti artifacts.
-                    noise_amp = max(0.0, min(1.0, frame_params.get("noise_amplitude", 0.0)))
-                    if settings.auto_noise_coupling and "noise_amplitude" not in frame_params:
-                        if _raw_denoise >= 0.35:
-                            noise_amp = max(0.0, (0.9 - _raw_denoise) * 0.1)
-                        else:
-                            noise_amp = 0.0
-                    if noise_amp > 0:
-                        arr = np.array(source, dtype=np.float32) / 255.0
-                        noise = np.random.default_rng(frame_seed).standard_normal(
-                            arr.shape, dtype=np.float32) * noise_amp
-                        arr = np.clip(arr + noise, 0.0, 1.0)
-                        source = Image.fromarray((arr * 255).astype(np.uint8))
+                    # Noise amplitude modulation
+                    source = apply_noise_injection(source, frame_params, frame_seed, _raw_denoise)
 
                     if req.mode.value.startswith("controlnet_") and _control_img is not None:
                         log.info("Audio frame %d: ControlNet mode uses img2img for frame coherence", frame_idx)
@@ -468,16 +412,7 @@ class AudioReactiveMixin:
 
                 # Temporal coherence: color matching + optical flow (frame 1+)
                 if frame_idx > 0 and chain_source is not None:
-                    if settings.color_coherence_strength > 0:
-                        image = match_color_lab(
-                            image, chain_source,
-                            settings.color_coherence_strength,
-                        )
-                    if settings.optical_flow_blend > 0:
-                        image = apply_optical_flow_blend(
-                            image, chain_source,
-                            settings.optical_flow_blend,
-                        )
+                    image = apply_temporal_coherence(image, chain_source)
 
                 # Store pre-postprocess for next frame
                 chain_source = image
@@ -674,16 +609,10 @@ class AudioReactiveMixin:
                     pass
 
             # Progress callback
-            def step_callback(pipe_ref, step_idx, timestep, callback_kwargs,
-                              _ci=chunk_idx, _cs=c_start, _ce=c_end):
-                if self._cancel_event.is_set():
-                    raise GenerationCancelled("Audio-reactive AnimateDiff cancelled")
-                if on_progress:
-                    on_progress(ProgressResponse(
-                        step=step_idx + 1, total=eff_steps,
-                        frame_index=_cs, total_frames=total_frames,
-                    ))
-                return callback_kwargs
+            step_callback = make_step_callback(
+                self._cancel_event, on_progress, eff_steps,
+                frame_idx=c_start, total_frames=total_frames,
+            )
 
             _ad_sub_floor_alpha = 1.0
 
@@ -693,16 +622,8 @@ class AudioReactiveMixin:
 
             with torch.inference_mode():
                 if is_img2img:
-                    # Sub-floor blending: same logic as chain loop — guarantee
-                    # ≥2 effective steps, blend toward source for quiet passages.
-                    _cap = max(settings.distilled_step_scale_cap, 1)
-                    min_denoise = min(1.0, 2.0 / max(eff_steps * _cap, 1) + 1e-3)
-                    if eff_denoise < min_denoise:
-                        _ad_sub_floor_alpha = eff_denoise / min_denoise
-                        chunk_strength = min_denoise
-                    else:
-                        chunk_strength = min(1.0, eff_denoise)
-                    chunk_scaled_steps = scale_steps_for_denoise(eff_steps, chunk_strength)
+                    # Sub-floor blending: same logic as chain loop.
+                    chunk_strength, chunk_scaled_steps, _ad_sub_floor_alpha = compute_effective_denoise(eff_steps, eff_denoise)
 
                     kwargs = dict(
                         video=[_source_img] * num_frames,
@@ -801,53 +722,16 @@ class AudioReactiveMixin:
 
             pil_img = frame_images[frame_idx]
 
-            mx = frame_params.get("motion_x", 0.0)
-            my = frame_params.get("motion_y", 0.0)
-            mz = frame_params.get("motion_zoom", 1.0)
-            mr = frame_params.get("motion_rotation", 0.0)
             ad_denoise = frame_params.get("denoise_strength", req.denoise_strength)
-            if abs(mx) > 0.01 or abs(my) > 0.01 or abs(mz - 1.0) > 0.001 or abs(mr) > 0.01:
-                pil_img = apply_motion_warp(
-                    pil_img, tx=mx, ty=my, zoom=mz, rotation=mr,
-                    denoise_strength=ad_denoise,
-                )
-
-            # Perspective tilt (applied after 2D affine — Deforum ordering)
-            mtx = frame_params.get("motion_tilt_x", 0.0)
-            mty = frame_params.get("motion_tilt_y", 0.0)
-            if abs(mtx) > 0.01 or abs(mty) > 0.01:
-                pil_img = apply_perspective_tilt(
-                    pil_img, tilt_x=mtx, tilt_y=mty,
-                    denoise_strength=ad_denoise,
-                )
+            pil_img = apply_frame_motion(pil_img, frame_params, ad_denoise)
 
             # Noise amplitude injection (parity with chain loop)
-            noise_amp = max(0.0, min(1.0, frame_params.get("noise_amplitude", 0.0)))
-            if settings.auto_noise_coupling and "noise_amplitude" not in frame_params:
-                if ad_denoise >= 0.35:
-                    noise_amp = max(0.0, (0.9 - ad_denoise) * 0.1)
-                else:
-                    noise_amp = 0.0
-            if noise_amp > 0:
-                frame_seed_ad = frame_seeds.get(frame_idx, base_seed)
-                arr = np.array(pil_img, dtype=np.float32) / 255.0
-                noise = np.random.default_rng(frame_seed_ad).standard_normal(
-                    arr.shape, dtype=np.float32) * noise_amp
-                arr = np.clip(arr + noise, 0.0, 1.0)
-                pil_img = Image.fromarray((arr * 255).astype(np.uint8))
+            frame_seed_ad = frame_seeds.get(frame_idx, base_seed)
+            pil_img = apply_noise_injection(pil_img, frame_params, frame_seed_ad, ad_denoise)
 
             # Temporal coherence (parity with chain loop)
             if frame_idx > 0 and prev_ad_image is not None:
-                if settings.color_coherence_strength > 0:
-                    pil_img = match_color_lab(
-                        pil_img, prev_ad_image,
-                        settings.color_coherence_strength,
-                    )
-                if settings.optical_flow_blend > 0:
-                    pil_img = apply_optical_flow_blend(
-                        pil_img, prev_ad_image,
-                        settings.optical_flow_blend,
-                    )
+                pil_img = apply_temporal_coherence(pil_img, prev_ad_image)
 
             image = postprocess_apply(pil_img, req.post_process)
 

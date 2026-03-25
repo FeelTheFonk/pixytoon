@@ -31,6 +31,19 @@ def find_ffmpeg() -> str | None:
     return shutil.which("ffmpeg")
 
 
+def _detect_digit_width(frames: list[Path]) -> int:
+    """Detect zero-padded digit width from existing frame filenames.
+
+    Returns the digit width of the first frame (e.g. frame_001.png → 3,
+    frame_00001.png → 5).  Falls back to 5 for new directories.
+    """
+    for f in frames:
+        m = _FRAME_NUM_RE.search(f.name)
+        if m:
+            return max(len(m.group(1)), 5)  # never shrink below 5
+    return 5
+
+
 def _fill_frame_gaps(frame_dir: Path, frames: list[Path]) -> list[Path]:
     """Ensure sequential frame numbering with no gaps.
 
@@ -50,6 +63,9 @@ def _fill_frame_gaps(frame_dir: Path, frames: list[Path]) -> list[Path]:
     if not numbered:
         return frames
 
+    # Detect digit width from existing frames for consistent naming
+    width = _detect_digit_width(frames)
+
     first = min(numbered)
     last = max(numbered)
     filled = 0
@@ -60,7 +76,7 @@ def _fill_frame_gaps(frame_dir: Path, frames: list[Path]) -> list[Path]:
             prev_path = numbered[n]
         else:
             # Gap detected — forward-fill with previous frame
-            gap_path = frame_dir / f"frame_{n:03d}.png"
+            gap_path = frame_dir / f"frame_{n:0{width}d}.png"
             shutil.copy2(prev_path, gap_path)
             numbered[n] = gap_path
             filled += 1
@@ -118,11 +134,12 @@ def export_mp4(
     # Fill any gaps in the numbering sequence (critical — ffmpeg stops at gaps)
     frames = _fill_frame_gaps(frame_dir, frames)
 
-    # Detect start number from first frame
+    # Detect start number and digit width from first frame
     m = _FRAME_NUM_RE.search(frames[0].name)
     start_number = int(m.group(1)) if m else 1
+    digit_width = _detect_digit_width(frames)
 
-    frame_pattern = str(frame_dir / "frame_%03d.png")
+    frame_pattern = str(frame_dir / f"frame_%0{digit_width}d.png")
 
     # Find ffmpeg
     ffmpeg = ffmpeg_path or find_ffmpeg()
