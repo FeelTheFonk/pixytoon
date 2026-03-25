@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.9.49] — 2026-03
+### Added
+- **Centralized VRAM management** — new `vram_utils.py` module: `vram_cleanup()`, `get_vram_info()`, `move_to_cpu()`, `check_vram_budget()`. Single source of truth for GPU memory management; all ad-hoc `gc.collect()`/`empty_cache()` patterns eliminated.
+- **`eager_pipeline` context manager** — new `engine/compile_utils.py`: DRY UNet swap + DeepCache suspend + dynamo reset for chain/audio-reactive animations (replaced 2×26-line duplicated blocks → 3 lines each).
+- **UNet weight snapshot** — `LoRAFuser` captures pre-fuse UNet weights on CPU and restores from snapshot on unfuse, preventing numerical drift after repeated fuse/unfuse cycles.
+- **`get_status()` engine method** — reports loaded models, current LoRA, DeepCache state; exposed via `/health` endpoint.
+- **VRAM budget guard** — pre-flight check before ControlNet lazy-load; triggers cleanup when free VRAM is below threshold (`vram_min_free_mb` config).
+- **Load retry** — `DiffusionEngine.load()` retries once with VRAM cleanup on transient failures.
+- **Path traversal guards** — resolved LoRA/TI paths validated to stay inside their configured directories (blocks `../` escape and symlink escape).
+- **7 new config keys** — `enable_tf32`, `compile_dynamic`, `enable_lora_hotswap`, `max_lora_rank`, `enable_cpu_offload`, `vram_min_free_mb`, `quantize_unet`.
+- **24 new unit tests** — `test_vram_utils.py` (10), `test_lora_fuser.py` (6), `test_deepcache_manager.py` (4), `test_compile_utils.py` (4).
+- **DRY helpers** — `compute_effective_denoise()`, `make_step_callback()` in `engine/helpers.py`.
+
+### Changed
+- **TF32 + high matmul precision** — enabled by default on Ampere+ GPUs (~15-30% free speedup).
+- **LoRA hotswap** — `enable_lora_hotswap()` called before first `load_lora_weights()`, eliminating ~15-25s torch.compile recompilation on LoRA switches; conditional `dynamo.reset()` only when hotswap is unavailable.
+- **`torch.compile` dynamic shapes** — `dynamic=True` conditionally enabled when DeepCache is disabled (incompatible combination documented).
+- **AnimateDiff DRY** — extracted `_apply_lightning_scheduler()` and `_apply_freeu_if_enabled()` methods (3×15-line blocks → 2 method calls each).
+- **`.to("cpu")` before unload** — all `unload()` methods now move models to CPU before nullifying, ensuring immediate VRAM release instead of waiting for Python GC.
+- **`/health` endpoint enriched** — returns VRAM used/free/total, loaded models list, current LoRA, DeepCache state.
+- **atexit handler** — uses centralized `vram_cleanup()` instead of standalone `empty_cache()`.
+
+### Fixed
+- **Runtime crash in OOM handlers** — `gc.collect()` calls in `core.py`, `animation.py`, `audio_reactive.py` OOM handlers would crash because `gc` was not imported after Phase 0 refactoring; replaced with `vram_cleanup()`.
+- **Unused `import gc`** — removed from `audio_reactive.py` (was dangling after eager_pipeline refactor).
+- **Version drift** — harmonized Lua extension version (was 0.9.47) with server (0.9.49).
+
 ## [0.9.48] — 2026-03
 ### Changed
 - **FPS-based audio frame timing** — Replaced the mathematical­ly incorrect ms-based `audio_frame_duration` slider (30–100ms) with the existing FPS combobox as sole timing source. Expanded FPS options to all professional rates: `23.976`, `25`, `29.97`, `50`, `59.94`. Frame durations are computed via Bresenham-style integer accumulation (`expected_ms - elapsed_ms`) for zero cumulative drift.

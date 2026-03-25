@@ -59,10 +59,17 @@ class Settings(BaseSettings):
     # ── Performance ──────────────────────────────────────────
     enable_torch_compile: bool = True
     compile_mode: Literal["default", "max-autotune", "reduce-overhead"] = "default"
+    compile_dynamic: bool = False  # True only when DeepCache disabled (incompatible)
     enable_deepcache: bool = True
     enable_attention_slicing: bool = True
     enable_vae_tiling: bool = True
     enable_warmup: bool = True
+    enable_tf32: bool = True  # Ampere+ free ~15-30% speedup
+    enable_lora_hotswap: bool = True  # Avoids torch.compile recompilation on LoRA switch
+    max_lora_rank: int = Field(128, ge=1)  # Must be >= rank of all LoRA adapters used
+    enable_cpu_offload: bool = False  # Mutually exclusive with DeepCache + torch.compile
+    vram_min_free_mb: int = Field(512, ge=0)  # VRAM budget guard for lazy-loads
+    quantize_unet: Literal["none", "int8", "fp8"] = "none"  # INT8/FP8 UNet quantization
 
     # ── FreeU v2 (free quality boost, no training needed) ────
     enable_freeu: bool = True

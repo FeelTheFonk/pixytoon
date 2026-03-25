@@ -77,6 +77,25 @@ class AnimateDiffManager:
         self.controlnet_pipe: Optional[AnimateDiffControlNetPipeline] = None
         self.controlnet_mode: Optional[GenerationMode] = None
 
+    def _apply_lightning_scheduler(self, pipe) -> None:
+        """Apply EulerDiscreteScheduler override for AnimateDiff-Lightning."""
+        if not settings.is_animatediff_lightning:
+            return
+        pipe.scheduler = EulerDiscreteScheduler.from_config(
+            pipe.scheduler.config,
+            timestep_spacing="trailing",
+            beta_schedule="linear",
+            clip_sample=False,
+        )
+        log.info("Lightning scheduler: EulerDiscreteScheduler (trailing, linear, clip_sample=False)")
+
+    def _apply_freeu_if_enabled(self, pipe) -> None:
+        """Apply FreeU unless explicitly disabled for Lightning."""
+        if settings.is_animatediff_lightning and not settings.animatediff_lightning_freeu:
+            log.debug("FreeU disabled for AnimateDiff-Lightning")
+            return
+        apply_freeu(pipe)
+
     def ensure_base(self, base_pipe) -> AnimateDiffPipeline:
         """Lazy-load AnimateDiff motion adapter and pipeline."""
         if self.motion_adapter is not None and self.pipe is not None:
@@ -113,21 +132,8 @@ class AnimateDiffManager:
             )
             self.pipe.to("cuda")
 
-            # Lightning scheduler override — must happen AFTER pipeline creation
-            if settings.is_animatediff_lightning:
-                self.pipe.scheduler = EulerDiscreteScheduler.from_config(
-                    self.pipe.scheduler.config,
-                    timestep_spacing="trailing",
-                    beta_schedule="linear",
-                    clip_sample=False,
-                )
-                log.info("Lightning scheduler: EulerDiscreteScheduler (trailing, linear, clip_sample=False)")
-
-            # FreeU — conditional for Lightning
-            if settings.is_animatediff_lightning and not settings.animatediff_lightning_freeu:
-                log.info("FreeU disabled for AnimateDiff-Lightning (animatediff_lightning_freeu=false)")
-            else:
-                apply_freeu(self.pipe)
+            self._apply_lightning_scheduler(self.pipe)
+            self._apply_freeu_if_enabled(self.pipe)
         except Exception:
             self.motion_adapter = None
             self.pipe = None
@@ -162,19 +168,8 @@ class AnimateDiffManager:
             )
             self.vid2vid_pipe.to("cuda")
 
-            # Lightning scheduler override
-            if settings.is_animatediff_lightning:
-                self.vid2vid_pipe.scheduler = EulerDiscreteScheduler.from_config(
-                    self.vid2vid_pipe.scheduler.config,
-                    timestep_spacing="trailing",
-                    beta_schedule="linear",
-                    clip_sample=False,
-                )
-
-            if settings.is_animatediff_lightning and not settings.animatediff_lightning_freeu:
-                pass  # FreeU disabled for Lightning
-            else:
-                apply_freeu(self.vid2vid_pipe)
+            self._apply_lightning_scheduler(self.vid2vid_pipe)
+            self._apply_freeu_if_enabled(self.vid2vid_pipe)
         except Exception:
             self.vid2vid_pipe = None
             raise
@@ -223,19 +218,8 @@ class AnimateDiffManager:
             )
             self.controlnet_pipe.to("cuda")
 
-            # Lightning scheduler override
-            if settings.is_animatediff_lightning:
-                self.controlnet_pipe.scheduler = EulerDiscreteScheduler.from_config(
-                    self.controlnet_pipe.scheduler.config,
-                    timestep_spacing="trailing",
-                    beta_schedule="linear",
-                    clip_sample=False,
-                )
-
-            if settings.is_animatediff_lightning and not settings.animatediff_lightning_freeu:
-                pass  # FreeU disabled for Lightning
-            else:
-                apply_freeu(self.controlnet_pipe)
+            self._apply_lightning_scheduler(self.controlnet_pipe)
+            self._apply_freeu_if_enabled(self.controlnet_pipe)
         except Exception:
             self.controlnet_pipe = None
             self.controlnet_mode = None
@@ -246,14 +230,15 @@ class AnimateDiffManager:
         return self.controlnet_pipe
 
     def unload(self) -> None:
-        """Release all AnimateDiff resources."""
-        import gc
-        import torch
+        """Release all AnimateDiff resources — .to(cpu) for immediate VRAM release."""
+        from .vram_utils import move_to_cpu, vram_cleanup
+        move_to_cpu(self.motion_adapter)
+        move_to_cpu(self.pipe)
+        move_to_cpu(self.vid2vid_pipe)
+        move_to_cpu(self.controlnet_pipe)
         self.motion_adapter = None
         self.pipe = None
         self.vid2vid_pipe = None
         self.controlnet_pipe = None
         self.controlnet_mode = None
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        vram_cleanup()

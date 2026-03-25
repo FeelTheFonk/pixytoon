@@ -31,6 +31,10 @@ def resolve_embedding_path(name: str) -> Path:
     for ext in _TI_EXTENSIONS:
         candidate = d / f"{name}{ext}"
         if candidate.is_file():
+            # Path traversal guard: resolved path must stay inside embeddings_dir
+            resolved = candidate.resolve()
+            if not str(resolved).startswith(str(d.resolve())):
+                raise ValueError(f"Embedding path escapes embeddings_dir: {resolved}")
             return candidate
     raise FileNotFoundError(
         f"Embedding '{name}' not found in {d}. "

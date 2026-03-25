@@ -6,6 +6,7 @@ import numpy as np
 from PIL import Image
 
 from ..config import settings
+from ..protocol import ProgressResponse
 
 
 class GenerationCancelled(Exception):
@@ -55,3 +56,44 @@ def scale_steps_for_denoise(steps: int, strength: float) -> int:
     if cap > 0:
         scaled = min(scaled, steps * cap)
     return max(steps, scaled)
+
+
+def compute_effective_denoise(
+    steps: int, strength: float,
+) -> tuple[float, int, float]:
+    """Compute effective denoise params with sub-floor blending.
+
+    Returns (effective_strength, scaled_steps, sub_floor_alpha).
+    When sub_floor_alpha < 1.0, the result should be alpha-blended toward
+    the source image for sub-floor attenuation without quality loss.
+
+    Guarantees ≥2 effective denoising steps while preserving full
+    audio/parameter dynamic range.
+    """
+    cap = max(settings.distilled_step_scale_cap, 1)
+    min_denoise = min(1.0, 2.0 / max(steps * cap, 1) + 1e-3)
+    sub_floor_alpha = 1.0
+
+    if strength < min_denoise:
+        sub_floor_alpha = strength / min_denoise
+        effective_strength = min_denoise
+    else:
+        effective_strength = min(1.0, strength)
+
+    scaled_steps = scale_steps_for_denoise(steps, effective_strength)
+    return effective_strength, scaled_steps, sub_floor_alpha
+
+
+def make_step_callback(cancel_event, on_progress, total_steps,
+                       frame_idx=None, total_frames=None):
+    """Factory for diffusers callback_on_step_end with cancellation support."""
+    def _callback(pipe, step_idx, timestep, callback_kwargs):
+        if cancel_event.is_set():
+            raise GenerationCancelled("Generation cancelled")
+        if on_progress:
+            on_progress(ProgressResponse(
+                step=step_idx + 1, total=total_steps,
+                frame_index=frame_idx, total_frames=total_frames,
+            ))
+        return callback_kwargs
+    return _callback

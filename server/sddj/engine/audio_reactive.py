@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import gc
 import logging
 import random
 import time
@@ -25,6 +24,8 @@ from ..protocol import (
 from .. import deepcache_manager
 from .. import pipeline_factory
 from ..animatediff_manager import get_uncompiled_unet
+from .compile_utils import eager_pipeline
+from ..vram_utils import vram_cleanup
 from ..image_codec import (
     apply_motion_warp,
     apply_perspective_tilt,
@@ -187,8 +188,7 @@ class AudioReactiveMixin:
 
         except torch.cuda.OutOfMemoryError:
             log.error("CUDA OOM during audio-reactive generation — clearing VRAM cache")
-            gc.collect()
-            torch.cuda.empty_cache()
+            vram_cleanup()
             raise
         finally:
             self._cancel_event.clear()
@@ -201,27 +201,10 @@ class AudioReactiveMixin:
         on_progress: Optional[Callable[[ProgressResponse], None]],
         audio_fps: float = 24.0,
     ) -> int:
-        """Audio-reactive chain animation — wraps raw UNet like _generate_chain."""
-        raw_unet = get_uncompiled_unet(self._pipe)
-        compiled_unet = self._pipe.unet
-
-        with deepcache_manager.suspended(self._deepcache_helper):
-            self._pipe.unet = raw_unet
-            self._img2img_pipe.unet = raw_unet
-            if self._controlnet_pipe is not None:
-                self._controlnet_pipe.unet = raw_unet
-            try:
-                torch._dynamo.reset()
-                return self._generate_audio_chain_inner(req, schedule, on_frame, on_progress, audio_fps)
-            finally:
-                try:
-                    torch._dynamo.reset()
-                except Exception:
-                    log.warning("torch._dynamo.reset() failed in audio chain cleanup")
-                self._pipe.unet = compiled_unet
-                self._img2img_pipe.unet = compiled_unet
-                if self._controlnet_pipe is not None:
-                    self._controlnet_pipe.unet = compiled_unet
+        """Audio-reactive chain animation — uses eager_pipeline context manager."""
+        with eager_pipeline(self._pipe, self._img2img_pipe,
+                            self._controlnet_pipe, self._deepcache_helper):
+            return self._generate_audio_chain_inner(req, schedule, on_frame, on_progress, audio_fps)
 
     @torch.compiler.disable
     def _generate_audio_chain_inner(

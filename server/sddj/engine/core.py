@@ -14,7 +14,6 @@ Delegates construction and lifecycle concerns to:
 
 from __future__ import annotations
 
-import gc
 import logging
 import random
 import threading
@@ -37,6 +36,7 @@ from ..protocol import (
     ResultResponse,
 )
 from .. import rembg_wrapper
+from ..vram_utils import move_to_cpu, vram_cleanup, vram_log
 
 # Extracted modules
 from .. import deepcache_manager
@@ -87,14 +87,53 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         """Signal cancellation — checked at each step callback."""
         self._cancel_event.set()
 
+    def get_status(self) -> dict:
+        """Return engine status for /health endpoint."""
+        models = []
+        if self._pipe is not None:
+            models.append("base")
+        if self._img2img_pipe is not None:
+            models.append("img2img")
+        if self._controlnet_pipe is not None:
+            models.append(f"controlnet:{self._controlnet_mode.value if self._controlnet_mode else 'unknown'}")
+        if self._animatediff.pipe is not None:
+            models.append("animatediff")
+        return {
+            "loaded_models": models,
+            "current_lora": self._lora_fuser.current_name,
+            "lora_weight": self._lora_fuser.current_weight,
+            "deepcache_active": self._deepcache_helper is not None,
+        }
+
     # ─── LIFECYCLE ───────────────────────────────────────────
 
     def load(self) -> None:
-        """Load pipeline with all SOTA optimizations."""
+        """Load pipeline with all SOTA optimizations. Retries once on failure."""
         if self._loaded:
             return
+        for attempt in range(2):
+            try:
+                self._load_inner()
+                return
+            except Exception as e:
+                if attempt == 0:
+                    log.error("Engine load failed (attempt 1), cleanup + retry: %s", e)
+                    vram_cleanup()
+                else:
+                    raise
 
+    def _load_inner(self) -> None:
+        """Internal load — called by load() with retry wrapper."""
         t0 = time.perf_counter()
+
+        # 0. Enable TF32 + high matmul precision (Ampere+, ~15-30% free speedup)
+        if torch.cuda.is_available() and settings.enable_tf32:
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            torch.set_float32_matmul_precision("high")
+            log.info("TF32 + high matmul precision enabled")
+
+        vram_log("pre-load")
 
         # 1. Base pipeline
         self._pipe = pipeline_factory.load_base_pipeline()
@@ -246,7 +285,10 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
                  len(self._loaded_ti_tokens), sorted(self._loaded_ti_tokens))
 
     def unload(self) -> None:
-        """Free all GPU memory."""
+        """Free all GPU memory — .to(cpu) before nullifying for immediate VRAM release."""
+        move_to_cpu(self._pipe)
+        move_to_cpu(self._img2img_pipe)
+        move_to_cpu(self._controlnet_pipe)
         self._pipe = None
         self._img2img_pipe = None
         self._controlnet_pipe = None
@@ -257,8 +299,8 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         self._loaded = False
         self._animatediff.unload()
         rembg_wrapper.unload()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        vram_cleanup()
+        vram_log("post-unload")
         log.info("Pipeline unloaded")
 
     def cleanup_resources(self) -> dict:
@@ -277,6 +319,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         cleaned = []
 
         if self._controlnet_pipe is not None:
+            move_to_cpu(self._controlnet_pipe)
             self._controlnet_pipe = None
             self._controlnet_mode = None
             cleaned.append("ControlNet")
@@ -291,9 +334,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
             self._stem_separator.unload()
             cleaned.append("StemSeparator")
 
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        vram_cleanup()
 
         try:
             if torch.cuda.is_available():
@@ -327,10 +368,16 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
             log.info("Smart transition: unloading AnimateDiff before ControlNet load")
             self._animatediff.unload()
 
+        # VRAM budget guard: cleanup if low on memory before loading ControlNet
+        from ..vram_utils import check_vram_budget
+        if not check_vram_budget(required_mb=800, min_free_mb=settings.vram_min_free_mb):
+            log.warning("Low VRAM before ControlNet load — running cleanup")
+            vram_cleanup()
+
         # Unload previous
+        move_to_cpu(self._controlnet_pipe)
         self._controlnet_pipe = None
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        vram_cleanup()
 
         self._controlnet_pipe = pipeline_factory.create_controlnet_pipeline(
             self._pipe, mode,
@@ -434,8 +481,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
 
         except torch.cuda.OutOfMemoryError:
             log.error("CUDA OOM — clearing VRAM cache")
-            gc.collect()
-            torch.cuda.empty_cache()
+            vram_cleanup()
             raise
         finally:
             self._cancel_event.clear()

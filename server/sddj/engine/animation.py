@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import gc
 import logging
 import random
 import time
@@ -25,6 +24,8 @@ from ..protocol import (
 from .. import deepcache_manager
 from .. import pipeline_factory
 from ..animatediff_manager import get_uncompiled_unet
+from .compile_utils import eager_pipeline
+from ..vram_utils import vram_cleanup
 from ..image_codec import (
     composite_with_mask,
     decode_b64_image,
@@ -71,8 +72,7 @@ class AnimationMixin:
 
         except torch.cuda.OutOfMemoryError:
             log.error("CUDA OOM during animation — clearing VRAM cache")
-            gc.collect()
-            torch.cuda.empty_cache()
+            vram_cleanup()
             raise
         finally:
             self._cancel_event.clear()
@@ -100,32 +100,9 @@ class AnimationMixin:
         a completely different pipeline class (AnimateDiffPipeline), whose __call__ was never
         compiled — dynamo has no guards for it.
         """
-        raw_unet = get_uncompiled_unet(self._pipe)
-        compiled_unet = self._pipe.unet
-
-        with deepcache_manager.suspended(self._deepcache_helper):
-            # After DeepCache.disable(), raw UNet's forwards are restored to original.
-            # Swap both pipelines to use the clean raw UNet directly.
-            self._pipe.unet = raw_unet
-            self._img2img_pipe.unet = raw_unet
-            if self._controlnet_pipe is not None:
-                self._controlnet_pipe.unet = raw_unet
-            try:
-                # Purge dynamo code cache to prevent stale guard recompilation
-                # on the raw UNet. Without this, dynamo recognizes _orig_mod
-                # from prior compilation and may hang on recompilation.
-                torch._dynamo.reset()
-                return self._generate_chain_inner(req, on_frame, on_progress)
-            finally:
-                try:
-                    torch._dynamo.reset()
-                except Exception:
-                    log.warning("torch._dynamo.reset() failed in chain cleanup")
-                # Restore compiled UNet before DeepCache re-enables
-                self._pipe.unet = compiled_unet
-                self._img2img_pipe.unet = compiled_unet
-                if self._controlnet_pipe is not None:
-                    self._controlnet_pipe.unet = compiled_unet
+        with eager_pipeline(self._pipe, self._img2img_pipe,
+                            self._controlnet_pipe, self._deepcache_helper):
+            return self._generate_chain_inner(req, on_frame, on_progress)
 
     @torch.compiler.disable
     def _generate_chain_inner(

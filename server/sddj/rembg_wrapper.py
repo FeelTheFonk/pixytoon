@@ -45,7 +45,7 @@ def remove_bg(img: Image.Image) -> Image.Image:
 def unload():
     """Free the rembg session from memory."""
     global _session
-    import gc
+    from .vram_utils import vram_cleanup
     with _session_lock:
         _session = None
-    gc.collect()
+    vram_cleanup()

@@ -129,7 +129,7 @@ def _remove_pid() -> None:
 
 # Register atexit as a safety net (covers non-fatal exits)
 atexit.register(_remove_pid)
-atexit.register(lambda: torch.cuda.empty_cache() if torch.cuda.is_available() else None)
+atexit.register(lambda: __import__("sddj.vram_utils", fromlist=["vram_cleanup"]).vram_cleanup())
 
 
 @asynccontextmanager
@@ -971,10 +971,17 @@ async def _send(websocket: WebSocket, response) -> None:
 
 @app.get("/health")
 async def health_check() -> JSONResponse:
+    from .vram_utils import get_vram_info
+    used, free, total = get_vram_info()
+    extra = engine.get_status() if engine.is_loaded else {}
     return JSONResponse({
         "status": "ok",
         "version": __version__,
         "loaded": engine.is_loaded,
+        "vram_used_mb": used,
+        "vram_free_mb": free,
+        "vram_total_mb": total,
+        **extra,
     })
 
 

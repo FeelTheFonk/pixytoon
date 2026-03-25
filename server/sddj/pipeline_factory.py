@@ -103,6 +103,19 @@ def setup_hyper_sd(pipe: StableDiffusionPipeline) -> None:
         pipe.scheduler.config,
         timestep_spacing="trailing",
     )
+
+    # Enable LoRA hotswap BEFORE the first load_lora_weights() call.
+    # This allows subsequent style LoRA switches to avoid torch.compile
+    # recompilation (saves ~15-25s per switch).  target_rank must be >= the
+    # max rank across ALL LoRAs (HyperSD + any style LoRAs).
+    # Caveats: UNet adapters only (no text_encoder), same-layer targeting.
+    if settings.enable_lora_hotswap:
+        try:
+            pipe.enable_lora_hotswap(target_rank=settings.max_lora_rank)
+            log.info("LoRA hotswap enabled (target_rank=%d)", settings.max_lora_rank)
+        except Exception as e:
+            log.warning("LoRA hotswap unavailable (diffusers too old?): %s", e)
+
     log.info("Loading Hyper-SD LoRA: %s/%s", settings.hyper_sd_repo, settings.hyper_sd_lora_file)
     try:
         pipe.load_lora_weights(
@@ -130,16 +143,28 @@ def apply_torch_compile(pipe: StableDiffusionPipeline) -> None:
     fullgraph=False required: DeepCache introduces dynamic control flow.
     mode=default: Triton codegen without kernel benchmarking.
     (reduce-overhead uses CUDAGraphs which is INCOMPATIBLE with DeepCache)
+
+    dynamic shapes: DeepCache is a *dynamic* inference algorithm that mutates
+    the UNet's forward() at runtime.  The DeepCache maintainer has confirmed
+    that DeepCache is fundamentally incompatible with torch.compile's graph
+    capture (GitHub: horseee/DeepCache).  Our workaround: compile FIRST with
+    fullgraph=False, then let DeepCache wrap the forwards.  This works because
+    Dynamo traces through DeepCache's modified forwards at warmup time.
+    Setting dynamic=True here would destabilize the guards DeepCache relies on,
+    so dynamic=True is only safe when DeepCache is DISABLED.
     """
     if not settings.enable_torch_compile:
         return
+    use_dynamic = settings.compile_dynamic and not settings.enable_deepcache
     try:
         pipe.unet = torch.compile(
             pipe.unet,
             mode=settings.compile_mode,
             fullgraph=False,
+            dynamic=use_dynamic,
         )
-        log.info("torch.compile enabled for UNet (%s)", settings.compile_mode)
+        log.info("torch.compile enabled for UNet (mode=%s, dynamic=%s)",
+                 settings.compile_mode, use_dynamic)
     except Exception as e:
         log.warning("torch.compile failed: %s", e)
 
