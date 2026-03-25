@@ -378,7 +378,7 @@ function PT.build_animation_meta(resp)
     -- Animation-specific
     meta.method = req.method
     meta.frame_count_requested = req.frame_count
-    meta.frame_duration_ms = req.frame_duration_ms
+    if req.frame_duration_ms then meta.frame_duration_ms = req.frame_duration_ms end
     meta.seed_strategy = req.seed_strategy
     meta.tag_name = req.tag_name or resp.tag_name
     -- Audio-specific

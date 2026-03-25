@@ -6,6 +6,19 @@ return function(PT)
 
 local handlers = {}
 
+-- ─── Helper: Reset Animation State ────────────────────────
+local function reset_anim_state()
+  PT.anim.layer = nil
+  PT.anim.start_frame = 0
+  PT.anim.frame_count = 0
+  PT.anim.base_seed = 0
+  PT.anim.output_dir = nil
+  PT.anim.output_count = 0
+  PT.anim.last_saved_frame = nil
+  PT.anim.last_frame_index = -1
+  PT.anim.decode_failures = 0
+end
+
 -- ─── Progress ───────────────────────────────────────────────
 
 handlers.progress = function(resp)
@@ -152,6 +165,56 @@ handlers.animation_frame = function(resp)
   end
 end
 
+-- ─── Helper: Chunked Finalize (Bresenham Sync) ────────────
+
+local function chunked_finalize_durations(target_fps, resp, on_complete)
+  if not PT.anim.start_frame or PT.anim.frame_count <= 0 then
+    if on_complete then on_complete() end
+    return
+  end
+  local spr = app.sprite
+  if not spr then
+    if on_complete then on_complete() end
+    return
+  end
+  local total = PT.anim.frame_count
+  local s_frame = PT.anim.start_frame
+  local chunk_size = 200
+  local ideal_inc = 1000.0 / target_fps
+  local function process_chunk(s_idx, elapsed_ms)
+    if s_idx >= total then
+      if on_complete then on_complete() end
+      return
+    end
+    -- SOTA Stability: Graceful abort if user closes the active sprite during the async yield interval
+    if not app.sprite or app.sprite ~= spr then
+      return
+    end
+    local e_idx = math.min(s_idx + chunk_size, total)
+    app.transaction("SDDj Finalize " .. s_idx .. "-" .. (e_idx - 1), function()
+      for i = s_idx, e_idx - 1 do
+        local fn = s_frame + i
+        local expected_ms = math.floor((i + 1) * ideal_inc + 0.5)
+        local dur_ms = expected_ms - elapsed_ms
+        elapsed_ms = elapsed_ms + dur_ms
+        if spr.frames[fn] then spr.frames[fn].duration = dur_ms / 1000.0 end
+      end
+      if e_idx >= total and resp.tag_name and resp.tag_name ~= "" then
+        local tag_end = s_frame + total - 1
+        if spr.frames[s_frame] and spr.frames[tag_end] then
+          local tag = spr:newTag(s_frame, tag_end)
+          tag.name = resp.tag_name
+        end
+      end
+    end)
+    app.refresh()
+    local t = Timer{ interval = 0.01 }
+    t.ontick = function() t:stop() process_chunk(e_idx, elapsed_ms) end
+    t:start()
+  end
+  process_chunk(0, 0)
+end
+
 -- ─── Animation Complete ─────────────────────────────────────
 
 handlers.animation_complete = function(resp)
@@ -179,33 +242,16 @@ handlers.animation_complete = function(resp)
 
   local spr = app.sprite
   if spr and PT.anim.frame_count > 0 then
-    app.transaction("SDDj Animation Finalize", function()
-      local dur = (PT.dlg and PT.dlg.data.anim_duration or 100) / 1000.0
-      for i = 0, PT.anim.frame_count - 1 do
-        local fn = PT.anim.start_frame + i
-        if spr.frames[fn] then spr.frames[fn].duration = dur end
-      end
-      local tag_start = PT.anim.start_frame
-      local tag_end = PT.anim.start_frame + PT.anim.frame_count - 1
-      if resp.tag_name and resp.tag_name ~= "" and spr.frames[tag_start] and spr.frames[tag_end] then
-        local tag = spr:newTag(tag_start, tag_end)
-        tag.name = resp.tag_name
-      end
+    local dur_ms = (PT.dlg and tonumber(PT.dlg.data.anim_duration) or 100)
+    local fps = 1000.0 / math.max(1, dur_ms)
+    chunked_finalize_durations(fps, resp, function()
+      PT.save_animation_meta(resp)
+      reset_anim_state()
     end)
-    app.refresh()
+  else
+    PT.save_animation_meta(resp)
+    reset_anim_state()
   end
-  -- Write metadata to output directory (frames already written incrementally)
-  PT.save_animation_meta(resp)
-
-  PT.anim.layer = nil
-  PT.anim.start_frame = 0
-  PT.anim.frame_count = 0
-  PT.anim.base_seed = 0
-  PT.anim.output_dir = nil
-  PT.anim.output_count = 0
-  PT.anim.last_saved_frame = nil
-  PT.anim.last_frame_index = -1
-  PT.anim.decode_failures = 0
 end
 
 -- ─── Error ──────────────────────────────────────────────────
@@ -228,29 +274,24 @@ handlers.error = function(resp)
   PT.stop_refresh_timer()
   PT.clear_response_queue()
 
-  -- Finalize partial animation on error
+  -- Finalize partial animation on error (async chunked to avoid UI freeze)
   if was_animating and PT.anim.frame_count > 0 then
     local spr = app.sprite
     if spr then
-      -- Use audio frame duration if this was an audio-reactive generation
-      local dur_ms = was_audio_gen
-        and (PT.dlg and PT.dlg.data.audio_frame_duration or 42)
-        or (PT.dlg and PT.dlg.data.anim_duration or 100)
-      local dur = dur_ms / 1000.0
-      for i = 0, PT.anim.frame_count - 1 do
-        local fn = PT.anim.start_frame + i
-        if spr.frames[fn] then spr.frames[fn].duration = dur end
+      local fps = 24
+      if was_audio_gen then
+        fps = tonumber(PT.dlg and PT.dlg.data.audio_fps) or 24
+        if fps <= 0 then fps = 24 end
+      else
+        local dur_ms = (PT.dlg and tonumber(PT.dlg.data.anim_duration) or 100)
+        fps = 1000.0 / math.max(1, dur_ms)
       end
+      chunked_finalize_durations(fps, resp, function()
+        reset_anim_state()
+      end)
+    else
+      reset_anim_state()
     end
-    PT.anim.layer = nil
-    PT.anim.start_frame = 0
-    PT.anim.frame_count = 0
-    PT.anim.base_seed = 0
-    PT.anim.output_dir = nil
-    PT.anim.output_count = 0
-    PT.anim.last_saved_frame = nil
-    PT.anim.last_frame_index = -1
-    PT.anim.decode_failures = 0
   end
 
   -- Finalize partial sequence on error
@@ -626,38 +667,18 @@ handlers.audio_reactive_complete = function(resp)
   -- Finalize frames (set durations + tag)
   local spr = app.sprite
   if spr and PT.anim.frame_count > 0 then
-    app.transaction("SDDj Audio Animation Finalize", function()
-      local dur_ms = (PT.dlg and PT.dlg.data.audio_frame_duration or 42)
-      local dur = dur_ms / 1000.0
-      for i = 0, PT.anim.frame_count - 1 do
-        local fn = PT.anim.start_frame + i
-        if spr.frames[fn] then spr.frames[fn].duration = dur end
-      end
-      local tag_start = PT.anim.start_frame
-      local tag_end = PT.anim.start_frame + PT.anim.frame_count - 1
-      if resp.tag_name and resp.tag_name ~= "" and spr.frames[tag_start] and spr.frames[tag_end] then
-        local tag = spr:newTag(tag_start, tag_end)
-        tag.name = resp.tag_name
-      end
+    local fps = (PT.dlg and tonumber(PT.dlg.data.audio_fps)) or 24
+    if fps <= 0 then fps = 24 end
+    chunked_finalize_durations(fps, resp, function()
+      PT.save_animation_meta(resp)
+      PT.audio.last_output_dir = PT.anim.output_dir
+      reset_anim_state()
     end)
-    app.refresh()
+  else
+    PT.save_animation_meta(resp)
+    PT.audio.last_output_dir = PT.anim.output_dir
+    reset_anim_state()
   end
-
-  -- Write metadata to output directory (frames already written incrementally)
-  PT.save_animation_meta(resp)
-
-  -- Preserve output dir for MP4 export before resetting anim state
-  PT.audio.last_output_dir = PT.anim.output_dir
-
-  PT.anim.layer = nil
-  PT.anim.start_frame = 0
-  PT.anim.frame_count = 0
-  PT.anim.base_seed = 0
-  PT.anim.output_dir = nil
-  PT.anim.output_count = 0
-  PT.anim.last_saved_frame = nil
-  PT.anim.last_frame_index = -1
-  PT.anim.decode_failures = 0
 end
 
 handlers.stems_available = function(resp)

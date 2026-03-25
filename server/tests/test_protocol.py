@@ -411,7 +411,7 @@ class TestRandomnessField:
         with pytest.raises(ValidationError):
             AudioReactiveRequest(audio_path="/test.wav", max_frames=0)
         with pytest.raises(ValidationError):
-            AudioReactiveRequest(audio_path="/test.wav", max_frames=5000)
+            AudioReactiveRequest(audio_path="/test.wav", max_frames=20000)
 
     def test_request_max_frames_forwarded(self):
         """v0.7.4: max_frames passes from Request to AudioReactiveRequest."""

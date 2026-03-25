@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.9.48] — 2026-03
+### Changed
+- **FPS-based audio frame timing** — Replaced the mathematical­ly incorrect ms-based `audio_frame_duration` slider (30–100ms) with the existing FPS combobox as sole timing source. Expanded FPS options to all professional rates: `23.976`, `25`, `29.97`, `50`, `59.94`. Frame durations are computed via Bresenham-style integer accumulation (`expected_ms - elapsed_ms`) for zero cumulative drift.
+- **PCHIP upsampling + max-pooling downsampling** — `_resample_to_fps` now uses `PchipInterpolator` (shape-preserving, no overshoot) for upsampling and vectorized envelope max-pooling for downsampling, preserving transient peak amplitude.
+- **Chunked async frame finalization** — All handlers (`animation_complete`, `audio_reactive_complete`, `error`) use `chunked_finalize_durations` with Timer-based async yielding to prevent UI freeze on large timelines.
+- **FFmpeg muxing hardening** — `Fraction`-based framerate representation, `-vsync 1` strict CFR, `-tune animation` for pixel art, conditional AAC encoding (320kbps) for `.wav` inputs with stream copy for pre-encoded audio.
+
+### Fixed
+- **Orphaned `audio_frame_duration` references** — Removed stale slider references from `sddj_settings.lua` (save/load/apply) and `sddj_request.lua` (request payload) that would crash Aseprite after the slider was removed from the UI.
+- **Handler code duplication** — Extracted `reset_anim_state()` helper, eliminating 5× duplicated 9-line cleanup blocks across `animation_complete`, `audio_reactive_complete`, and `error` handlers.
+- **Error handler UI freeze** — Replaced inline synchronous frame-duration loop in `error` handler with async `chunked_finalize_durations` for consistency and non-blocking behavior.
+- **Resampling O(n²) bottleneck** — Vectorized `np.searchsorted` calls in `_resample_to_fps` downsampling branch (was per-element Python loop).
+
 ## [0.9.47] — 2026-03
 ### Changed
 - **AnimateDiff-Lightning Default Migration** — Elevated ByteDance's AnimateDiff-Lightning to be the out-of-the-box default model, replacing the classic v1.5.3 adapter.

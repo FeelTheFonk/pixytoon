@@ -111,12 +111,40 @@ def _normalize_percentile(arr: np.ndarray, name: str = "", pct: float = 99.0) ->
 
 def _resample_to_fps(feature: np.ndarray, orig_fps: float, target_fps: float,
                      total_frames: int) -> np.ndarray:
-    """Resample a feature array from its original frame rate to target FPS."""
+    """Resample a feature array leveraging SOTA transient-preserving algorithms.
+    Upsampling uses PCHIP (Piecewise Cubic Hermite) interpolation to prevent ringing.
+    Downsampling utilizes an exact-window envelope tracker to capture sub-frame peaks."""
     if len(feature) == 0:
         return np.zeros(total_frames, dtype=np.float32)
+
+    # SOTA ZeroDivision Protection
+    target_fps = max(1e-5, float(target_fps))
+
     orig_times = np.arange(len(feature)) / orig_fps
     target_times = np.arange(total_frames) / target_fps
-    return np.interp(target_times, orig_times, feature).astype(np.float32)
+
+    # If upsampling (or holding same rate)
+    if target_fps >= orig_fps:
+        if len(feature) < 4:
+            return np.interp(target_times, orig_times, feature).astype(np.float32)
+        from scipy.interpolate import PchipInterpolator
+        return np.clip(PchipInterpolator(orig_times, feature)(target_times), 0.0, None).astype(np.float32)
+
+    # Downsampling (vectorized max-pooling to preserve onset transients)
+    dt_half = 1.0 / (2.0 * target_fps)
+    starts = np.searchsorted(orig_times, target_times - dt_half, side='left')
+    ends = np.searchsorted(orig_times, target_times + dt_half, side='right')
+    resampled = np.empty(total_frames, dtype=np.float32)
+    # For frames where the window is empty, fall back to nearest neighbor
+    empty_mask = starts == ends
+    if empty_mask.any():
+        nearest = np.argmin(np.abs(orig_times[:, None] - target_times[None, empty_mask]), axis=0)
+        resampled[empty_mask] = feature[nearest]
+    # For frames with valid windows, take the max (preserves transient peaks)
+    non_empty = np.where(~empty_mask)[0]
+    for i in non_empty:
+        resampled[i] = feature[starts[i]:ends[i]].max()
+    return resampled
 
 
 # ─────────────────────────────────────────────────────────────

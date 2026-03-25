@@ -321,7 +321,7 @@ class Request(BaseModel):
 
     def to_audio_reactive_request(self) -> AudioReactiveRequest:
         _exclude = {
-            "action", "frame_count", "seed_strategy",
+            "action", "frame_count", "frame_duration_ms", "seed_strategy",
             "prompt_template",
             "subject_type", "prompt_mode", "exclude_terms",
             # Resource / export fields
@@ -388,7 +388,8 @@ class AudioReactiveRequest(BaseModel):
     lora: Optional[LoRASpec] = None
     negative_ti: Optional[list[EmbeddingSpec]] = None
     post_process: PostProcessSpec = Field(default_factory=PostProcessSpec)
-    frame_duration_ms: int = Field(100, ge=30, le=2000)
+    # Deprecated: audio-reactive uses fps exclusively. Kept for metadata backward compat.
+    frame_duration_ms: Optional[int] = Field(None, ge=30, le=2000)
     tag_name: Optional[str] = Field(None, max_length=64)
 
     @field_validator("modulation_slots", "prompt_segments", mode="before")

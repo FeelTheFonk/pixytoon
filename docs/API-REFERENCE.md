@@ -198,10 +198,11 @@ Analyze audio first, then generate animation with per-frame parameter modulation
   "steps": 8,
   "cfg_scale": 5.0,
   "denoise_strength": 0.30,
-  "frame_duration_ms": 42,
   "post_process": { "..." }
 }
 ```
+
+> **Note**: Audio-reactive timing is driven exclusively by `fps`. The `frame_duration_ms` field is deprecated for audio-reactive requests and ignored if present.
 
 > **Modulation Priority**: If you provide multiple logic sources for the same target, they are evaluated in this order (highest overrides lowest): `expressions` > `modulation_preset` > `modulation_slots`.
 

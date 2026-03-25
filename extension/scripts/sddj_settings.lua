@@ -59,7 +59,7 @@ function PT.save_settings()
     audio_cfg          = d.audio_cfg,
     audio_denoise      = d.audio_denoise,
     audio_stems_enable = d.audio_stems_enable,
-    audio_frame_duration = d.audio_frame_duration,
+
     audio_max_frames   = d.audio_max_frames,
     audio_tag          = d.audio_tag,
     audio_mod_preset   = d.audio_mod_preset,
@@ -169,7 +169,7 @@ function PT.apply_settings(s)
     "anim_steps", "anim_cfg", "anim_frames", "anim_duration", "anim_denoise", "anim_freeinit_iters",
     "randomness",
     "audio_steps", "audio_cfg", "audio_denoise",
-    "audio_frame_duration", "audio_max_frames", "audio_freeinit_iters",
+    "audio_max_frames", "audio_freeinit_iters",
     "mod_slot_count",
     "mod1_min", "mod1_max", "mod1_attack", "mod1_release",
     "mod2_min", "mod2_max", "mod2_attack", "mod2_release",
@@ -208,8 +208,7 @@ function PT.apply_settings(s)
   PT.dlg:modify{ id = "audio_steps", label = "Steps (" .. d.audio_steps .. ")" }
   PT.dlg:modify{ id = "audio_max_frames",
     label = d.audio_max_frames == 0 and "Max Frames (0=all)" or ("Max Frames (" .. d.audio_max_frames .. ")") }
-  PT.dlg:modify{ id = "audio_frame_duration",
-    label = "Frame (" .. d.audio_frame_duration .. "ms)" }
+
   PT.dlg:modify{ id = "mod_slot_count", label = "Slots (" .. d.mod_slot_count .. ")" }
   -- Sync max frames label
   if s.audio_max_frames then
@@ -217,11 +216,7 @@ function PT.apply_settings(s)
     PT.dlg:modify{ id = "audio_max_frames",
       label = v == 0 and "Max Frames (0=all)" or ("Max Frames (" .. v .. ")") }
   end
-  -- Sync frame duration label
-  if s.audio_frame_duration then
-    PT.dlg:modify{ id = "audio_frame_duration",
-      label = "Frame (" .. s.audio_frame_duration .. "ms)" }
-  end
+
   -- Mode label hint
   if s.mode then
     if s.mode == "inpaint" then

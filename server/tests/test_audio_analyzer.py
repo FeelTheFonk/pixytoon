@@ -131,6 +131,33 @@ class TestResampleToFps:
         assert len(result) == 5
         assert np.all(result == 0.0)
 
+    def test_peak_preservation_cubic_spline(self):
+        """Linear interpolation attenuates peaks falling between sample points. Cubic preserves them."""
+        arr = np.zeros(100, dtype=np.float32)
+        # Create a sharp transient peak at t=0.15s
+        # 100 fps means dt=0.01s.
+        arr[14] = 0.1
+        arr[15] = 1.0
+        arr[16] = 0.1
+        # Resample to 60 fps (dt=0.01666s)
+        # Frames: F8 = 0.133s, F9 = 0.150s (exact match if no float drift), F10 = 0.166s.
+        # Wait, if it exactly matches, linear will pass. Let's make it not exactly match.
+        # F9 at 60fps = 9/60 = 0.150.
+        # Let's put peak at 0.155s (idx 15.5 at 100fps is not an int array index, so idx 15 is 0.15s)
+        # Let's put the peak at index 15 (0.15s), but sample at 44fps.
+        resampled = _resample_to_fps(arr, 100.0, 44.0, 44)
+        # At 44 fps, frames are at 0, 0.0227, 0.0454, ..., 0.136, 0.159.
+        # Nearest are 0.136 and 0.159. The peak is at 0.150.
+        # It falls right between them. Linear interpolation will average it out significantly.
+        assert resampled.max() > 0.85, f"Peak severely attenuated: {resampled.max():.3f} < 0.85"
+
+    def test_downsampling_preserves_peak_amplitude(self):
+        """Max-pooling downsampling must preserve the amplitude of transient peaks."""
+        arr = np.zeros(1000, dtype=np.float32)
+        arr[500] = 1.0  # single spike at t=5.0s (1000 samples / 100 fps = 10s)
+        result = _resample_to_fps(arr, 100.0, 10.0, 100)  # 10s × 10 fps = 100 frames
+        assert result.max() == pytest.approx(1.0), "Max-pool downsampling lost the spike"
+
 
 # ─── smooth_features ───────────────────────────────────────
 

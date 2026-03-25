@@ -575,7 +575,7 @@ local function build_tab_audio()
   dlg:combobox{
     id = "audio_fps",
     label = "FPS",
-    options = { "4", "8", "12", "15", "24", "30", "60" },
+    options = { "4", "8", "12", "15", "23.976", "24", "25", "29.97", "30", "50", "59.94", "60" },
     option = "24",
   }
   dlg:slider{
@@ -598,15 +598,7 @@ local function build_tab_audio()
     min = 20, max = 100, value = 50,
     onchange = slider_label("audio_denoise", "Strength (%.2f)", 100.0),
   }
-  dlg:slider{
-    id = "audio_frame_duration",
-    label = "Frame (42ms)",
-    min = 30, max = 2000, value = 42,
-    onchange = function()
-      dlg:modify{ id = "audio_frame_duration",
-        label = "Frame (" .. dlg.data.audio_frame_duration .. "ms)" }
-    end,
-  }
+
   dlg:slider{
     id = "audio_max_frames",
     label = "Max Frames (0=all)",

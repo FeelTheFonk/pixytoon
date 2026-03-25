@@ -272,7 +272,7 @@ function PT.build_audio_reactive_request()
     cfg_scale         = d.audio_cfg / 10.0,
     clip_skip         = d.clip_skip,
     denoise_strength  = d.audio_denoise / 100.0,
-    frame_duration_ms = d.audio_frame_duration,
+
     tag_name          = tag_name,
     post_process      = PT.build_post_process(),
   }

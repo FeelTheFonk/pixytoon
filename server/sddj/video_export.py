@@ -9,6 +9,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from fractions import Fraction
 
 log = logging.getLogger("sddj.video_export")
 
@@ -150,18 +151,25 @@ def export_mp4(
     # Output path
     output_path = frame_dir / "video.mp4"
 
+    # Ensure SOTA mathematically exact framerate representation (e.g., 60000/1000)
+    fps_frac = Fraction(fps).limit_denominator(100000)
+    fps_str = f"{fps_frac.numerator}/{fps_frac.denominator}"
+
     # Build ffmpeg command
     cmd = [
         ffmpeg,
         "-y",  # overwrite
         "-start_number", str(start_number),
-        "-framerate", str(fps),
+        "-framerate", fps_str,
         "-i", frame_pattern,
     ]
 
     # Add audio input
     if audio_path is not None:
         cmd.extend(["-i", str(audio_path)])
+
+    # Force strict constant frame rate output to prevent drift
+    cmd.extend(["-vsync", "1"])
 
     # Video filter chain:
     # 1. colorchannelmixer=aa=1 — force alpha to opaque (transparent frames → black)
@@ -179,6 +187,7 @@ def export_mp4(
             "-c:v", "libx264",
             "-preset", preset,
             "-crf", str(crf),
+            "-tune", "animation",
         ])
 
     # Pixel format for compatibility
@@ -186,11 +195,18 @@ def export_mp4(
 
     # Audio codec
     if audio_path is not None:
-        cmd.extend([
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-shortest",
-        ])
+        # SOTA Optimization: MP4 broadly supports AAC. Copying raw .wav PCM breaks browsers/QT.
+        if str(audio_path).lower().endswith(".wav"):
+            cmd.extend([
+                "-c:a", "aac",
+                "-b:a", "320k",
+                "-shortest",
+            ])
+        else:
+            cmd.extend([
+                "-c:a", "copy",
+                "-shortest",
+            ])
 
     # Fast start for web streaming
     cmd.extend(["-movflags", "+faststart"])
