@@ -1,57 +1,66 @@
 # SDDj
 
-Local SOTA generation and animation for Aseprite via Stable Diffusion + AnimateDiff.
+Local SOTA image generation and animation for Aseprite via Stable Diffusion + AnimateDiff.
 
 ---
 
 ## Quick Start
 
 ```powershell
-setup.ps1         <- One-click: install deps, download models, build extension
-start.ps1         <- One-click: launch server + Aseprite
+.\setup.ps1       # Install deps, download models, build extension
+.\start.ps1       # Launch server + Aseprite (100% offline)
 ```
 
 ## Features
 
-- **Generation**: Complete txt2img, img2img, inpaint, and ControlNet (OpenPose, Canny, Scribble, Lineart) pipelines.
-- **Animation**: Frame chaining and AnimateDiff-Lightning integration for rapid temporal consistency.
-- **Audio Reactivity**: Built-in DSP engine mapping audio features (RMS, transients, spectral bands, BPM) to diffusion parameters for Deforum-style audio-reactive animations.
-- **Post-Processing**: True pixel-art pipeline (background removal, strict NEAREST downscaling, CIELAB color quantization, and dithering).
-- **Offline & Private**: 100% local execution. No telemetry, no cloud dependencies.
+- **txt2img · img2img · inpaint** — full generation pipeline from text or existing artwork
+- **ControlNet** — OpenPose, Canny, Scribble, Lineart spatial conditioning
+- **AnimateDiff** — temporal consistency for multi-frame animation (Chain + AnimateDiff-Lightning)
+- **Audio Reactivity** — DSP engine mapping audio features to diffusion parameters (Deforum-style)
+- **Post-Processing** — pixel-art pipeline: background removal, NEAREST downscale, CIELAB quantization, dithering
+- **100% Offline** — no telemetry, no cloud, no API keys
 
-## Architecture & Performance
+## Architecture
 
-SDDj uses a dual architecture: a lightweight Lua UI running inside Aseprite, communicating via WebSockets to a heavyweight FastAPI/PyTorch backend.
+```mermaid
+graph LR
+    A[Aseprite<br>Lua UI] <-->|WebSocket<br>JSON + Base64| B[SDDj Server<br>FastAPI + PyTorch]
+    B --> C[SD 1.5 + Hyper-SD]
+    C --> D[Post-Processing]
+    D -->|base64 PNG| A
+```
 
-- **Speed**: Accelerated natively via Hyper-SD, DeepCache, and `torch.compile` (Triton). 
-- **Quality**: Enhanced via FreeU v2.
-- **Memory**: Optimized with Attention Slicing (SDP/FlashAttention2), VAE Tiling, and FP16 inference.
+Lightweight Lua frontend inside Aseprite communicates over WebSockets to a Python backend handling all ML inference and DSP operations. See [Architecture](docs/REFERENCE.md#architecture) for detailed diagrams.
 
-See **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** for detailed Mermaid diagrams of the system design and DSP routing.
+## Performance Stack
 
-## Documentation Suite
+| Optimization | Effect |
+|-------------|--------|
+| **Hyper-SD** | 8-step inference (vs 25+ standard) |
+| **DeepCache** | Feature reuse across steps (~2× faster) |
+| **FreeU v2** | Quality enhancement at zero cost |
+| **torch.compile** | Triton UNet codegen (~20-30% faster) |
+| **SDP / FlashAttention2** | Memory-efficient native attention |
+| **TF32** | ~15-30% free speedup on Ampere+ GPUs |
 
-Everything you need to master SDDj is detailed in the `docs/` folder:
+## Documentation
 
-| Document | Core Focus |
-|----------|------------|
-| **[Guide](docs/GUIDE.md)** | Getting started, core modes, generation parameters, and post-processing pipeline. |
-| **[Audio Guide](docs/AUDIO-REACTIVITY.md)** | How to use the audio-reactivity system, auto-calibration, and prompt scheduling. |
-| **[Audio Reference](docs/AUDIO-REFERENCE.md)** | Exhaustive list of modulation sources/targets, math expressions, and motion presets. |
-| **[API Reference](docs/API-REFERENCE.md)** | Complete JSON WebSocket protocol specification and available endpoints. |
-| **[Cookbook](docs/COOKBOOK.md)** | Tested generation recipes for sprites, portraits, environments, and animations. |
-| **[Configuration](docs/CONFIGURATION.md)** | Complete reference for all `SDDJ_*` environment variables. |
-| **[Troubleshooting](docs/TROUBLESHOOTING.md)** | Solutions for OOM errors, compilation issues, and connection timeouts. |
+| Document | Purpose |
+|----------|---------|
+| **[Guide](docs/GUIDE.md)** | Setup, generation modes, parameters, animation, post-processing, performance |
+| **[Audio](docs/AUDIO.md)** | Audio-reactive animation: modulation matrix, presets, expressions, motion |
+| **[Recipes](docs/RECIPES.md)** | Parameter matrix, workflow techniques, palette reference, anti-patterns |
+| **[Reference](docs/REFERENCE.md)** | Architecture, WebSocket API, environment variables |
+| **[Sources](docs/SOURCES.md)** | Scientific papers and technical references |
 
 ## Requirements
 
-> **Windows Only**: Relies on PowerShell 7 and Visual Studio 2022 C++ workloads which restrict operation to Windows environments.
+> **Windows only** — relies on PowerShell 7 and Visual Studio 2022 C++ workloads.
 
-- **GPU**: NVIDIA >= 4GB VRAM (txt2img/audio at 512x512). 8GB+ recommended for AnimateDiff/ControlNet
+- **GPU**: NVIDIA ≥ 4 GB VRAM (512×512). 8 GB+ for AnimateDiff / ControlNet
 - **CUDA**: 12.8
-- **Python**: 3.11-3.13
-- **uv**: Package manager
-- **Visual Studio 2022**: C++ Desktop Development workload (for torch.compile / Triton)
+- **Python**: 3.11–3.13
+- **uv**: package manager
 
 ## License
 

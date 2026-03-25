@@ -28,7 +28,7 @@ SDDj is split into two halves that communicate over WebSockets:
 * `server/` — Python backend (FastAPI, PyTorch, Diffusers, Librosa). Does the heavy lifting.
 * `extension/` — Lua frontend (Aseprite scripting API). Handles the UI, image extraction, and canvas injection.
 
-Detailed architecture diagrams are available in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+Detailed architecture diagrams are available in **[docs/REFERENCE.md](docs/REFERENCE.md#architecture)**.
 
 ## Python Code Style
 

@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.9.52] — 2026-03
+### Added
+- **Pinnacle Documentation Overhaul** — Complete rewrite and restructuring of the entire documentation suite (reduction from 8 files / 122 KB to 5 files / 50 KB). 
+  - `README.md`: Lean, punchy landing page.
+  - `docs/GUIDE.md`: Unified user guide (setup, generation, animation, performance) + inline troubleshooting + system architecture.
+  - `docs/AUDIO.md`: Unified audio reactivity guide combining previous concepts and reference tables into coherent parameter matrices + expression guides.
+  - `docs/REFERENCE.md`: Technical reference combining WebSocket API protocol, Configuration (all env vars), and Architecture details.
+  - `docs/RECIPES.md`: Condensed cookbook transforming repetitive text recipes into a single high-density parameter matrix + focused workflow techniques + anti-patterns.
+  - `docs/SOURCES.md`: Centralized list of all scientific papers, techniques, algorithms, and models powering SDDj (Hyper-SD, DeepCache, FreeU v2, FlashAttention, Demucs, librosa, etc.).
+- **New Modulation Presets**: Added `voyage_serene`, `voyage_exploratory`, `voyage_dramatic`, `voyage_psychedelic`, `intelligent_drift`, and `reactive_pause` to `AUDIO.md` for zero-delta with the codebase.
+- **Reference Completion**: Added 7 previously undocumented environment variables (`SDDJ_COMPILE_DYNAMIC`, `SDDJ_ENABLE_TF32`, `SDDJ_ENABLE_LORA_HOTSWAP`, `SDDJ_MAX_LORA_RANK`, `SDDJ_ENABLE_CPU_OFFLOAD`, `SDDJ_VRAM_MIN_FREE_MB`, `SDDJ_QUANTIZE_UNET`) to the Configuration section in `REFERENCE.md`.
+
+### Removed
+- Deprecated legacy documentation files: `COOKBOOK.md`, `AUDIO-REACTIVITY.md`, `AUDIO-REFERENCE.md`, `API-REFERENCE.md`, `CONFIGURATION.md`, `TROUBLESHOOTING.md`, `ARCHITECTURE.md`.
+
 ## [0.9.51] — 2026-03
 ### Fixed
 - **Cancel race condition → `_generic_mt_newindex` crash** — Clicking Cancel during audio-reactive or animation generation left pending frames in the response queue, which continued processing via `_drain_next` and attempted `app.transaction` on destroyed Aseprite objects (sprite/layer/cel). 8-point defense-in-depth fix:
