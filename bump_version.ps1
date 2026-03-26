@@ -1,57 +1,51 @@
-# ─────────────────────────────────────────────────────────────
-# SDDj — Version Bump (Single Source of Truth)
-#
-# Usage:  .\bump_version.ps1 0.9.54
-#
-# Updates version in all 3 canonical locations:
-#   1. server/pyproject.toml       (Python package)
-#   2. extension/package.json      (Aseprite extension)
-#   3. extension/scripts/sddj_state.lua  (Lua runtime)
-#
-# Python __init__.py reads from importlib.metadata at runtime,
-# so it does NOT need manual bumping.
-# ─────────────────────────────────────────────────────────────
+#!/usr/bin/env pwsh
+#Requires -Version 7.0
 
+[CmdletBinding()]
 param(
     [Parameter(Mandatory=$true, Position=0)]
     [ValidatePattern('^\d+\.\d+\.\d+(-\w+)?$')]
     [string]$Version
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$root = $PSScriptRoot
 
-# ── 1. pyproject.toml ────────────────────────────────────────
-$pyproject = Join-Path $root "server/pyproject.toml"
-$content = Get-Content $pyproject -Raw
-$content = $content -replace '(?m)^version\s*=\s*"[^"]+"', "version = ""$Version"""
-Set-Content $pyproject $content -NoNewline
+$Root = [System.IO.Path]::GetFullPath($PSScriptRoot)
+
+# ── 1. pyproject.toml ──
+$PyProject = Join-Path -Path (Join-Path -Path $Root -ChildPath "server") -ChildPath "pyproject.toml"
+$Content = Get-Content -Path $PyProject -Raw
+$Content = $Content -replace '(?m)^version\s*=\s*"[^"]+"', "version = ""$Version"""
+Set-Content -Path $PyProject -Value $Content -NoNewline
 Write-Host "[OK] pyproject.toml -> $Version" -ForegroundColor Green
 
-# ── 2. extension/package.json ────────────────────────────────
-$pkgjson = Join-Path $root "extension/package.json"
-$json = Get-Content $pkgjson -Raw | ConvertFrom-Json
-$json.version = $Version
-$json | ConvertTo-Json -Depth 10 | Set-Content $pkgjson
+# ── 2. package.json ──
+$PkgJson = Join-Path -Path (Join-Path -Path $Root -ChildPath "extension") -ChildPath "package.json"
+$Content = Get-Content -Path $PkgJson -Raw
+# Strict multiline Lookaround replacement keeping exact spacing and trailing characters
+$Content = $Content -replace '(?m)^(\s*"version"\s*:\s*)"[^"]+"(.*)$', "`$1""$Version""`$2"
+Set-Content -Path $PkgJson -Value $Content -NoNewline
 Write-Host "[OK] package.json   -> $Version" -ForegroundColor Green
 
-# ── 3. extension/scripts/sddj_state.lua ─────────────────────
-$lua = Join-Path $root "extension/scripts/sddj_state.lua"
-$content = Get-Content $lua -Raw
-$content = $content -replace 'PT\.VERSION\s*=\s*"[^"]+"', "PT.VERSION = ""$Version"""
-Set-Content $lua $content -NoNewline
+# ── 3. sddj_state.lua ──
+$ScriptsDir = Join-Path -Path (Join-Path -Path $Root -ChildPath "extension") -ChildPath "scripts"
+$Lua = Join-Path -Path $ScriptsDir -ChildPath "sddj_state.lua"
+$Content = Get-Content -Path $Lua -Raw
+$Content = $Content -replace 'PT\.VERSION\s*=\s*"[^"]+"', "PT.VERSION = ""$Version"""
+Set-Content -Path $Lua -Value $Content -NoNewline
 Write-Host "[OK] sddj_state.lua -> $Version" -ForegroundColor Green
 
-# ── 4. uv.lock (regenerate) ─────────────────────────────────
-Push-Location (Join-Path $root "server")
+# ── 4. uv.lock ──
+Push-Location -Path (Join-Path -Path $Root -ChildPath "server")
 try {
     uv lock --quiet 2>$null
     Write-Host "[OK] uv.lock        -> synced" -ForegroundColor Green
 } catch {
     Write-Host "[WARN] uv lock failed (run manually)" -ForegroundColor Yellow
+} finally {
+    Pop-Location
 }
-Pop-Location
 
-Write-Host ""
-Write-Host "Version bumped to $Version across all files." -ForegroundColor Cyan
+Write-Host "`nVersion bumped to $Version across all files." -ForegroundColor Cyan
 Write-Host "Next: update CHANGELOG.md, then: git add -A && git commit -m 'v$Version' && git tag v$Version && git push --follow-tags"

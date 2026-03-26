@@ -1,6 +1,6 @@
 [project]
 name = "sddj-server"
-version = "0.9.55"
+version = "0.9.56"
 description = "Local SOTA generation and animation server for Aseprite via Stable Diffusion"
 requires-python = ">=3.11,<3.14"
 license = "MIT"
@@ -39,8 +39,6 @@ dependencies = [
     "simpleeval>=1.0.5,<2.0",
     "soundfile>=0.12",
     "pyloudnorm>=0.1",
-    # QR Code generation (ControlNet QR Code Monster)
-    "qrcode[pil]>=7.4,<8.0",
 ]
 
 [project.optional-dependencies]

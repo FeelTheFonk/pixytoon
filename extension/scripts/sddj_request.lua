@@ -37,8 +37,6 @@ end
 function PT.attach_source_image(req)
   local mode = req.mode or "txt2img"
   if mode == "img2img" or mode:find("controlnet_") then
-    -- QR Code: control image generated server-side from qr_content
-    if mode == "controlnet_qrcode" then return true end
     local b64 = PT.capture_active_layer()
     if not b64 then
       app.alert("No active layer to use as source.")

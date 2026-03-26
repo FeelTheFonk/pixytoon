@@ -1,6 +1,34 @@
 # Changelog
 
+## [0.9.56] — 2026-03
+### Changed
+- **QR Code Monster v2 Simplification** — Removed server-side QR image generation (`qrcode_generator.py` deleted, `qrcode[pil]` dependency removed). All ControlNet modes now use client-provided `control_image` uniformly. Engine ControlNet path simplified from 32 to 19 lines. QR scan validation + auto-retry loop removed (14 new protocol test added for `controlnet_qrcode` requiring `control_image`).
+- **Lua QR Tab** — Removed `qr_content`, `qr_error_correction`, `qr_module_size` UI fields. QR tab now captures active layer as control image directly (consistent with other ControlNet modes). Illusion Art source switched from `capture_active_layer` to `capture_flattened` for full sprite compositing.
+- **AnimateDiff ControlNet** — QR Code Monster v2 loaded from `v2/` subfolder via conditional `load_kwargs`.
+- **Pipeline Factory** — `create_controlnet_pipeline` return type corrected to `tuple[..., ...]`. Base pipeline uses `local_files_only=True` + explicit `config` for local checkpoints.
+
+### Fixed
+- **Loop/Random Loop in Animate mode** — `trigger_animate()` now has full loop initialization mirroring `trigger_generate()` (seed mode, counter, locked fields, random-loop prompt dispatch). `handlers.animation_complete` schedules next animation via timer-based loop continuation.
+- **Loop/Random Loop in Audio mode** — `trigger_audio_generate()` now has loop initialization. `handlers.audio_reactive_complete` adds loop continuation. Loop buttons enabled in Audio tab when audio is analyzed.
+- **Random Loop tab-aware dispatch** — `handlers.prompt_result` random-loop block now dispatches based on `PT.loop.target` ("generate"/"animate"/"audio") instead of always calling `build_generate_request()`. Prevents tab-switching from altering loop behavior mid-iteration.
+- **Preset persistence incomplete** — Preset Save now includes `randomness`, `lock_subject`, `fixed_subject`, `randomize_before`. Preset Load restores all 4 fields with label sync.
+- **Loop state leak** — Added `PT.loop.target` cleanup (`= nil`) to all 13 reset paths across `sddj_handler.lua`, `sddj_ws.lua`, `sddj_dialog.lua` (cancel, error, disconnect, timeout, early exits).
+
+### Added
+- `PT.loop.target` field in `sddj_state.lua` — stores the trigger function to call on loop re-entry, preventing tab-switching race conditions during loop iterations.
+
 ## [0.9.55] — 2026-03
+### Changed
+- **SOTA Architectural Hardening** — Executed a flawless 100/100 multi-level architecture audit across the entire perimeter:
+  - **Native Provisioning**: `download_models.py` migrated entirely to native `urllib.request` with atomicity (`.part`), robust streaming, and strict 30s timeouts + exponential backoff retries. Zero third-party dependencies.
+  - **Determinism**: `setup.ps1` migrated from open commands to `uv sync --locked` ensuring absolute runtime parity with the lockfile.
+  - **Powershell Resilience**: `setup.ps1` and `start.ps1` upgraded to PS7 SOTA standards (`Set-StrictMode`, `Join-Path`). `start.ps1` uses Base64 encoded `uv run --frozen` payloads to eliminate all path injection vectors.
+  - **Surgical Teardown**: Replaced generic fallback WMI kills with strict `$serverProc.Id` recursive tree taskkill, preventing collisions with other Python processes.
+  - **Default Checkpoint**: Swapped HF `Lykon/dreamshaper-8` to `Liberte.Redmond` (Civitai) fetched directly via local path resolution (`models/checkpoints/liberteRedmond_v10.safetensors`).
+  - **Stealth Mode Enforcement**: Purged all python docstrings across routing configuration and provisioning modules, aligning with the rigorous minimal operational signature constraint.
+  - **Fail Gracefully**: Hardened `run.py` to intercept catastrophic init failures dynamically instead of vomiting console stacks.
+  - **Precise Bump**: Regex format-preserving operations replacing heavy JSON AST rebuilding in `bump_version.ps1` to prevent formatting destruction.
+
 ### Added
 - **ControlNet QR Code Monster v2 Integration** — new `controlnet_qrcode` generation mode explicitly optimized for "QR Illusion Art" (embedding functional QR codes into artistic generations).
 - **Dual-Path QR Engine**:

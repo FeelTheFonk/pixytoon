@@ -82,6 +82,9 @@ class TestGenerateRequest:
     def test_controlnet_requires_control_image(self):
         with pytest.raises(ValidationError, match="control_image"):
             GenerateRequest(prompt="test", mode="controlnet_canny")
+        # QR Code Monster also requires control_image (user-provided)
+        with pytest.raises(ValidationError, match="control_image"):
+            GenerateRequest(prompt="test", mode="controlnet_qrcode")
 
     def test_valid_img2img(self):
         req = GenerateRequest(prompt="test", mode="img2img", source_image="data")

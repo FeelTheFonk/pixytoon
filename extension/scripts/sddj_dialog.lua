@@ -126,6 +126,10 @@ local function build_tab_generate()
         clip_skip = dlg.data.clip_skip,
         denoise_strength = dlg.data.denoise / 100.0,
         post_process = PT.build_post_process(),
+        randomness = dlg.data.randomness,
+        lock_subject = dlg.data.lock_subject,
+        fixed_subject = dlg.data.fixed_subject,
+        randomize_before = dlg.data.randomize_before,
       }
       PT.send({ action = "save_preset", preset_name = pname, preset_data = preset_data })
     end,
@@ -952,13 +956,6 @@ end
 local function build_tab_qrcode()
   local dlg = PT.dlg
 
-  dlg:entry{
-    id = "qr_content",
-    label = "URL / Text",
-    text = "",
-    hexpand = true,
-  }
-
   -- Source image: capture active layer for img2img QR illusion blending
   dlg:check{
     id = "qr_use_source",
@@ -971,23 +968,6 @@ local function build_tab_qrcode()
     label = "Denoise (0.75)",
     min = 5, max = 100, value = 75,
     onchange = slider_label("qr_denoise", "Denoise (%.2f)", 100.0),
-  }
-
-  dlg:combobox{
-    id = "qr_error_correction",
-    label = "Error Corr.",
-    options = { "H", "Q", "M", "L" },
-    option = "H",
-  }
-
-  dlg:slider{
-    id = "qr_module_size",
-    label = "Module (16px)",
-    min = 4, max = 32, value = 16,
-    onchange = function()
-      dlg:modify{ id = "qr_module_size",
-        label = "Module (" .. dlg.data.qr_module_size .. "px)" }
-    end,
   }
 
   dlg:slider{
@@ -1009,13 +989,6 @@ local function build_tab_qrcode()
     label = "Guide End (0.80)",
     min = 0, max = 100, value = 80,
     onchange = slider_label("qr_guidance_end", "Guide End (%.2f)", 100.0),
-  }
-
-  dlg:combobox{
-    id = "qr_size",
-    label = "Output Size",
-    options = { "768x768", "512x512", "1024x1024" },
-    option = "768x768",
   }
 
   dlg:slider{
@@ -1052,13 +1025,14 @@ function PT.trigger_generate()
   if not is_loop then
     PT.finalize_sequence()
   end
-  -- Initialize loop state
-  if is_loop then
+  -- Initialize loop state (only on first entry, not on re-entry)
+  if is_loop and not PT.loop.mode then
     PT.loop.mode = true
     PT.loop.counter = 0
     PT.loop.seed_mode = d.loop_seed_combo or "random"
     PT.loop.random_mode = d.random_loop_check or false
     PT.loop.locked_fields = PT.build_locked_fields()
+    PT.loop.target = "generate"
     -- Reset seed to -1 for first iteration when random mode
     if PT.loop.seed_mode == "random" then
       dlg:modify{ id = "seed", text = "-1" }
@@ -1076,8 +1050,8 @@ function PT.trigger_generate()
   end
 
   local req = PT.build_generate_request()
-  if not req then PT.loop.mode = false; PT.loop.random_mode = false; return end
-  if not PT.attach_source_image(req) then PT.loop.mode = false; PT.loop.random_mode = false; return end
+  if not req then PT.loop.mode = false; PT.loop.random_mode = false; PT.loop.target = nil; return end
+  if not PT.attach_source_image(req) then PT.loop.mode = false; PT.loop.random_mode = false; PT.loop.target = nil; return end
 
   PT.state.generating = true
   PT.state.gen_step_start = os.clock()
@@ -1096,17 +1070,49 @@ end
 function PT.trigger_animate()
   if PT.state.animating or PT.state.generating then return end
   local dlg = PT.dlg
+  local d = dlg.data
+  local is_loop = d.loop_check or d.random_loop_check
+
+  -- Initialize loop state (only on first entry, not on re-entry)
+  if is_loop and not PT.loop.mode then
+    PT.loop.mode = true
+    PT.loop.counter = 0
+    PT.loop.seed_mode = d.loop_seed_combo or "random"
+    PT.loop.random_mode = d.random_loop_check or false
+    PT.loop.locked_fields = PT.build_locked_fields()
+    PT.loop.target = "animate"
+    if PT.loop.seed_mode == "random" then
+      dlg:modify{ id = "seed", text = "-1" }
+    end
+  end
+
+  -- Random loop: generate prompt first
+  if PT.loop.random_mode and not PT.loop.mode then
+    -- First entry with random loop
+  elseif PT.loop.random_mode and PT.loop.mode and PT.loop.counter == 0 then
+    dlg:modify{ id = "action_btn", text = "LOOPING...", enabled = false }
+    dlg:modify{ id = "cancel_btn", enabled = true }
+    PT.loop.counter = PT.loop.counter + 1
+    PT.update_status("Random Loop #" .. PT.loop.counter .. " — Generating prompt...")
+    PT.send({ action = "generate_prompt", locked_fields = PT.loop.locked_fields, randomness = dlg.data.randomness })
+    return
+  end
 
   local req = PT.build_animation_request()
-  if not req then return end
-  if not PT.attach_source_image(req) then return end
+  if not req then PT.loop.mode = false; PT.loop.random_mode = false; PT.loop.target = nil; return end
+  if not PT.attach_source_image(req) then PT.loop.mode = false; PT.loop.random_mode = false; PT.loop.target = nil; return end
 
   PT.state.animating = true
   PT.state.gen_step_start = os.clock()
   PT.start_gen_timeout()
-  dlg:modify{ id = "action_btn", enabled = false }
+  dlg:modify{ id = "action_btn", text = PT.loop.mode and "LOOPING..." or "ANIMATE", enabled = false }
   dlg:modify{ id = "cancel_btn", enabled = true }
-  PT.update_status("Animating...")
+  if PT.loop.mode then
+    if PT.loop.counter == 0 then PT.loop.counter = 1 end
+    PT.update_status("Animate Loop #" .. PT.loop.counter .. " — Animating...")
+  else
+    PT.update_status("Animating...")
+  end
   PT.send(req)
 end
 
@@ -1124,18 +1130,47 @@ function PT.trigger_audio_generate()
     return
   end
 
+  local is_loop = d.loop_check or d.random_loop_check
+  -- Initialize loop state (only on first entry, not on re-entry)
+  if is_loop and not PT.loop.mode then
+    PT.loop.mode = true
+    PT.loop.counter = 0
+    PT.loop.seed_mode = d.loop_seed_combo or "random"
+    PT.loop.random_mode = d.random_loop_check or false
+    PT.loop.locked_fields = PT.build_locked_fields()
+    PT.loop.target = "audio"
+    if PT.loop.seed_mode == "random" then
+      dlg:modify{ id = "seed", text = "-1" }
+    end
+  end
+
+  -- Random loop first entry: generate prompt first
+  if PT.loop.random_mode and PT.loop.mode and PT.loop.counter == 0 then
+    dlg:modify{ id = "action_btn", text = "LOOPING...", enabled = false }
+    dlg:modify{ id = "cancel_btn", enabled = true }
+    PT.loop.counter = PT.loop.counter + 1
+    PT.update_status("Random Loop #" .. PT.loop.counter .. " — Generating prompt...")
+    PT.send({ action = "generate_prompt", locked_fields = PT.loop.locked_fields, randomness = dlg.data.randomness })
+    return
+  end
+
   local req = PT.build_audio_reactive_request()
-  if not req then return end
-  if not PT.attach_source_image(req) then return end
+  if not req then PT.loop.mode = false; PT.loop.random_mode = false; PT.loop.target = nil; return end
+  if not PT.attach_source_image(req) then PT.loop.mode = false; PT.loop.random_mode = false; PT.loop.target = nil; return end
 
   PT.audio.generating = true
   PT.state.animating = true
   PT.state.gen_step_start = os.clock()
   local audio_timeout = 180 + (PT.audio.total_frames * 15)
   PT.start_gen_timeout(math.max(PT.cfg.GEN_TIMEOUT, audio_timeout))
-  dlg:modify{ id = "action_btn", enabled = false }
+  dlg:modify{ id = "action_btn", text = PT.loop.mode and "LOOPING..." or "AUDIO GEN", enabled = false }
   dlg:modify{ id = "cancel_btn", enabled = true }
-  PT.update_status("Generating audio animation...")
+  if PT.loop.mode then
+    if PT.loop.counter == 0 then PT.loop.counter = 1 end
+    PT.update_status("Audio Loop #" .. PT.loop.counter .. " — Generating...")
+  else
+    PT.update_status("Generating audio animation...")
+  end
   PT.send(req)
 end
 
@@ -1143,41 +1178,42 @@ function PT.trigger_qr_generate()
   if PT.state.generating or PT.state.animating then return end
   local dlg = PT.dlg
   local d = dlg.data
-  local content = d.qr_content or ""
-  if content == "" then
-    app.alert("Enter a URL or text to encode.")
+
+  -- Capture active layer as control image
+  local control_b64 = PT.capture_active_layer()
+  if not control_b64 then
+    app.alert("No active layer to use as control image.")
     return
   end
-  local qr_w, qr_h = (d.qr_size or "768x768"):match("(%d+)x(%d+)")
+
   local use_source = d.qr_use_source or false
+  local w, h = PT.parse_size()
   local req = {
     action                        = "generate",
     mode                          = "controlnet_qrcode",
     prompt                        = d.prompt,
     negative_prompt               = d.negative_prompt,
-    width                         = tonumber(qr_w) or 768,
-    height                        = tonumber(qr_h) or 768,
+    width                         = w,
+    height                        = h,
     seed                          = PT.parse_seed(),
     steps                         = d.qr_steps or 20,
     cfg_scale                     = d.qr_cfg / 10.0,
     clip_skip                     = d.clip_skip,
     denoise_strength              = use_source and (d.qr_denoise / 100.0) or 1.0,
-    qr_content                    = content,
-    qr_error_correction           = d.qr_error_correction or "H",
-    qr_module_size                = d.qr_module_size or 16,
+    control_image                 = control_b64,
     controlnet_conditioning_scale = d.qr_conditioning_scale / 100.0,
     control_guidance_start        = d.qr_guidance_start / 100.0,
     control_guidance_end          = d.qr_guidance_end / 100.0,
     post_process                  = PT.build_post_process(),
   }
-  -- Illusion art: capture active layer as source image
+  -- Illusion art: capture flattened sprite as source image for img2img blend
   if use_source then
-    local b64 = PT.capture_active_layer()
-    if not b64 then
-      app.alert("No active layer to use as source for QR illusion.")
+    local src_b64 = PT.capture_flattened()
+    if not src_b64 then
+      app.alert("No sprite to use as source for illusion art.")
       return
     end
-    req.source_image = b64
+    req.source_image = src_b64
   end
   PT.attach_lora(req)
   PT.attach_neg_ti(req)
@@ -1187,7 +1223,7 @@ function PT.trigger_qr_generate()
   PT.start_gen_timeout()
   dlg:modify{ id = "action_btn", text = "QR GENERATING...", enabled = false }
   dlg:modify{ id = "cancel_btn", enabled = true }
-  PT.update_status("Generating QR Code...")
+  PT.update_status("Generating illusion art...")
   PT.send(req)
 end
 
@@ -1201,8 +1237,9 @@ function PT.update_action_button(tab)
     tab_audio = "AUDIO GEN",
   }
   PT.dlg:modify{ id = "action_btn", text = texts[tab] or "GENERATE" }
-  -- Loop controls: not supported in audio/QR mode
-  local loop_enabled = (tab ~= "tab_audio" and tab ~= "tab_qr")
+  -- Loop controls: supported in gen/pp/anim always, audio when analyzed, never QR
+  local loop_enabled = (tab ~= "tab_qr")
+  if tab == "tab_audio" then loop_enabled = PT.audio.analyzed end
   PT.dlg:modify{ id = "loop_check", enabled = loop_enabled }
   PT.dlg:modify{ id = "random_loop_check", enabled = loop_enabled }
 end
@@ -1276,6 +1313,7 @@ local function build_actions_panel()
       PT.state.pending_action = nil
       PT.loop.mode = false
       PT.loop.random_mode = false
+      PT.loop.target = nil
       PT.timers.loop = PT.stop_timer(PT.timers.loop)
       if PT.state.generating or PT.state.animating then
         PT.send({ action = "cancel" })

@@ -1,5 +1,3 @@
-"""Server configuration via Pydantic Settings (env vars / .env / defaults)."""
-
 from __future__ import annotations
 
 import logging
@@ -31,7 +29,7 @@ class Settings(BaseSettings):
     prompts_data_dir: Path = _SERVER_ROOT / "data" / "prompts"
 
     # ── Default checkpoint ───────────────────────────────────
-    default_checkpoint: str = "Lykon/dreamshaper-8"
+    default_checkpoint: str = "models/checkpoints/liberteRedmond_v10.safetensors"
 
     # ── Hyper-SD (replaces LCM-LoRA — better color fidelity) ─
     hyper_sd_repo: str = "ByteDance/Hyper-SD"
@@ -83,9 +81,6 @@ class Settings(BaseSettings):
     qr_control_guidance_start: float = Field(0.0, ge=0.0, le=1.0)
     qr_control_guidance_end: float = Field(0.8, ge=0.0, le=1.0)
     qr_default_steps: int = Field(20, ge=4, le=50)
-    qr_validate_scan: bool = True
-    qr_retry_scale_increment: float = Field(0.3, ge=0.0, le=1.0)
-    qr_max_retries: int = Field(2, ge=0, le=5)
 
     # ── Timeouts ─────────────────────────────────────────────
     generation_timeout: float = Field(600.0, gt=0.0)  # 10 minutes max per generation
@@ -154,7 +149,6 @@ class Settings(BaseSettings):
 
     @cached_property
     def is_animatediff_lightning(self) -> bool:
-        """True when the configured AnimateDiff model is Lightning."""
         return "animatediff-lightning" in self.animatediff_model.lower()
 
     @model_validator(mode='after')

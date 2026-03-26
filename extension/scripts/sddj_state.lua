@@ -6,7 +6,7 @@ return function(PT)
 
 -- ─── Constants ──────────────────────────────────────────────
 
-PT.VERSION = "0.9.55"
+PT.VERSION = "0.9.56"
 
 PT.cfg = {
   DEFAULT_SERVER_URL      = "ws://127.0.0.1:9876/ws",
@@ -65,6 +65,7 @@ PT.loop = {
   seed_mode     = "random",
   random_mode   = false,
   locked_fields = {},
+  target        = nil,  -- "generate" | "animate" | "audio" | nil
 }
 
 PT.res = {

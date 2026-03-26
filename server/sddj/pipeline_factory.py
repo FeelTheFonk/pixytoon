@@ -53,6 +53,8 @@ def load_base_pipeline() -> StableDiffusionPipeline:
             str(ckpt_path),
             torch_dtype=torch.float16,
             safety_checker=None,
+            local_files_only=True,
+            config="runwayml/stable-diffusion-v1-5",
         )
     else:
         pipe = StableDiffusionPipeline.from_pretrained(
@@ -218,7 +220,7 @@ def create_lightning_scheduler(base_config):
 def create_controlnet_pipeline(
     pipe: StableDiffusionPipeline,
     mode: GenerationMode,
-) -> StableDiffusionControlNetPipeline:
+) -> tuple[StableDiffusionControlNetPipeline, StableDiffusionControlNetImg2ImgPipeline]:
     """Create ControlNet pipeline for the given mode."""
     model_id = CONTROLNET_IDS.get(mode)
     if model_id is None:

@@ -60,6 +60,7 @@ handlers.result = function(resp)
   if not resp.image or resp.image == "" then
     PT.loop.mode = false
     PT.loop.random_mode = false
+    PT.loop.target = nil
     PT.update_status("Error: missing image in result response")
     PT.reset_ui_buttons()
     return
@@ -112,6 +113,7 @@ handlers.result = function(resp)
         if not req then
           PT.loop.mode = false
           PT.loop.random_mode = false
+          PT.loop.target = nil
           PT.finalize_sequence()
           PT.reset_ui_buttons()
           PT.update_status("Loop stopped (dialog closed)")
@@ -120,6 +122,7 @@ handlers.result = function(resp)
         if not PT.attach_source_image(req) then
           PT.loop.mode = false
           PT.loop.random_mode = false
+          PT.loop.target = nil
           PT.finalize_sequence()
           PT.reset_ui_buttons()
           PT.update_status("Loop stopped (no source image)")
@@ -239,7 +242,19 @@ handlers.animation_complete = function(resp)
   local decode_note = PT.anim.decode_failures > 0
     and " (" .. PT.anim.decode_failures .. " decode failures)" or ""
 
-  if PT.dlg then
+  -- Determine loop continuation before finalize
+  local should_loop = PT.loop.mode and PT.loop.target == "animate" and PT.dlg
+
+  if should_loop then
+    local seed_info = tostring(resp.seed or "?")
+    PT.update_status("Animate Loop #" .. PT.loop.counter .. " done" .. decode_note .. " — next...")
+    -- Seed handling for next iteration
+    if PT.loop.seed_mode == "increment" and resp.seed then
+      PT.dlg:modify{ id = "seed", text = tostring(resp.seed + 1) }
+    else
+      PT.dlg:modify{ id = "seed", text = "-1" }
+    end
+  elseif PT.dlg then
     local tag_str = ""
     if resp.tag_name and resp.tag_name ~= "" then tag_str = ", tag=" .. resp.tag_name end
     PT.update_status("Animation done (" .. tostring(resp.total_frames or "?") .. " frames, "
@@ -247,6 +262,7 @@ handlers.animation_complete = function(resp)
     PT.reset_ui_buttons()
   end
 
+  -- Finalize frames (set durations + tag)
   local spr = app.sprite
   if spr and PT.anim.frame_count > 0 then
     local dur_ms = (PT.dlg and tonumber(PT.dlg.data.anim_duration) or 100)
@@ -258,6 +274,31 @@ handlers.animation_complete = function(resp)
   else
     PT.save_animation_meta(resp)
     reset_anim_state()
+  end
+
+  -- Schedule loop iteration via timer (after finalize starts processing)
+  if should_loop then
+    PT.timers.loop = PT.stop_timer(PT.timers.loop)
+    PT.timers.loop = Timer{
+      interval = PT.cfg.LOOP_DELAY,
+      ontick = function()
+        PT.timers.loop = PT.stop_timer(PT.timers.loop)
+        if not PT.loop.mode or not PT.dlg or not PT.state.connected or PT.state.animating then return end
+
+        PT.loop.counter = PT.loop.counter + 1
+
+        -- Random loop: generate new prompt first
+        if PT.loop.random_mode then
+          PT.update_status("Random Loop #" .. PT.loop.counter .. " — Generating prompt, then animation...")
+          PT.send({ action = "generate_prompt", locked_fields = PT.loop.locked_fields, randomness = PT.dlg and PT.dlg.data.randomness or 0 })
+          return
+        end
+
+        -- Standard loop: trigger animate directly
+        PT.trigger_animate()
+      end,
+    }
+    PT.timers.loop:start()
   end
 end
 
@@ -272,6 +313,7 @@ handlers.error = function(resp)
   PT.audio.analyzing = false
   PT.loop.mode = false
   PT.loop.random_mode = false
+  PT.loop.target = nil
   PT.timers.loop = PT.stop_timer(PT.timers.loop)
   PT.state.gen_step_start = nil
   PT.state.pending_action = nil
@@ -418,29 +460,39 @@ handlers.prompt_result = function(resp)
   elseif action == "audio" then
     PT.trigger_audio_generate()
   elseif PT.loop.random_mode and PT.loop.mode and PT.dlg and PT.state.connected then
-    -- Random loop: auto-trigger generation after prompt is set
-    local req = PT.build_generate_request()
-    if not req then
-      PT.loop.mode = false
-      PT.loop.random_mode = false
-      PT.finalize_sequence()
-      PT.reset_ui_buttons()
-      PT.update_status("Random loop stopped (dialog closed)")
-      return
+    -- Random loop: auto-trigger based on stored loop target
+    local target = PT.loop.target or "generate"
+    if target == "animate" then
+      PT.trigger_animate()
+    elseif target == "audio" then
+      PT.trigger_audio_generate()
+    else
+      -- Default: generate (existing behavior)
+      local req = PT.build_generate_request()
+      if not req then
+        PT.loop.mode = false
+        PT.loop.random_mode = false
+        PT.loop.target = nil
+        PT.finalize_sequence()
+        PT.reset_ui_buttons()
+        PT.update_status("Random loop stopped (dialog closed)")
+        return
+      end
+      if not PT.attach_source_image(req) then
+        PT.loop.mode = false
+        PT.loop.random_mode = false
+        PT.loop.target = nil
+        PT.finalize_sequence()
+        PT.reset_ui_buttons()
+        PT.update_status("Random loop stopped (no source image)")
+        return
+      end
+      PT.state.generating = true
+      PT.state.gen_step_start = os.clock()
+      PT.start_gen_timeout()
+      PT.update_status("Random Loop #" .. PT.loop.counter .. " — Generating...")
+      PT.send(req)
     end
-    if not PT.attach_source_image(req) then
-      PT.loop.mode = false
-      PT.loop.random_mode = false
-      PT.finalize_sequence()
-      PT.reset_ui_buttons()
-      PT.update_status("Random loop stopped (no source image)")
-      return
-    end
-    PT.state.generating = true
-    PT.state.gen_step_start = os.clock()
-    PT.start_gen_timeout()
-    PT.update_status("Random Loop #" .. PT.loop.counter .. " — Generating...")
-    PT.send(req)
   else
     PT.update_status("Prompt generated")
   end
@@ -511,6 +563,18 @@ handlers.preset = function(resp)
       PT.dlg:modify{ id = "lora_weight", label = string.format("LoRA (%.2f)", w / 100.0) }
     end
   end
+  -- Randomness / Lock Subject / Randomize
+  if d.randomness then
+    PT.dlg:modify{ id = "randomness", value = d.randomness }
+    local v = d.randomness
+    local names = { [0]="Off", [5]="Subtle", [10]="Moderate", [15]="Wild", [20]="Chaos" }
+    local name = names[v] or ""
+    local suffix = name ~= "" and (" — " .. name) or ""
+    PT.dlg:modify{ id = "randomness", label = "Randomness (" .. v .. suffix .. ")" }
+  end
+  if d.lock_subject ~= nil then PT.dlg:modify{ id = "lock_subject", selected = d.lock_subject } end
+  if d.fixed_subject then PT.dlg:modify{ id = "fixed_subject", text = d.fixed_subject } end
+  if d.randomize_before ~= nil then PT.dlg:modify{ id = "randomize_before", selected = d.randomize_before } end
   PT.update_status("Preset '" .. tostring(resp.name or "?") .. "' loaded")
 end
 
@@ -663,7 +727,18 @@ handlers.audio_reactive_complete = function(resp)
   local decode_note = PT.anim.decode_failures > 0
     and " (" .. PT.anim.decode_failures .. " decode failures)" or ""
 
-  if PT.dlg then
+  -- Determine loop continuation before finalize
+  local should_loop = PT.loop.mode and PT.loop.target == "audio" and PT.dlg
+
+  if should_loop then
+    PT.update_status("Audio Loop #" .. PT.loop.counter .. " done" .. decode_note .. " — next...")
+    -- Seed handling for next iteration
+    if PT.loop.seed_mode == "increment" and resp.seed then
+      PT.dlg:modify{ id = "seed", text = tostring(resp.seed + 1) }
+    else
+      PT.dlg:modify{ id = "seed", text = "-1" }
+    end
+  elseif PT.dlg then
     local tag_str = ""
     if resp.tag_name and resp.tag_name ~= "" then tag_str = ", tag=" .. resp.tag_name end
     PT.update_status("Audio animation done (" .. tostring(resp.total_frames or "?") .. " frames, "
@@ -688,6 +763,31 @@ handlers.audio_reactive_complete = function(resp)
     PT.save_animation_meta(resp)
     PT.audio.last_output_dir = PT.anim.output_dir
     reset_anim_state()
+  end
+
+  -- Schedule loop iteration via timer
+  if should_loop then
+    PT.timers.loop = PT.stop_timer(PT.timers.loop)
+    PT.timers.loop = Timer{
+      interval = PT.cfg.LOOP_DELAY,
+      ontick = function()
+        PT.timers.loop = PT.stop_timer(PT.timers.loop)
+        if not PT.loop.mode or not PT.dlg or not PT.state.connected or PT.state.animating then return end
+
+        PT.loop.counter = PT.loop.counter + 1
+
+        -- Random loop: generate new prompt first
+        if PT.loop.random_mode then
+          PT.update_status("Random Loop #" .. PT.loop.counter .. " — Generating prompt, then audio...")
+          PT.send({ action = "generate_prompt", locked_fields = PT.loop.locked_fields, randomness = PT.dlg and PT.dlg.data.randomness or 0 })
+          return
+        end
+
+        -- Standard loop: trigger audio directly
+        PT.trigger_audio_generate()
+      end,
+    }
+    PT.timers.loop:start()
   end
 end
 

@@ -197,9 +197,12 @@ class AnimateDiffManager:
             controlnet = existing_controlnet
         else:
             log.info("Loading ControlNet for AnimateDiff: %s", model_id)
+            load_kwargs: dict = dict(torch_dtype=torch.float16, local_files_only=True)
+            # QR Code Monster v2: model weights in v2/ subfolder
+            if mode == GenerationMode.CONTROLNET_QRCODE:
+                load_kwargs["subfolder"] = "v2"
             controlnet = ControlNetModel.from_pretrained(
-                model_id, torch_dtype=torch.float16,
-                local_files_only=True,
+                model_id, **load_kwargs,
             ).to("cuda")
 
         # UNet already PEFT-stripped by ensure_base() above

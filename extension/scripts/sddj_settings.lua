@@ -105,15 +105,11 @@ function PT.save_settings()
   s.mp4_quality          = d.mp4_quality
   s.mp4_scale            = d.mp4_scale
   -- QR Code tab
-  s.qr_content            = d.qr_content
   s.qr_use_source         = d.qr_use_source
   s.qr_denoise            = d.qr_denoise
-  s.qr_error_correction   = d.qr_error_correction
-  s.qr_module_size        = d.qr_module_size
   s.qr_conditioning_scale = d.qr_conditioning_scale
   s.qr_guidance_start     = d.qr_guidance_start
   s.qr_guidance_end       = d.qr_guidance_end
-  s.qr_size               = d.qr_size
   s.qr_steps              = d.qr_steps
   s.qr_cfg                = d.qr_cfg
   local ok, encoded = pcall(PT.json.encode, s)
@@ -148,8 +144,7 @@ function PT.apply_settings(s)
                    "expr_motion_zoom", "expr_motion_rot",
                    "expr_motion_tilt_x", "expr_motion_tilt_y",
                    "ps1_time", "ps1_prompt", "ps2_time", "ps2_prompt",
-                   "ps3_time", "ps3_prompt",
-                   "qr_content" }
+                   "ps3_time", "ps3_prompt" }
   for _, id in ipairs(texts) do
     if s[id] ~= nil then PT.dlg:modify{ id = id, text = s[id] } end
   end
@@ -161,7 +156,6 @@ function PT.apply_settings(s)
     "audio_fps", "audio_mod_preset", "audio_method",
     "audio_choreography", "audio_expr_preset",
     "mp4_quality", "mp4_scale",
-    "qr_error_correction", "qr_size",
   }
   -- Modulation slot comboboxes
   for i = 1, 6 do
@@ -180,7 +174,7 @@ function PT.apply_settings(s)
     "audio_steps", "audio_cfg", "audio_denoise",
     "audio_max_frames", "audio_freeinit_iters",
     "mod_slot_count",
-    "qr_module_size", "qr_conditioning_scale", "qr_guidance_start", "qr_guidance_end",
+    "qr_conditioning_scale", "qr_guidance_start", "qr_guidance_end",
     "qr_steps", "qr_cfg", "qr_denoise",
   }
   -- Modulation slot sliders
@@ -230,7 +224,6 @@ function PT.apply_settings(s)
 
   PT.dlg:modify{ id = "mod_slot_count", label = "Slots (" .. d.mod_slot_count .. ")" }
   -- QR Code tab labels
-  if d.qr_module_size then PT.dlg:modify{ id = "qr_module_size", label = "Module (" .. d.qr_module_size .. "px)" } end
   if d.qr_conditioning_scale then PT.dlg:modify{ id = "qr_conditioning_scale", label = string.format("CN Scale (%.2f)", d.qr_conditioning_scale / 100.0) } end
   if d.qr_guidance_start then PT.dlg:modify{ id = "qr_guidance_start", label = string.format("Guide Start (%.2f)", d.qr_guidance_start / 100.0) } end
   if d.qr_guidance_end then PT.dlg:modify{ id = "qr_guidance_end", label = string.format("Guide End (%.2f)", d.qr_guidance_end / 100.0) } end

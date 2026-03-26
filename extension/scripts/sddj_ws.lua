@@ -68,6 +68,7 @@ function PT.start_gen_timeout(override_seconds)
         PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
         PT.loop.mode = false
         PT.loop.random_mode = false
+        PT.loop.target = nil
         PT.timers.loop = PT.stop_timer(PT.timers.loop)
         PT.state.gen_step_start = nil
         PT.stop_refresh_timer()
@@ -114,6 +115,7 @@ function PT.set_connected(is_connected)
     PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
     PT.loop.mode = false
     PT.loop.random_mode = false
+    PT.loop.target = nil
     PT.loop.counter = 0
     PT.timers.loop = PT.stop_timer(PT.timers.loop)
     PT.state.cancel_pending = false
@@ -223,6 +225,7 @@ function PT.disconnect()
   PT.state.animating = false
   PT.loop.mode = false
   PT.loop.random_mode = false
+  PT.loop.target = nil
   PT.stop_gen_timeout()
   PT.update_status("Disconnected")
 end

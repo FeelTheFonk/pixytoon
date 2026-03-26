@@ -1,5 +1,3 @@
-"""Tests for server configuration (Settings model)."""
-
 from __future__ import annotations
 
 import os
@@ -11,10 +9,8 @@ from pydantic import ValidationError
 
 
 class TestSettingsDefaults:
-    """Verify all default values are sensible."""
 
     def _make_settings(self, **overrides):
-        """Create a Settings instance with env isolation."""
         # Import inside to avoid module-level singleton side-effects
         from sddj.config import Settings
 
@@ -45,7 +41,7 @@ class TestSettingsDefaults:
 
     def test_default_checkpoint(self):
         s = self._make_settings()
-        assert s.default_checkpoint == "Lykon/dreamshaper-8"
+        assert s.default_checkpoint == "models/checkpoints/liberteRedmond_v10.safetensors"
 
     def test_hyper_sd_defaults(self):
         s = self._make_settings()
@@ -135,7 +131,6 @@ class TestSettingsDefaults:
 
 
 class TestSettingsEnvPrefix:
-    """Verify env var override via SDDJ_ prefix."""
 
     def test_env_prefix_overrides_port(self):
         from sddj.config import Settings
@@ -157,7 +152,6 @@ class TestSettingsEnvPrefix:
 
 
 class TestSettingsValidator:
-    """Test the _warn_missing_dirs validator."""
 
     def test_missing_dirs_logs_warning(self, tmp_path, caplog):
         from sddj.config import Settings
@@ -199,7 +193,6 @@ class TestSettingsValidator:
 
 
 class TestCompileMode:
-    """Test compile_mode Literal validation."""
 
     def _make_settings(self, **overrides):
         from sddj.config import Settings
