@@ -201,41 +201,14 @@ function PT.apply_settings(s)
   for _, id in ipairs(bools) do
     if s[id] ~= nil then PT.dlg:modify{ id = id, selected = s[id] } end
   end
-  -- Update slider labels (dlg:modify{value=...} doesn't fire onchange)
+  -- Sync all slider labels from registry (single source of truth)
+  for id in pairs(PT.SLIDER_LABELS) do
+    PT.sync_slider_label(id)
+  end
+  -- Special cases not in registry (custom display logic)
   local d = PT.dlg.data
-  PT.dlg:modify{ id = "cfg_scale", label = string.format("CFG (%.1f)", d.cfg_scale / 10.0) }
-  PT.dlg:modify{ id = "denoise", label = string.format("Strength (%.2f)", d.denoise / 100.0) }
-  PT.dlg:modify{ id = "lora_weight", label = string.format("LoRA (%.2f)", d.lora_weight / 100.0) }
-  PT.dlg:modify{ id = "neg_ti_weight", label = string.format("Emb. (%.2f)", d.neg_ti_weight / 100.0) }
-  PT.dlg:modify{ id = "pixel_size", label = "Target (" .. d.pixel_size .. "px)" }
-  PT.dlg:modify{ id = "colors", label = "Colors (" .. d.colors .. ")" }
-  PT.dlg:modify{ id = "anim_cfg", label = string.format("CFG (%.1f)", d.anim_cfg / 10.0) }
-  PT.dlg:modify{ id = "anim_denoise", label = string.format("Strength (%.2f)", d.anim_denoise / 100.0) }
-  PT.dlg:modify{ id = "audio_cfg", label = string.format("CFG (%.1f)", d.audio_cfg / 10.0) }
-  PT.dlg:modify{ id = "audio_denoise", label = string.format("Strength (%.2f)", d.audio_denoise / 100.0) }
-  PT.dlg:modify{ id = "steps", label = "Steps (" .. d.steps .. ")" }
-  PT.dlg:modify{ id = "clip_skip", label = "CLIP Skip (" .. d.clip_skip .. ")" }
-  PT.dlg:modify{ id = "anim_steps", label = "Steps (" .. d.anim_steps .. ")" }
-  PT.dlg:modify{ id = "anim_frames", label = "Frames (" .. d.anim_frames .. ")" }
-  PT.dlg:modify{ id = "anim_duration", label = "Duration (" .. d.anim_duration .. "ms)" }
-  PT.dlg:modify{ id = "audio_steps", label = "Steps (" .. d.audio_steps .. ")" }
   PT.dlg:modify{ id = "audio_max_frames",
     label = d.audio_max_frames == 0 and "Max Frames (0=all)" or ("Max Frames (" .. d.audio_max_frames .. ")") }
-
-  PT.dlg:modify{ id = "mod_slot_count", label = "Slots (" .. d.mod_slot_count .. ")" }
-  -- QR Code tab labels
-  if d.qr_conditioning_scale then PT.dlg:modify{ id = "qr_conditioning_scale", label = string.format("CN Scale (%.2f)", d.qr_conditioning_scale / 100.0) } end
-  if d.qr_guidance_start then PT.dlg:modify{ id = "qr_guidance_start", label = string.format("Guide Start (%.2f)", d.qr_guidance_start / 100.0) } end
-  if d.qr_guidance_end then PT.dlg:modify{ id = "qr_guidance_end", label = string.format("Guide End (%.2f)", d.qr_guidance_end / 100.0) } end
-  if d.qr_steps then PT.dlg:modify{ id = "qr_steps", label = "Steps (" .. d.qr_steps .. ")" } end
-  if d.qr_cfg then PT.dlg:modify{ id = "qr_cfg", label = string.format("CFG (%.1f)", d.qr_cfg / 10.0) } end
-  if d.qr_denoise then PT.dlg:modify{ id = "qr_denoise", label = string.format("Denoise (%.2f)", d.qr_denoise / 100.0) } end
-  -- Sync max frames label
-  if s.audio_max_frames then
-    local v = s.audio_max_frames
-    PT.dlg:modify{ id = "audio_max_frames",
-      label = v == 0 and "Max Frames (0=all)" or ("Max Frames (" .. v .. ")") }
-  end
 
   -- Mode label hint
   if s.mode then

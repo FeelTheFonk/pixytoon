@@ -245,13 +245,13 @@ function PT.apply_metadata(meta)
   if meta.cfg_scale then
     local v = math.floor(meta.cfg_scale * 10)
     PT.dlg:modify{ id = "cfg_scale", value = v }
-    PT.dlg:modify{ id = "cfg_scale", label = string.format("CFG (%.1f)", v / 10.0) }
+    PT.sync_slider_label("cfg_scale")
   end
   if meta.clip_skip then PT.dlg:modify{ id = "clip_skip", value = meta.clip_skip } end
   if meta.denoise_strength then
     local v = math.floor(meta.denoise_strength * 100)
     PT.dlg:modify{ id = "denoise", value = v }
-    PT.dlg:modify{ id = "denoise", label = string.format("Strength (%.2f)", v / 100.0) }
+    PT.sync_slider_label("denoise")
   end
 
   -- Mode-dependent visibility + label (mirror dialog onchange logic)
@@ -272,7 +272,7 @@ function PT.apply_metadata(meta)
     if meta.lora.weight then
       local v = math.floor(meta.lora.weight * 100)
       PT.dlg:modify{ id = "lora_weight", value = v }
-      PT.dlg:modify{ id = "lora_weight", label = string.format("LoRA (%.2f)", v / 100.0) }
+      PT.sync_slider_label("lora_weight")
     end
   end
 
@@ -284,7 +284,7 @@ function PT.apply_metadata(meta)
         if pp.pixelate.enabled ~= nil then PT.dlg:modify{ id = "pixelate", selected = pp.pixelate.enabled } end
         if pp.pixelate.target_size then
           PT.dlg:modify{ id = "pixel_size", value = pp.pixelate.target_size }
-          PT.dlg:modify{ id = "pixel_size", label = "Target (" .. pp.pixelate.target_size .. "px)" }
+          PT.sync_slider_label("pixel_size")
         end
       end
     end

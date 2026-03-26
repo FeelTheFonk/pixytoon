@@ -4,15 +4,102 @@
 
 return function(PT)
 
--- ─── Slider Label Helper ────────────────────────────────────
+-- ─── Slider Label Helpers ────────────────────────────────────
 
--- Returns an onchange callback that updates a slider's label with a formatted value.
--- Usage: onchange = slider_label("cfg_scale", "CFG (%.1f)", 10.0)
-local function slider_label(id, fmt, divisor)
-  return function()
-    PT.dlg:modify{ id = id, label = string.format(fmt, PT.dlg.data[id] / divisor) }
-  end
+-- Returns an onchange callback that syncs a slider's label from the
+-- PT.SLIDER_LABELS registry (single source of truth).
+local function onchange_sync(id)
+  return function() PT.sync_slider_label(id) end
 end
+
+-- ─── Loop State Helpers ──────────────────────────────────────
+
+-- Initialize loop state for the given target ("generate"|"animate"|"audio").
+-- Returns true if loop mode is active; false if no looping requested.
+local function init_loop_state(target)
+  local d = PT.dlg.data
+  local is_loop = d.loop_check or d.random_loop_check
+  if not is_loop then return false end
+  if PT.loop.mode then return true end  -- already initialized (re-entry)
+  PT.loop.mode = true
+  PT.loop.counter = 0
+  PT.loop.seed_mode = d.loop_seed_combo or "random"
+  PT.loop.random_mode = d.random_loop_check or false
+  PT.loop.locked_fields = PT.build_locked_fields()
+  PT.loop.target = target
+  if PT.loop.seed_mode == "random" then
+    PT.dlg:modify{ id = "seed", text = "-1" }
+  end
+  return true
+end
+
+-- ─── Constants ───────────────────────────────────────────────
+
+local GLOBAL_SOURCES = {
+  -- Energy & dynamics
+  "global_rms", "global_onset", "global_centroid", "global_beat",
+  -- 9-band frequency segmentation
+  "global_sub_bass", "global_bass", "global_low_mid",
+  "global_mid", "global_upper_mid", "global_presence",
+  "global_brilliance", "global_air", "global_ultrasonic",
+  -- Backward-compat aliases
+  "global_low", "global_high",
+  -- Spectral timbral features
+  "global_spectral_contrast", "global_spectral_flatness",
+  "global_spectral_bandwidth", "global_spectral_rolloff",
+  "global_spectral_flux",
+  -- CQT chromagram (12 pitch classes + aggregate)
+  "global_chroma_energy",
+  "global_chroma_C", "global_chroma_Cs", "global_chroma_D",
+  "global_chroma_Ds", "global_chroma_E", "global_chroma_F",
+  "global_chroma_Fs", "global_chroma_G", "global_chroma_Gs",
+  "global_chroma_A", "global_chroma_As", "global_chroma_B",
+}
+
+local MOD_TARGETS = {
+  "denoise_strength", "cfg_scale", "noise_amplitude",
+  "controlnet_scale", "seed_offset", "palette_shift",
+  "frame_cadence",
+  -- Motion / camera (smooth Deforum-like)
+  "motion_x", "motion_y", "motion_zoom", "motion_rotation",
+  "motion_tilt_x", "motion_tilt_y",
+}
+
+local EXPR_FIELDS = {
+  { "expr_denoise",       "denoise" },
+  { "expr_cfg",           "cfg_scale" },
+  { "expr_noise",         "noise_amp" },
+  { "expr_controlnet",    "cn_scale" },
+  { "expr_seed",          "seed_off" },
+  { "expr_palette",       "pal_shift" },
+  { "expr_cadence",       "cadence" },
+  { "expr_motion_x",      "motion_x" },
+  { "expr_motion_y",      "motion_y" },
+  { "expr_motion_zoom",   "zoom" },
+  { "expr_motion_rot",    "rotation" },
+  { "expr_motion_tilt_x", "tilt_x" },
+  { "expr_motion_tilt_y", "tilt_y" },
+}
+
+-- Modulation slot defaults: [source, target, min, max, attack, release]
+local SLOT_DEFAULTS = {
+  { "global_rms",   "denoise_strength",  30, 65,  2,  8 },
+  { "global_onset", "cfg_scale",         30, 80,  2,  8 },
+  { "global_low",   "noise_amplitude",    0, 30,  2,  8 },
+  { "global_high",  "seed_offset",        0, 50,  2,  8 },
+  { "global_mid",   "motion_x",          30, 70,  3, 12 },
+  { "global_rms",   "motion_zoom",       40, 60,  4, 15 },
+}
+
+-- ─── Dispatch Tables ─────────────────────────────────────────
+
+local TAB_PENDING = {
+  tab_gen   = "generate",
+  tab_pp    = "generate",
+  tab_anim  = "animate",
+  tab_qr    = "qr_generate",
+  tab_audio = "audio",
+}
 
 -- ─── Connection Section ─────────────────────────────────────
 
@@ -175,7 +262,6 @@ local function build_tab_generate()
     option = "txt2img",
     onchange = function()
       local m = dlg.data.mode
-      -- Show hint about required inputs
       if m == "inpaint" then
         dlg:modify{ id = "mode", label = "Mode (needs mask)" }
       elseif m == "controlnet_qrcode" then
@@ -199,7 +285,7 @@ local function build_tab_generate()
     id = "lora_weight",
     label = "LoRA (1.00)",
     min = -200, max = 200, value = 100,
-    onchange = slider_label("lora_weight", "LoRA (%.2f)", 100.0),
+    onchange = onchange_sync("lora_weight"),
   }
 
   dlg:entry{
@@ -246,7 +332,7 @@ local function build_tab_generate()
     id = "neg_ti_weight",
     label = "Emb. (1.00)",
     min = 10, max = 200, value = 100,
-    onchange = slider_label("neg_ti_weight", "Emb. (%.2f)", 100.0),
+    onchange = onchange_sync("neg_ti_weight"),
   }
 
   dlg:combobox{
@@ -278,32 +364,28 @@ local function build_tab_generate()
     id = "denoise",
     label = "Strength (1.00)",
     min = 0, max = 100, value = 100,
-    onchange = slider_label("denoise", "Strength (%.2f)", 100.0),
+    onchange = onchange_sync("denoise"),
   }
 
   dlg:slider{
     id = "steps",
     label = "Steps (8)",
     min = 1, max = 100, value = 8,
-    onchange = function()
-      dlg:modify{ id = "steps", label = "Steps (" .. dlg.data.steps .. ")" }
-    end,
+    onchange = onchange_sync("steps"),
   }
 
   dlg:slider{
     id = "cfg_scale",
     label = "CFG (5.0)",
     min = 0, max = 300, value = 50,
-    onchange = slider_label("cfg_scale", "CFG (%.1f)", 10.0),
+    onchange = onchange_sync("cfg_scale"),
   }
 
   dlg:slider{
     id = "clip_skip",
     label = "CLIP Skip (2)",
     min = 1, max = 12, value = 2,
-    onchange = function()
-      dlg:modify{ id = "clip_skip", label = "CLIP Skip (" .. dlg.data.clip_skip .. ")" }
-    end,
+    onchange = onchange_sync("clip_skip"),
   }
 end
 
@@ -322,9 +404,7 @@ local function build_tab_postprocess()
     id = "pixel_size",
     label = "Target (128px)",
     min = 8, max = 512, value = 128,
-    onchange = function()
-      dlg:modify{ id = "pixel_size", label = "Target (" .. dlg.data.pixel_size .. "px)" }
-    end,
+    onchange = onchange_sync("pixel_size"),
   }
 
   dlg:check{
@@ -337,9 +417,7 @@ local function build_tab_postprocess()
     id = "colors",
     label = "Colors (32)",
     min = 2, max = 256, value = 32,
-    onchange = function()
-      dlg:modify{ id = "colors", label = "Colors (" .. dlg.data.colors .. ")" }
-    end,
+    onchange = onchange_sync("colors"),
   }
 
   dlg:combobox{
@@ -381,7 +459,6 @@ local function build_tab_postprocess()
     id = "palette_save_btn",
     text = "Save Palette",
     onclick = function()
-      -- Collect colors from custom hex field or current preset
       local hex_str = dlg.data.palette_custom_colors or ""
       local colors = {}
       for hex in hex_str:gmatch("#?(%x%x%x%x%x%x)") do
@@ -438,40 +515,34 @@ local function build_tab_animation()
     id = "anim_steps",
     label = "Steps (8)",
     min = 1, max = 50, value = 8,
-    onchange = function()
-      dlg:modify{ id = "anim_steps", label = "Steps (" .. dlg.data.anim_steps .. ")" }
-    end,
+    onchange = onchange_sync("anim_steps"),
   }
   dlg:slider{
     id = "anim_cfg",
     label = "CFG (5.0)",
     min = 0, max = 200, value = 50,
-    onchange = slider_label("anim_cfg", "CFG (%.1f)", 10.0),
+    onchange = onchange_sync("anim_cfg"),
   }
 
   dlg:slider{
     id = "anim_frames",
     label = "Frames (8)",
     min = 2, max = 120, value = 8,
-    onchange = function()
-      dlg:modify{ id = "anim_frames", label = "Frames (" .. dlg.data.anim_frames .. ")" }
-    end,
+    onchange = onchange_sync("anim_frames"),
   }
 
   dlg:slider{
     id = "anim_duration",
     label = "Duration (100ms)",
     min = 50, max = 2000, value = 100,
-    onchange = function()
-      dlg:modify{ id = "anim_duration", label = "Duration (" .. dlg.data.anim_duration .. "ms)" }
-    end,
+    onchange = onchange_sync("anim_duration"),
   }
 
   dlg:slider{
     id = "anim_denoise",
     label = "Strength (0.30)",
-    min = 20, max = 100, value = 30,
-    onchange = slider_label("anim_denoise", "Strength (%.2f)", 100.0),
+    min = 1, max = 100, value = 30,
+    onchange = onchange_sync("anim_denoise"),
   }
 
   dlg:combobox{
@@ -502,36 +573,6 @@ local function build_tab_animation()
 end
 
 -- ─── Tab: Audio ───────────────────────────────────────────
-
-local GLOBAL_SOURCES = {
-  -- Energy & dynamics
-  "global_rms", "global_onset", "global_centroid", "global_beat",
-  -- 9-band frequency segmentation
-  "global_sub_bass", "global_bass", "global_low_mid",
-  "global_mid", "global_upper_mid", "global_presence",
-  "global_brilliance", "global_air", "global_ultrasonic",
-  -- Backward-compat aliases
-  "global_low", "global_high",
-  -- Spectral timbral features
-  "global_spectral_contrast", "global_spectral_flatness",
-  "global_spectral_bandwidth", "global_spectral_rolloff",
-  "global_spectral_flux",
-  -- CQT chromagram (12 pitch classes + aggregate)
-  "global_chroma_energy",
-  "global_chroma_C", "global_chroma_Cs", "global_chroma_D",
-  "global_chroma_Ds", "global_chroma_E", "global_chroma_F",
-  "global_chroma_Fs", "global_chroma_G", "global_chroma_Gs",
-  "global_chroma_A", "global_chroma_As", "global_chroma_B",
-}
-
-local MOD_TARGETS = {
-  "denoise_strength", "cfg_scale", "noise_amplitude",
-  "controlnet_scale", "seed_offset", "palette_shift",
-  "frame_cadence",
-  -- Motion / camera (smooth Deforum-like)
-  "motion_x", "motion_y", "motion_zoom", "motion_rotation",
-  "motion_tilt_x", "motion_tilt_y",
-}
 
 local function build_tab_audio()
   local dlg = PT.dlg
@@ -589,21 +630,19 @@ local function build_tab_audio()
     id = "audio_steps",
     label = "Steps (8)",
     min = 1, max = 50, value = 8,
-    onchange = function()
-      dlg:modify{ id = "audio_steps", label = "Steps (" .. dlg.data.audio_steps .. ")" }
-    end,
+    onchange = onchange_sync("audio_steps"),
   }
   dlg:slider{
     id = "audio_cfg",
     label = "CFG (5.0)",
     min = 0, max = 200, value = 50,
-    onchange = slider_label("audio_cfg", "CFG (%.1f)", 10.0),
+    onchange = onchange_sync("audio_cfg"),
   }
   dlg:slider{
     id = "audio_denoise",
     label = "Strength (0.50)",
     min = 20, max = 100, value = 50,
-    onchange = slider_label("audio_denoise", "Strength (%.2f)", 100.0),
+    onchange = onchange_sync("audio_denoise"),
   }
 
   dlg:slider{
@@ -662,34 +701,24 @@ local function build_tab_audio()
     label = "Preset",
     options = {
       "(custom)",
-      -- Genre-specific
       "electronic_pulse", "rock_energy", "hiphop_bounce",
       "classical_flow", "ambient_drift",
-      -- Style-specific
       "glitch_chaos", "smooth_morph", "rhythmic_pulse",
       "atmospheric", "abstract_noise",
-      -- Complexity levels
       "one_click_easy", "beginner_balanced",
       "intermediate_full", "advanced_max",
-      -- Target-specific
       "controlnet_reactive", "seed_scatter", "noise_sculpt",
-      -- Motion / camera
       "gentle_drift", "pulse_zoom", "slow_rotate", "cinematic_sweep",
       "cinematic_tilt", "zoom_breathe", "parallax_drift", "full_cinematic",
-      -- Voyage / Journey
       "voyage_serene", "voyage_exploratory", "voyage_dramatic", "voyage_psychedelic",
-      -- Rest-aware
       "intelligent_drift", "reactive_pause",
-      -- Spectral / pinnacle quality
       "spectral_sculptor", "tonal_drift", "ultra_precision", "micro_reactive",
-      -- Legacy
       "energetic", "ambient", "bass_driven",
     },
     option = "(custom)",
     onchange = function()
       local sel = dlg.data.audio_mod_preset
       if sel == "(custom)" then return end
-      -- Request preset slot details from server for slider hydration
       if PT.state.connected then
         PT.send({ action = "get_modulation_preset", preset_name = sel })
       end
@@ -701,9 +730,7 @@ local function build_tab_audio()
     id = "mod_slot_count",
     label = "Slots (2)",
     min = 1, max = 6, value = 2,
-    onchange = function()
-      dlg:modify{ id = "mod_slot_count", label = "Slots (" .. dlg.data.mod_slot_count .. ")" }
-    end,
+    onchange = onchange_sync("mod_slot_count"),
   }
 
   -- Auto-switch to (custom) when any mod slot field is changed by the user
@@ -715,17 +742,7 @@ local function build_tab_audio()
     end
   end
 
-  -- Slot defaults: [source, target, min, max, attack, release]
-  local slot_defaults = {
-    { "global_rms",    "denoise_strength",  30, 65, 2, 8 },
-    { "global_onset",  "cfg_scale",         30, 80, 2, 8 },
-    { "global_low",    "noise_amplitude",    0, 30, 2, 8 },
-    { "global_high",   "seed_offset",        0, 50, 2, 8 },
-    { "global_mid",    "motion_x",          30, 70, 3, 12 },
-    { "global_rms",    "motion_zoom",       40, 60, 4, 15 },
-  }
-
-  for i, def in ipairs(slot_defaults) do
+  for i, def in ipairs(SLOT_DEFAULTS) do
     local prefix = "mod" .. i .. "_"
 
     dlg:check{
@@ -804,84 +821,11 @@ local function build_tab_audio()
       end
     end,
   }
-  dlg:entry{
-    id = "expr_denoise",
-    label = "denoise",
-    text = "",
-    hexpand = true,
-  }
-  dlg:entry{
-    id = "expr_cfg",
-    label = "cfg_scale",
-    text = "",
-    hexpand = true,
-  }
-  dlg:entry{
-    id = "expr_noise",
-    label = "noise_amp",
-    text = "",
-    hexpand = true,
-  }
-  dlg:entry{
-    id = "expr_controlnet",
-    label = "cn_scale",
-    text = "",
-    hexpand = true,
-  }
-  dlg:entry{
-    id = "expr_seed",
-    label = "seed_off",
-    text = "",
-    hexpand = true,
-  }
-  dlg:entry{
-    id = "expr_palette",
-    label = "pal_shift",
-    text = "",
-    hexpand = true,
-  }
-  dlg:entry{
-    id = "expr_cadence",
-    label = "cadence",
-    text = "",
-    hexpand = true,
-  }
-  dlg:entry{
-    id = "expr_motion_x",
-    label = "motion_x",
-    text = "",
-    hexpand = true,
-  }
-  dlg:entry{
-    id = "expr_motion_y",
-    label = "motion_y",
-    text = "",
-    hexpand = true,
-  }
-  dlg:entry{
-    id = "expr_motion_zoom",
-    label = "zoom",
-    text = "",
-    hexpand = true,
-  }
-  dlg:entry{
-    id = "expr_motion_rot",
-    label = "rotation",
-    text = "",
-    hexpand = true,
-  }
-  dlg:entry{
-    id = "expr_motion_tilt_x",
-    label = "tilt_x",
-    text = "",
-    hexpand = true,
-  }
-  dlg:entry{
-    id = "expr_motion_tilt_y",
-    label = "tilt_y",
-    text = "",
-    hexpand = true,
-  }
+
+  -- Expression entry fields (data-driven)
+  for _, e in ipairs(EXPR_FIELDS) do
+    dlg:entry{ id = e[1], label = e[2], text = "", hexpand = true }
+  end
 
   dlg:check{
     id = "audio_random_seed",
@@ -889,7 +833,7 @@ local function build_tab_audio()
     selected = false,
   }
 
-  -- Prompt Schedule (advanced only)
+  -- Prompt Schedule
   dlg:check{
     id = "audio_prompt_schedule",
     text = "Prompt Schedule",
@@ -956,7 +900,6 @@ end
 local function build_tab_qrcode()
   local dlg = PT.dlg
 
-  -- Source image: capture active layer for img2img QR illusion blending
   dlg:check{
     id = "qr_use_source",
     text = "Use Layer (Illusion Art)",
@@ -967,51 +910,46 @@ local function build_tab_qrcode()
     id = "qr_denoise",
     label = "Denoise (0.75)",
     min = 5, max = 100, value = 75,
-    onchange = slider_label("qr_denoise", "Denoise (%.2f)", 100.0),
+    onchange = onchange_sync("qr_denoise"),
   }
 
   dlg:slider{
     id = "qr_conditioning_scale",
     label = "CN Scale (1.50)",
     min = 0, max = 300, value = 150,
-    onchange = slider_label("qr_conditioning_scale", "CN Scale (%.2f)", 100.0),
+    onchange = onchange_sync("qr_conditioning_scale"),
   }
 
   dlg:slider{
     id = "qr_guidance_start",
     label = "Guide Start (0.00)",
     min = 0, max = 100, value = 0,
-    onchange = slider_label("qr_guidance_start", "Guide Start (%.2f)", 100.0),
+    onchange = onchange_sync("qr_guidance_start"),
   }
 
   dlg:slider{
     id = "qr_guidance_end",
     label = "Guide End (0.80)",
     min = 0, max = 100, value = 80,
-    onchange = slider_label("qr_guidance_end", "Guide End (%.2f)", 100.0),
+    onchange = onchange_sync("qr_guidance_end"),
   }
 
   dlg:slider{
     id = "qr_steps",
     label = "Steps (20)",
     min = 4, max = 50, value = 20,
-    onchange = function()
-      dlg:modify{ id = "qr_steps",
-        label = "Steps (" .. dlg.data.qr_steps .. ")" }
-    end,
+    onchange = onchange_sync("qr_steps"),
   }
 
   dlg:slider{
     id = "qr_cfg",
     label = "CFG (7.5)",
     min = 10, max = 200, value = 75,
-    onchange = slider_label("qr_cfg", "CFG (%.1f)", 10.0),
+    onchange = onchange_sync("qr_cfg"),
   }
 end
 
--- ─── Actions Panel ──────────────────────────────────────────
-
--- ─── Trigger Functions (extracted for contextual button dispatch) ──────
+-- ─── Trigger Functions ──────────────────────────────────────
 
 function PT.trigger_generate()
   if PT.state.generating or PT.state.animating then
@@ -1026,18 +964,7 @@ function PT.trigger_generate()
     PT.finalize_sequence()
   end
   -- Initialize loop state (only on first entry, not on re-entry)
-  if is_loop and not PT.loop.mode then
-    PT.loop.mode = true
-    PT.loop.counter = 0
-    PT.loop.seed_mode = d.loop_seed_combo or "random"
-    PT.loop.random_mode = d.random_loop_check or false
-    PT.loop.locked_fields = PT.build_locked_fields()
-    PT.loop.target = "generate"
-    -- Reset seed to -1 for first iteration when random mode
-    if PT.loop.seed_mode == "random" then
-      dlg:modify{ id = "seed", text = "-1" }
-    end
-  end
+  if is_loop then init_loop_state("generate") end
 
   -- Random loop: first generate a random prompt, then generate image
   if PT.loop.random_mode then
@@ -1050,8 +977,8 @@ function PT.trigger_generate()
   end
 
   local req = PT.build_generate_request()
-  if not req then PT.loop.mode = false; PT.loop.random_mode = false; PT.loop.target = nil; return end
-  if not PT.attach_source_image(req) then PT.loop.mode = false; PT.loop.random_mode = false; PT.loop.target = nil; return end
+  if not req then PT.reset_loop_state(); return end
+  if not PT.attach_source_image(req) then PT.reset_loop_state(); return end
 
   PT.state.generating = true
   PT.state.gen_step_start = os.clock()
@@ -1071,25 +998,12 @@ function PT.trigger_animate()
   if PT.state.animating or PT.state.generating then return end
   local dlg = PT.dlg
   local d = dlg.data
-  local is_loop = d.loop_check or d.random_loop_check
 
   -- Initialize loop state (only on first entry, not on re-entry)
-  if is_loop and not PT.loop.mode then
-    PT.loop.mode = true
-    PT.loop.counter = 0
-    PT.loop.seed_mode = d.loop_seed_combo or "random"
-    PT.loop.random_mode = d.random_loop_check or false
-    PT.loop.locked_fields = PT.build_locked_fields()
-    PT.loop.target = "animate"
-    if PT.loop.seed_mode == "random" then
-      dlg:modify{ id = "seed", text = "-1" }
-    end
-  end
+  init_loop_state("animate")
 
   -- Random loop: generate prompt first
-  if PT.loop.random_mode and not PT.loop.mode then
-    -- First entry with random loop
-  elseif PT.loop.random_mode and PT.loop.mode and PT.loop.counter == 0 then
+  if PT.loop.random_mode and PT.loop.mode and PT.loop.counter == 0 then
     dlg:modify{ id = "action_btn", text = "LOOPING...", enabled = false }
     dlg:modify{ id = "cancel_btn", enabled = true }
     PT.loop.counter = PT.loop.counter + 1
@@ -1099,8 +1013,8 @@ function PT.trigger_animate()
   end
 
   local req = PT.build_animation_request()
-  if not req then PT.loop.mode = false; PT.loop.random_mode = false; PT.loop.target = nil; return end
-  if not PT.attach_source_image(req) then PT.loop.mode = false; PT.loop.random_mode = false; PT.loop.target = nil; return end
+  if not req then PT.reset_loop_state(); return end
+  if not PT.attach_source_image(req) then PT.reset_loop_state(); return end
 
   PT.state.animating = true
   PT.state.gen_step_start = os.clock()
@@ -1130,19 +1044,8 @@ function PT.trigger_audio_generate()
     return
   end
 
-  local is_loop = d.loop_check or d.random_loop_check
   -- Initialize loop state (only on first entry, not on re-entry)
-  if is_loop and not PT.loop.mode then
-    PT.loop.mode = true
-    PT.loop.counter = 0
-    PT.loop.seed_mode = d.loop_seed_combo or "random"
-    PT.loop.random_mode = d.random_loop_check or false
-    PT.loop.locked_fields = PT.build_locked_fields()
-    PT.loop.target = "audio"
-    if PT.loop.seed_mode == "random" then
-      dlg:modify{ id = "seed", text = "-1" }
-    end
-  end
+  init_loop_state("audio")
 
   -- Random loop first entry: generate prompt first
   if PT.loop.random_mode and PT.loop.mode and PT.loop.counter == 0 then
@@ -1155,8 +1058,8 @@ function PT.trigger_audio_generate()
   end
 
   local req = PT.build_audio_reactive_request()
-  if not req then PT.loop.mode = false; PT.loop.random_mode = false; PT.loop.target = nil; return end
-  if not PT.attach_source_image(req) then PT.loop.mode = false; PT.loop.random_mode = false; PT.loop.target = nil; return end
+  if not req then PT.reset_loop_state(); return end
+  if not PT.attach_source_image(req) then PT.reset_loop_state(); return end
 
   PT.audio.generating = true
   PT.state.animating = true
@@ -1186,26 +1089,10 @@ function PT.trigger_qr_generate()
     return
   end
 
-  local use_source = d.qr_use_source or false
-  local w, h = PT.parse_size()
-  local req = {
-    action                        = "generate",
-    mode                          = "controlnet_qrcode",
-    prompt                        = d.prompt,
-    negative_prompt               = d.negative_prompt,
-    width                         = w,
-    height                        = h,
-    seed                          = PT.parse_seed(),
-    steps                         = d.qr_steps or 20,
-    cfg_scale                     = d.qr_cfg / 10.0,
-    clip_skip                     = d.clip_skip,
-    denoise_strength              = use_source and (d.qr_denoise / 100.0) or 1.0,
-    control_image                 = control_b64,
-    controlnet_conditioning_scale = d.qr_conditioning_scale / 100.0,
-    control_guidance_start        = d.qr_guidance_start / 100.0,
-    control_guidance_end          = d.qr_guidance_end / 100.0,
-    post_process                  = PT.build_post_process(),
-  }
+  local req, use_source = PT.build_qr_request()
+  if not req then return end
+  req.control_image = control_b64
+
   -- Illusion art: capture flattened sprite as source image for img2img blend
   if use_source then
     local src_b64 = PT.capture_flattened()
@@ -1215,8 +1102,7 @@ function PT.trigger_qr_generate()
     end
     req.source_image = src_b64
   end
-  PT.attach_lora(req)
-  PT.attach_neg_ti(req)
+
   PT.last_request = PT.deep_copy_request(req)
   PT.state.generating = true
   PT.state.gen_step_start = os.clock()
@@ -1260,47 +1146,39 @@ local function build_actions_panel()
     onclick = function()
       if PT.state.generating or PT.state.animating then return end
       local d = dlg.data
+      local tab = d.main_tabs
 
-      -- If Randomize is enabled: first generate a random prompt, then dispatch
+      -- Audio requires analysis
+      if tab == "tab_audio" and not PT.audio.analyzed then
+        app.alert("Analyze the audio file first.")
+        return
+      end
+
+      -- Randomize-before path: generate prompt first, then dispatch
       if d.randomize_before and not PT.loop.random_mode then
-        local tab = d.main_tabs
-        if tab == "tab_gen" or tab == "tab_pp" then
-          PT.state.pending_action = "generate"
-        elseif tab == "tab_anim" then
-          PT.state.pending_action = "animate"
-        elseif tab == "tab_qr" then
-          PT.state.pending_action = "qr_generate"
-        elseif tab == "tab_audio" then
-          if not PT.audio.analyzed then
-            app.alert("Analyze the audio file first.")
-            return
-          end
-          PT.state.pending_action = "audio"
-        end
-        local locked = PT.build_locked_fields()
+        PT.state.pending_action = TAB_PENDING[tab]
         PT.send({
           action = "generate_prompt",
-          locked_fields = locked,
+          locked_fields = PT.build_locked_fields(),
           randomness = d.randomness,
         })
         dlg:modify{ id = "action_btn", enabled = false }
         dlg:modify{ id = "cancel_btn", enabled = true }
-        PT.start_gen_timeout(30)  -- Timeout protection for prompt randomization
+        PT.start_gen_timeout(30)
         PT.update_status("Randomizing prompt...")
         return
       end
 
       -- Direct dispatch based on active tab
-      local tab = d.main_tabs
-      if tab == "tab_gen" or tab == "tab_pp" then
-        PT.trigger_generate()
-      elseif tab == "tab_anim" then
-        PT.trigger_animate()
-      elseif tab == "tab_qr" then
-        PT.trigger_qr_generate()
-      elseif tab == "tab_audio" then
-        PT.trigger_audio_generate()
-      end
+      local triggers = {
+        tab_gen   = PT.trigger_generate,
+        tab_pp    = PT.trigger_generate,
+        tab_anim  = PT.trigger_animate,
+        tab_qr    = PT.trigger_qr_generate,
+        tab_audio = PT.trigger_audio_generate,
+      }
+      local trigger = triggers[tab]
+      if trigger then trigger() end
     end,
   }
 
@@ -1311,9 +1189,7 @@ local function build_actions_panel()
     hexpand = true,
     onclick = function()
       PT.state.pending_action = nil
-      PT.loop.mode = false
-      PT.loop.random_mode = false
-      PT.loop.target = nil
+      PT.reset_loop_state()
       PT.timers.loop = PT.stop_timer(PT.timers.loop)
       if PT.state.generating or PT.state.animating then
         PT.send({ action = "cancel" })
@@ -1402,7 +1278,6 @@ function PT.build_dialog()
     resizeable = true,
     onclose = function()
       pcall(PT.save_settings)
-      -- Shutdown + cleanup handled by exit(plugin) which is always called after onclose
       pcall(PT.disconnect)
       PT.dlg = nil
     end,

@@ -349,4 +349,34 @@ function PT.build_animation_request()
   return req
 end
 
+-- ─── QR / Illusion Art Request ───────────────────────────────
+
+function PT.build_qr_request()
+  if not PT.dlg then return nil end
+  local d = PT.dlg.data
+  local gw, gh = PT.parse_size()
+  local use_source = d.qr_use_source or false
+  local req = {
+    action                        = "generate",
+    mode                          = "controlnet_qrcode",
+    prompt                        = d.prompt,
+    negative_prompt               = d.negative_prompt,
+    width                         = gw,
+    height                        = gh,
+    seed                          = PT.parse_seed(),
+    steps                         = d.qr_steps or 20,
+    cfg_scale                     = d.qr_cfg / 10.0,
+    clip_skip                     = d.clip_skip,
+    denoise_strength              = use_source and (d.qr_denoise / 100.0) or 1.0,
+    controlnet_conditioning_scale = d.qr_conditioning_scale / 100.0,
+    control_guidance_start        = d.qr_guidance_start / 100.0,
+    control_guidance_end          = d.qr_guidance_end / 100.0,
+    post_process                  = PT.build_post_process(),
+  }
+  PT.attach_lora(req)
+  PT.attach_neg_ti(req)
+  PT.last_request = PT.deep_copy_request(req)
+  return req, use_source
+end
+
 end

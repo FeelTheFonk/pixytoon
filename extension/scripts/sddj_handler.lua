@@ -58,9 +58,7 @@ handlers.result = function(resp)
   PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
 
   if not resp.image or resp.image == "" then
-    PT.loop.mode = false
-    PT.loop.random_mode = false
-    PT.loop.target = nil
+    PT.reset_loop_state()
     PT.update_status("Error: missing image in result response")
     PT.reset_ui_buttons()
     return
@@ -111,18 +109,14 @@ handlers.result = function(resp)
         -- Standard loop: generate directly
         local req = PT.build_generate_request()
         if not req then
-          PT.loop.mode = false
-          PT.loop.random_mode = false
-          PT.loop.target = nil
+          PT.reset_loop_state()
           PT.finalize_sequence()
           PT.reset_ui_buttons()
           PT.update_status("Loop stopped (dialog closed)")
           return
         end
         if not PT.attach_source_image(req) then
-          PT.loop.mode = false
-          PT.loop.random_mode = false
-          PT.loop.target = nil
+          PT.reset_loop_state()
           PT.finalize_sequence()
           PT.reset_ui_buttons()
           PT.update_status("Loop stopped (no source image)")
@@ -311,9 +305,7 @@ handlers.error = function(resp)
   PT.state.animating = false
   PT.audio.generating = false
   PT.audio.analyzing = false
-  PT.loop.mode = false
-  PT.loop.random_mode = false
-  PT.loop.target = nil
+  PT.reset_loop_state()
   PT.timers.loop = PT.stop_timer(PT.timers.loop)
   PT.state.gen_step_start = nil
   PT.state.pending_action = nil
@@ -470,18 +462,14 @@ handlers.prompt_result = function(resp)
       -- Default: generate (existing behavior)
       local req = PT.build_generate_request()
       if not req then
-        PT.loop.mode = false
-        PT.loop.random_mode = false
-        PT.loop.target = nil
+        PT.reset_loop_state()
         PT.finalize_sequence()
         PT.reset_ui_buttons()
         PT.update_status("Random loop stopped (dialog closed)")
         return
       end
       if not PT.attach_source_image(req) then
-        PT.loop.mode = false
-        PT.loop.random_mode = false
-        PT.loop.target = nil
+        PT.reset_loop_state()
         PT.finalize_sequence()
         PT.reset_ui_buttons()
         PT.update_status("Random loop stopped (no source image)")

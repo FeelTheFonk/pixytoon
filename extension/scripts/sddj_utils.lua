@@ -91,4 +91,61 @@ function PT.stop_timer(t)
   return nil
 end
 
+-- ─── Loop State Reset (shared across dialog/handler/ws) ───────
+
+function PT.reset_loop_state()
+  PT.loop.mode = false
+  PT.loop.random_mode = false
+  PT.loop.target = nil
+end
+
+-- ─── Slider Label Registry ────────────────────────────────────
+-- Single source of truth for all slider label formatting.
+-- Used by sddj_dialog.lua (onchange), sddj_settings.lua (apply),
+-- and sddj_output.lua (apply_metadata).
+-- Entry format: { fmt_string, divisor } for float, { fmt_string } for integer.
+
+PT.SLIDER_LABELS = {
+  -- Float-divided sliders
+  cfg_scale             = { "CFG (%.1f)",        10.0 },
+  denoise               = { "Strength (%.2f)",   100.0 },
+  lora_weight           = { "LoRA (%.2f)",       100.0 },
+  neg_ti_weight         = { "Emb. (%.2f)",       100.0 },
+  anim_cfg              = { "CFG (%.1f)",        10.0 },
+  anim_denoise          = { "Strength (%.2f)",   100.0 },
+  audio_cfg             = { "CFG (%.1f)",        10.0 },
+  audio_denoise         = { "Strength (%.2f)",   100.0 },
+  qr_denoise            = { "Denoise (%.2f)",    100.0 },
+  qr_conditioning_scale = { "CN Scale (%.2f)",   100.0 },
+  qr_guidance_start     = { "Guide Start (%.2f)", 100.0 },
+  qr_guidance_end       = { "Guide End (%.2f)",  100.0 },
+  qr_cfg                = { "CFG (%.1f)",        10.0 },
+  -- Integer sliders
+  steps                 = { "Steps (%d)" },
+  clip_skip             = { "CLIP Skip (%d)" },
+  pixel_size            = { "Target (%dpx)" },
+  colors                = { "Colors (%d)" },
+  anim_steps            = { "Steps (%d)" },
+  anim_frames           = { "Frames (%d)" },
+  anim_duration         = { "Duration (%dms)" },
+  audio_steps           = { "Steps (%d)" },
+  mod_slot_count        = { "Slots (%d)" },
+  qr_steps              = { "Steps (%d)" },
+}
+
+function PT.sync_slider_label(id)
+  if not PT.dlg then return end
+  local spec = PT.SLIDER_LABELS[id]
+  if not spec then return end
+  local val = PT.dlg.data[id]
+  if val == nil then return end
+  local label
+  if spec[2] then
+    label = string.format(spec[1], val / spec[2])
+  else
+    label = string.format(spec[1], val)
+  end
+  PT.dlg:modify{ id = id, label = label }
+end
+
 end

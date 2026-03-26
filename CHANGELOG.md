@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.9.57] — 2026-03
+### Changed
+- **Dialog Architectural Refactoring** — `sddj_dialog.lua` restructured from 1441 to 1316 lines via data-driven patterns and DRY infrastructure:
+  - All ~20 slider `onchange` callbacks replaced with `onchange_sync(id)` using centralized `PT.SLIDER_LABELS` registry.
+  - 13 expression entry fields generated via `EXPR_FIELDS` data table loop.
+  - 6 modulation slots generated via `SLOT_DEFAULTS` data table loop.
+  - Action button `onclick` dispatch: `if/elseif` cascade → tab-keyed dispatch table.
+  - 3 trigger functions (`generate`, `animate`, `audio`) share extracted `init_loop_state(target)` helper.
+  - `trigger_qr_generate` request construction extracted to `PT.build_qr_request()` in `sddj_request.lua`.
+- **Cross-Module Label Sync Centralization** — `sddj_settings.lua` `apply_settings()` and `sddj_output.lua` `apply_metadata()` now use `PT.sync_slider_label(id)` from the shared registry instead of hardcoded format strings (~25 manual label lines eliminated per file).
+- **Loop State Reset DRY** — `PT.reset_loop_state()` added to `sddj_utils.lua`, replacing 17 inline triple-assignments (`PT.loop.mode/random_mode/target`) across `sddj_dialog.lua` (7), `sddj_handler.lua` (7), `sddj_ws.lua` (3).
+
+### Fixed
+- **Dead code in `trigger_animate`** — Removed unreachable branch (`PT.loop.random_mode and not PT.loop.mode`) which could never evaluate to `true` because `init_loop_state()` always sets `PT.loop.mode = true` before the check.
+
+### Added
+- `PT.reset_loop_state()` in `sddj_utils.lua` — shared loop state cleanup function.
+- `PT.SLIDER_LABELS` registry in `sddj_utils.lua` — 23-entry table mapping slider widget IDs to format strings and divisors.
+- `PT.sync_slider_label(id)` in `sddj_utils.lua` — formats and applies a slider label from the registry.
+- `PT.build_qr_request()` in `sddj_request.lua` — extracted QR/Illusion Art request construction.
+
 ## [0.9.56] — 2026-03
 ### Changed
 - **QR Code Monster v2 Simplification** — Removed server-side QR image generation (`qrcode_generator.py` deleted, `qrcode[pil]` dependency removed). All ControlNet modes now use client-provided `control_image` uniformly. Engine ControlNet path simplified from 32 to 19 lines. QR scan validation + auto-retry loop removed (14 new protocol test added for `controlnet_qrcode` requiring `control_image`).
