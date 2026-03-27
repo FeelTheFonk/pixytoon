@@ -437,6 +437,9 @@ async def _handle(websocket: WebSocket, req: Request, ws_id: int) -> None:
         elif req.action == Action.DELETE_PROMPT_SCHEDULE:
             await _handle_delete_prompt_schedule(websocket, req)
 
+        elif req.action == Action.VALIDATE_DSL:
+            await _handle_validate_dsl(websocket, req)
+
         elif req.action == Action.GENERATE_AUDIO_REACTIVE:
             await _handle_generate_audio_reactive(websocket, req, ws_id)
 
@@ -833,9 +836,10 @@ async def _handle_get_choreography_preset(websocket: WebSocket, req: Request) ->
 
 async def _handle_list_prompt_schedules(websocket: WebSocket) -> None:
     from .prompt_schedule_presets import PromptSchedulePresetsManager
+    from .protocol import PromptScheduleListResponse
     mgr = PromptSchedulePresetsManager(settings.prompt_schedules_dir)
     items = mgr.list_presets()
-    await _send(websocket, ListResponse(list_type="prompt_schedules", items=items))
+    await _send(websocket, PromptScheduleListResponse(schedules=items))
 
 
 async def _handle_get_prompt_schedule(websocket: WebSocket, req: Request) -> None:
@@ -845,10 +849,12 @@ async def _handle_get_prompt_schedule(websocket: WebSocket, req: Request) -> Non
             code="INVALID_REQUEST", message="prompt_schedule_name required"))
         return
     from .prompt_schedule_presets import PromptSchedulePresetsManager
+    from .protocol import PromptScheduleDetailResponse
     mgr = PromptSchedulePresetsManager(settings.prompt_schedules_dir)
     try:
         data = mgr.get_preset(name)
-        await _send(websocket, PresetResponse(name=name, data=data))
+        await _send(websocket, PromptScheduleDetailResponse(
+            name=name, schedule_data=data))
     except (FileNotFoundError, ValueError) as e:
         await _send(websocket, ErrorResponse(
             code="INVALID_REQUEST", message=str(e)))
@@ -863,10 +869,11 @@ async def _handle_save_prompt_schedule(websocket: WebSocket, req: Request) -> No
             message="prompt_schedule_name and prompt_schedule_data required"))
         return
     from .prompt_schedule_presets import PromptSchedulePresetsManager
+    from .protocol import PromptScheduleSavedResponse
     mgr = PromptSchedulePresetsManager(settings.prompt_schedules_dir)
     try:
         mgr.save_preset(name, data)
-        await _send(websocket, PresetSavedResponse(name=name))
+        await _send(websocket, PromptScheduleSavedResponse(name=name))
     except ValueError as e:
         await _send(websocket, ErrorResponse(
             code="INVALID_REQUEST", message=str(e)))
@@ -879,13 +886,43 @@ async def _handle_delete_prompt_schedule(websocket: WebSocket, req: Request) -> 
             code="INVALID_REQUEST", message="prompt_schedule_name required"))
         return
     from .prompt_schedule_presets import PromptSchedulePresetsManager
+    from .protocol import PromptScheduleDeletedResponse
     mgr = PromptSchedulePresetsManager(settings.prompt_schedules_dir)
     try:
         mgr.delete_preset(name)
-        await _send(websocket, PresetDeletedResponse(name=name))
+        await _send(websocket, PromptScheduleDeletedResponse(name=name))
     except (FileNotFoundError, ValueError) as e:
         await _send(websocket, ErrorResponse(
             code="INVALID_REQUEST", message=str(e)))
+
+
+async def _handle_validate_dsl(websocket: WebSocket, req: Request) -> None:
+    """Validate DSL text and return structured parse results."""
+    from .dsl_parser import parse as dsl_parse
+    from .protocol import ValidateDslResponse
+
+    dsl_text = req.dsl_text or ""
+    total_frames = req.total_frames or 100
+    fps = req.fps or 24.0
+
+    result = dsl_parse(dsl_text, total_frames, fps, default_prompt="")
+    errors = [
+        {"line": e.line, "code": e.code, "message": e.message}
+        for e in result.validation.errors
+    ]
+    warnings = [
+        {"line": w.line, "code": w.code, "message": w.message}
+        for w in result.validation.warnings
+    ]
+    await _send(websocket, ValidateDslResponse(
+        valid=result.validation.valid,
+        keyframe_count=len(result.schedule.keyframes) if result.schedule else 0,
+        error_count=len(errors),
+        warning_count=len(warnings),
+        errors=errors,
+        warnings=warnings,
+        has_auto=result.has_auto,
+    ))
 
 
 async def _handle_export_mp4(websocket: WebSocket, req: Request) -> None:

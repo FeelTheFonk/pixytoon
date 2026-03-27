@@ -1,4 +1,8 @@
-"""Animation generation — chain + AnimateDiff methods."""
+"""Animation generation — chain + AnimateDiff methods.
+
+Chain mode supports SLERP prompt embedding interpolation for smooth
+transitions between keyframes (via PromptBlendInfo).
+"""
 
 from __future__ import annotations
 
@@ -184,46 +188,92 @@ class AnimationMixin:
                 log.info("Chain frame %d/%d: seed=%d, mode=%s",
                          frame_idx, req.frame_count, frame_seed, req.mode.value)
 
-                # Resolve per-frame prompt from schedule
+                # Resolve per-frame prompt from schedule (with SLERP blending)
                 frame_prompt = req.prompt
                 frame_neg = effective_neg
+                blend_embeds = None  # (prompt_embeds, neg_embeds) when blending
+                frame_denoise = chain_denoise
+                frame_cfg = req.cfg_scale
+                frame_steps = chain_scaled_steps
                 if schedule and schedule.keyframes:
-                    kf_prompt = schedule.get_prompt_for_frame(frame_idx)
-                    if kf_prompt:
-                        frame_prompt = kf_prompt
-                    kf_neg = schedule.get_negative_for_frame(frame_idx)
-                    if kf_neg:
-                        frame_neg = self._build_effective_negative(kf_neg, req.negative_ti)
+                    blend_info = schedule.get_blend_info_for_frame(frame_idx)
+                    frame_prompt = blend_info.effective_prompt or frame_prompt
+                    if blend_info.negative_prompt:
+                        frame_neg = self._build_effective_negative(
+                            blend_info.negative_prompt, req.negative_ti)
+                    # SLERP embedding blend during transitions
+                    if blend_info.is_blending:
+                        try:
+                            from ..embedding_blend import blend_prompt_embeds
+                            pipe_for_embed = (
+                                self._pipe if frame_idx == 0
+                                else self._img2img_pipe
+                            )
+                            blend_embeds = blend_prompt_embeds(
+                                pipe_for_embed,
+                                blend_info.prompt_a,
+                                blend_info.prompt_b,
+                                blend_info.blend_weight,
+                                negative_prompt=frame_neg,
+                                clip_skip=req.clip_skip,
+                            )
+                            log.debug(
+                                "Frame %d: SLERP blend %.2f (%s → %s)",
+                                frame_idx, blend_info.blend_weight,
+                                blend_info.prompt_a[:30],
+                                blend_info.prompt_b[:30],
+                            )
+                        except Exception as e:
+                            log.warning("SLERP blend failed frame %d: %s", frame_idx, e)
+                    # Per-keyframe parameter overrides
+                    if blend_info.denoise_strength is not None:
+                        d, s, _ = compute_effective_denoise(req.steps, blend_info.denoise_strength)
+                        frame_denoise = d
+                        frame_steps = s
+                    if blend_info.cfg_scale is not None:
+                        frame_cfg = blend_info.cfg_scale
+                    if blend_info.steps is not None:
+                        frame_steps = scale_steps_for_denoise(blend_info.steps, frame_denoise)
 
                 if frame_idx == 0:
                     if req.mode == GenerationMode.TXT2IMG:
-                        image = self._pipe(
-                            prompt=frame_prompt,
-                            negative_prompt=frame_neg,
+                        gen_kwargs = dict(
                             num_inference_steps=req.steps,
-                            guidance_scale=req.cfg_scale,
+                            guidance_scale=frame_cfg,
                             width=target_w,
                             height=target_h,
                             generator=generator,
                             clip_skip=req.clip_skip,
                             callback_on_step_end=step_callback,
                             output_type="pil",
-                        ).images[0]
+                        )
+                        if blend_embeds is not None:
+                            gen_kwargs["prompt_embeds"] = blend_embeds[0]
+                            gen_kwargs["negative_prompt_embeds"] = blend_embeds[1]
+                        else:
+                            gen_kwargs["prompt"] = frame_prompt
+                            gen_kwargs["negative_prompt"] = frame_neg
+                        image = self._pipe(**gen_kwargs).images[0]
                     elif req.mode == GenerationMode.IMG2IMG:
                         if _source_img is None:
                             raise ValueError("img2img requires source_image")
-                        image = self._img2img_pipe(
-                            prompt=frame_prompt,
-                            negative_prompt=frame_neg,
+                        gen_kwargs = dict(
                             image=_source_img,
-                            num_inference_steps=chain_scaled_steps,
-                            guidance_scale=req.cfg_scale,
-                            strength=chain_denoise,
+                            num_inference_steps=frame_steps,
+                            guidance_scale=frame_cfg,
+                            strength=frame_denoise,
                             generator=generator,
                             clip_skip=req.clip_skip,
                             callback_on_step_end=step_callback,
                             output_type="pil",
-                        ).images[0]
+                        )
+                        if blend_embeds is not None:
+                            gen_kwargs["prompt_embeds"] = blend_embeds[0]
+                            gen_kwargs["negative_prompt_embeds"] = blend_embeds[1]
+                        else:
+                            gen_kwargs["prompt"] = frame_prompt
+                            gen_kwargs["negative_prompt"] = frame_neg
+                        image = self._img2img_pipe(**gen_kwargs).images[0]
                     elif req.mode == GenerationMode.INPAINT:
                         if _source_img is None or _mask_img is None:
                             raise ValueError("inpaint requires source_image and mask_image")
@@ -270,35 +320,45 @@ class AnimationMixin:
                         # (ControlNet pipelines don't support img2img directly,
                         # so we fall through to plain img2img for frame coherence)
                         log.info("Chain frame %d: ControlNet mode uses img2img for frame coherence", frame_idx)
-                        image = self._img2img_pipe(
-                            prompt=frame_prompt,
-                            negative_prompt=frame_neg,
+                        cn_kwargs = dict(
                             image=source,
-                            num_inference_steps=chain_scaled_steps,
-                            guidance_scale=req.cfg_scale,
-                            strength=chain_denoise,
+                            num_inference_steps=frame_steps,
+                            guidance_scale=frame_cfg,
+                            strength=frame_denoise,
                             generator=generator,
                             clip_skip=req.clip_skip,
                             callback_on_step_end=step_callback,
                             output_type="pil",
-                        ).images[0]
+                        )
+                        if blend_embeds is not None:
+                            cn_kwargs["prompt_embeds"] = blend_embeds[0]
+                            cn_kwargs["negative_prompt_embeds"] = blend_embeds[1]
+                        else:
+                            cn_kwargs["prompt"] = frame_prompt
+                            cn_kwargs["negative_prompt"] = frame_neg
+                        image = self._img2img_pipe(**cn_kwargs).images[0]
                     else:
                         log.info("Chain frame %d: calling img2img pipe (source=%s, steps=%d (scaled=%d), strength=%.2f, unet=%s, scheduler=%s)",
-                                 frame_idx, source.size, req.steps, chain_scaled_steps, chain_denoise,
+                                 frame_idx, source.size, req.steps, frame_steps, frame_denoise,
                                  type(self._img2img_pipe.unet).__name__,
                                  type(self._img2img_pipe.scheduler).__name__)
-                        image = self._img2img_pipe(
-                            prompt=frame_prompt,
-                            negative_prompt=frame_neg,
+                        i2i_kwargs = dict(
                             image=source,
-                            num_inference_steps=chain_scaled_steps,
-                            guidance_scale=req.cfg_scale,
-                            strength=chain_denoise,
+                            num_inference_steps=frame_steps,
+                            guidance_scale=frame_cfg,
+                            strength=frame_denoise,
                             generator=generator,
                             clip_skip=req.clip_skip,
                             callback_on_step_end=step_callback,
                             output_type="pil",
-                        ).images[0]
+                        )
+                        if blend_embeds is not None:
+                            i2i_kwargs["prompt_embeds"] = blend_embeds[0]
+                            i2i_kwargs["negative_prompt_embeds"] = blend_embeds[1]
+                        else:
+                            i2i_kwargs["prompt"] = frame_prompt
+                            i2i_kwargs["negative_prompt"] = frame_neg
+                        image = self._img2img_pipe(**i2i_kwargs).images[0]
                         log.info("Chain frame %d: img2img complete", frame_idx)
 
                 # Temporal coherence: color matching + optical flow (frame 1+)

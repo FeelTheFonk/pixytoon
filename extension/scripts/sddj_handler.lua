@@ -952,6 +952,83 @@ handlers.shutdown_ack = function(resp)
   if PT.dlg then PT.update_status("Server shutting down...") end
 end
 
+-- ─── Validate DSL Result ──────────────────────────────────
+
+handlers.validate_dsl_result = function(resp)
+  if not PT.schedule_data then return end
+  local valid = resp.valid
+  local errors = resp.errors or {}
+  local warnings = resp.warnings or {}
+
+  PT.schedule_data.valid = valid
+  PT.schedule_data.error_count = #errors
+  PT.schedule_data.warning_count = #warnings
+  PT.schedule_data.errors = errors
+  PT.schedule_data.warnings = warnings
+
+  if PT.update_schedule_status then
+    PT.update_schedule_status()
+  end
+
+  if valid then
+    PT.update_status("DSL validated — OK")
+  else
+    local first = errors[1]
+    local msg = first and (first.code .. ": " .. first.message) or "Validation failed"
+    PT.update_status("DSL validation: " .. msg)
+  end
+end
+
+-- ─── Prompt Schedule List ─────────────────────────────────
+
+handlers.prompt_schedule_list = function(resp)
+  PT.schedule_preset_list = resp.schedules or {}
+  if #PT.schedule_preset_list == 0 then
+    PT.schedule_preset_list = { "(none)" }
+  end
+end
+
+-- ─── Prompt Schedule Detail ───────────────────────────────
+
+handlers.prompt_schedule_detail = function(resp)
+  if not resp.dsl_text and not resp.schedule_data then return end
+  local dsl = resp.dsl_text or ""
+  if dsl == "" and resp.schedule_data and resp.schedule_data.keyframes then
+    -- Reconstruct DSL from structured data (fallback)
+    local lines = {}
+    for _, kf in ipairs(resp.schedule_data.keyframes) do
+      lines[#lines + 1] = "[" .. (kf.frame or 0) .. "]"
+      if kf.prompt and kf.prompt ~= "" then
+        lines[#lines + 1] = kf.prompt
+      end
+      if kf.transition and kf.transition ~= "hard_cut" then
+        lines[#lines + 1] = "transition: " .. kf.transition
+      end
+      if kf.transition_frames and kf.transition_frames > 0 then
+        lines[#lines + 1] = "blend: " .. kf.transition_frames
+      end
+    end
+    dsl = table.concat(lines, "\n")
+  end
+  if PT.dlg then
+    PT.dlg:modify{ id = "generate_prompt_schedule_dsl", text = dsl }
+    if PT.update_schedule_state then
+      PT.update_schedule_state(dsl)
+    end
+  end
+  PT.update_status("Schedule loaded")
+end
+
+-- ─── Prompt Schedule CRUD ─────────────────────────────────
+
+handlers.prompt_schedule_saved = function(resp)
+  PT.update_status("Schedule preset saved: " .. tostring(resp.name or "?"))
+end
+
+handlers.prompt_schedule_deleted = function(resp)
+  PT.update_status("Schedule preset deleted: " .. tostring(resp.name or "?"))
+end
+
 -- ─── Decoupled Refresh Timer ────────────────────────────────
 -- Frame imports no longer call app.refresh() directly (that caused
 -- re-entrant event pumping → stack overflow or frame batching).

@@ -1,16 +1,20 @@
 """Prompt schedule — unified prompt resolution for all generation modes.
 
 Supports both legacy time-range segments (audio-reactive) and keyframe-based
-scheduling (animation, generation). Keyframes use frame indices with hard_cut
-or blend transitions. Blend mode alternates prompts frame-by-frame within a
-transition window, producing visual crossfade through the img2img chain.
+scheduling (animation, generation).  Keyframes use frame indices with
+configurable transition types.
+
+Transition modes use prompt embedding interpolation (SLERP/LERP) across a
+transition window shaped by an easing curve — eliminating the previous
+even/odd frame alternation which caused visual flicker.
 """
 
 from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -22,9 +26,91 @@ if TYPE_CHECKING:
 log = logging.getLogger("sddj.prompt_schedule")
 
 
+# ─────────────────────────────────────────────────────────────
+# Transition Types & Easing
+# ─────────────────────────────────────────────────────────────
+
+
+class TransitionType(str, Enum):
+    HARD_CUT = "hard_cut"
+    BLEND = "blend"
+    LINEAR_BLEND = "linear_blend"
+    EASE_IN = "ease_in"
+    EASE_OUT = "ease_out"
+    EASE_IN_OUT = "ease_in_out"
+    CUBIC = "cubic"
+    SLERP = "slerp"
+
+    @classmethod
+    def from_str(cls, s: str) -> "TransitionType":
+        try:
+            return cls(s)
+        except ValueError:
+            log.warning("Invalid transition %r, using hard_cut", s)
+            return cls.HARD_CUT
+
+
+_BLENDING_TRANSITIONS = frozenset({
+    TransitionType.BLEND,
+    TransitionType.LINEAR_BLEND,
+    TransitionType.EASE_IN,
+    TransitionType.EASE_OUT,
+    TransitionType.EASE_IN_OUT,
+    TransitionType.CUBIC,
+    TransitionType.SLERP,
+})
+
+_VALID_TRANSITION_NAMES = frozenset(t.value for t in TransitionType)
+
+
+def _ease_linear(t: float) -> float:
+    return t
+
+
+def _ease_in(t: float) -> float:
+    return t * t
+
+
+def _ease_out(t: float) -> float:
+    return 1.0 - (1.0 - t) * (1.0 - t)
+
+
+def _ease_in_out(t: float) -> float:
+    if t < 0.5:
+        return 2.0 * t * t
+    return 1.0 - (-2.0 * t + 2.0) ** 2 / 2.0
+
+
+def _ease_cubic(t: float) -> float:
+    if t < 0.5:
+        return 4.0 * t * t * t
+    return 1.0 - (-2.0 * t + 2.0) ** 3 / 2.0
+
+
+_EASING_FUNCTIONS: dict[TransitionType, callable] = {
+    TransitionType.BLEND: _ease_linear,
+    TransitionType.LINEAR_BLEND: _ease_linear,
+    TransitionType.SLERP: _ease_linear,
+    TransitionType.EASE_IN: _ease_in,
+    TransitionType.EASE_OUT: _ease_out,
+    TransitionType.EASE_IN_OUT: _ease_in_out,
+    TransitionType.CUBIC: _ease_cubic,
+}
+
+
+def get_easing(transition: TransitionType) -> callable:
+    """Return the easing function for a transition type."""
+    return _EASING_FUNCTIONS.get(transition, _ease_linear)
+
+
+# ─────────────────────────────────────────────────────────────
+# Data Classes
+# ─────────────────────────────────────────────────────────────
+
+
 @dataclass
 class PromptSegment:
-    """A prompt active during a time range."""
+    """A prompt active during a time range (legacy)."""
 
     start_second: float
     end_second: float
@@ -40,11 +126,69 @@ class PromptKeyframe:
     prompt: str
     negative_prompt: str = ""
     weight: float = 1.0
-    transition: str = "hard_cut"  # "hard_cut" | "blend"
-    transition_frames: int = 0    # blend window length (blend mode only)
+    weight_end: float | None = None          # animated weight: weight->weight_end
+    transition: str = "hard_cut"
+    transition_frames: int = 0
+    # Per-keyframe parameter overrides (None = inherit base)
+    denoise_strength: float | None = None
+    cfg_scale: float | None = None
+    steps: int | None = None
 
 
-_VALID_TRANSITIONS = frozenset({"hard_cut", "blend"})
+@dataclass
+class PromptBlendInfo:
+    """Result of prompt resolution for a single frame — provides all info
+    needed for embedding-space interpolation.
+
+    When ``blend_weight`` is 0.0, only ``prompt_a`` is active.
+    When ``blend_weight`` is 1.0, only ``prompt_b`` is active.
+    Between 0 and 1, the engine SLERP/LERPs embeddings of both prompts.
+    """
+    prompt_a: str
+    prompt_b: str
+    blend_weight: float         # 0.0 = fully A, 1.0 = fully B
+    negative_prompt: str = ""
+    weight: float = 1.0         # effective prompt embedding weight
+    # Per-frame parameter overrides (None = use base)
+    denoise_strength: float | None = None
+    cfg_scale: float | None = None
+    steps: int | None = None
+
+    @property
+    def is_blending(self) -> bool:
+        return 0.0 < self.blend_weight < 1.0
+
+    @property
+    def effective_prompt(self) -> str:
+        """Return the dominant prompt (for logging/display)."""
+        return self.prompt_b if self.blend_weight >= 0.5 else self.prompt_a
+
+
+@dataclass
+class ValidationError:
+    """A structured parse/validation error."""
+    line: int | None
+    column: int | None
+    code: str
+    message: str
+    severity: str = "error"  # "error" | "warning"
+
+
+@dataclass
+class ValidationResult:
+    """Result of schedule validation."""
+    valid: bool
+    errors: list[ValidationError] = field(default_factory=list)
+    warnings: list[ValidationError] = field(default_factory=list)
+
+    @property
+    def all_issues(self) -> list[ValidationError]:
+        return self.errors + self.warnings
+
+
+# ─────────────────────────────────────────────────────────────
+# Core Schedule Class
+# ─────────────────────────────────────────────────────────────
 
 
 class PromptSchedule:
@@ -86,17 +230,30 @@ class PromptSchedule:
     # ── Frame-based keyframe resolution ─────────────────────────
 
     def get_prompt_for_frame(self, frame_idx: int) -> str:
-        """Return the active prompt for *frame_idx*.
+        """Return the active prompt for *frame_idx* (simple string, backward compat).
 
-        Transition logic:
-        - ``hard_cut``: returns the prompt of the keyframe with highest
-          frame <= *frame_idx*.
-        - ``blend``: within *transition_frames* after a keyframe switch,
-          alternates between outgoing and incoming prompt on even/odd
-          frames. The img2img chain naturally produces a visual crossfade.
+        For blending support, use get_blend_info_for_frame() instead.
+        """
+        info = self.get_blend_info_for_frame(frame_idx)
+        return info.effective_prompt
+
+    def get_blend_info_for_frame(self, frame_idx: int) -> PromptBlendInfo:
+        """Resolve prompt blending info for *frame_idx*.
+
+        Returns a PromptBlendInfo with:
+        - prompt_a, prompt_b: the two prompts involved
+        - blend_weight: 0.0–1.0 shaped by the easing function
+        - weight: effective prompt weight
+        - negative_prompt: active negative
+        - denoise_strength, cfg_scale, steps: per-keyframe overrides (or None)
         """
         if not self.keyframes:
-            return self.default_prompt
+            return PromptBlendInfo(
+                prompt_a=self.default_prompt,
+                prompt_b=self.default_prompt,
+                blend_weight=0.0,
+                weight=1.0,
+            )
 
         # Find active keyframe (last kf where kf.frame <= frame_idx)
         active_idx = -1
@@ -107,38 +264,136 @@ class PromptSchedule:
                 break
 
         if active_idx < 0:
-            return self.default_prompt
+            return PromptBlendInfo(
+                prompt_a=self.default_prompt,
+                prompt_b=self.default_prompt,
+                blend_weight=0.0,
+                weight=1.0,
+            )
 
         active_kf = self.keyframes[active_idx]
+        tr_type = TransitionType.from_str(active_kf.transition)
+        prompt_active = active_kf.prompt or self.default_prompt
+        neg_active = active_kf.negative_prompt or ""
 
-        # Hard cut: simple return
-        if active_kf.transition != "blend" or active_kf.transition_frames <= 0:
-            return active_kf.prompt or self.default_prompt
+        # Compute effective weight (static or animated)
+        weight = self._compute_weight(active_kf, active_idx, frame_idx)
 
-        # Blend: check if we're within the transition window
+        # Compute per-keyframe parameter overrides (interpolated)
+        denoise, cfg, steps = self._interpolate_params(active_idx, frame_idx)
+
+        # Hard cut or no transition window: no blending
+        if (tr_type not in _BLENDING_TRANSITIONS
+                or active_kf.transition_frames <= 0
+                or active_idx == 0):
+            return PromptBlendInfo(
+                prompt_a=prompt_active,
+                prompt_b=prompt_active,
+                blend_weight=0.0,
+                negative_prompt=neg_active,
+                weight=weight,
+                denoise_strength=denoise,
+                cfg_scale=cfg,
+                steps=steps,
+            )
+
+        # Check if within transition window
         frames_since = frame_idx - active_kf.frame
-        if frames_since >= active_kf.transition_frames or active_idx == 0:
-            return active_kf.prompt or self.default_prompt
+        if frames_since >= active_kf.transition_frames:
+            # Past transition window — fully on current prompt
+            return PromptBlendInfo(
+                prompt_a=prompt_active,
+                prompt_b=prompt_active,
+                blend_weight=0.0,
+                negative_prompt=neg_active,
+                weight=weight,
+                denoise_strength=denoise,
+                cfg_scale=cfg,
+                steps=steps,
+            )
 
-        # Within blend window: alternate between outgoing and incoming
+        # Within transition window: compute blend weight via easing
         prev_kf = self.keyframes[active_idx - 1]
-        if frame_idx % 2 == 0:
-            return prev_kf.prompt or self.default_prompt
-        return active_kf.prompt or self.default_prompt
+        prompt_outgoing = prev_kf.prompt or self.default_prompt
+        neg_outgoing = prev_kf.negative_prompt or ""
+
+        t = frames_since / active_kf.transition_frames  # [0, 1)
+        easing = get_easing(tr_type)
+        blend_weight = max(0.0, min(1.0, easing(t)))
+
+        # Negative: use incoming negative prompt during blend
+        effective_neg = neg_active if blend_weight >= 0.5 else neg_outgoing
+
+        return PromptBlendInfo(
+            prompt_a=prompt_outgoing,
+            prompt_b=prompt_active,
+            blend_weight=blend_weight,
+            negative_prompt=effective_neg,
+            weight=weight,
+            denoise_strength=denoise,
+            cfg_scale=cfg,
+            steps=steps,
+        )
+
+    def _compute_weight(
+        self, kf: PromptKeyframe, kf_idx: int, frame_idx: int,
+    ) -> float:
+        """Compute effective weight, supporting animated weight: start->end."""
+        if kf.weight_end is None:
+            return kf.weight
+
+        # Animated weight: interpolate over this keyframe's active region
+        next_frame: int
+        if kf_idx + 1 < len(self.keyframes):
+            next_frame = self.keyframes[kf_idx + 1].frame
+        else:
+            next_frame = kf.frame + 100  # default region length for last kf
+
+        region = next_frame - kf.frame
+        if region <= 0:
+            return kf.weight
+        t = min(1.0, (frame_idx - kf.frame) / region)
+        return kf.weight + (kf.weight_end - kf.weight) * t
+
+    def _interpolate_params(
+        self, active_idx: int, frame_idx: int,
+    ) -> tuple[float | None, float | None, int | None]:
+        """Interpolate per-keyframe parameter overrides between keyframes.
+
+        Uses linear interpolation. Each parameter is independent.
+        Returns (denoise, cfg, steps) — None values mean "use base".
+        """
+        active_kf = self.keyframes[active_idx]
+
+        # Find next keyframe for interpolation target
+        next_kf: PromptKeyframe | None = None
+        if active_idx + 1 < len(self.keyframes):
+            next_kf = self.keyframes[active_idx + 1]
+
+        def _interp(cur_val: float | None, next_val: float | None) -> float | None:
+            if cur_val is None:
+                return None
+            if next_val is None or next_kf is None:
+                return cur_val
+            region = next_kf.frame - active_kf.frame
+            if region <= 0:
+                return cur_val
+            t = min(1.0, (frame_idx - active_kf.frame) / region)
+            return cur_val + (next_val - cur_val) * t
+
+        denoise = _interp(active_kf.denoise_strength,
+                          next_kf.denoise_strength if next_kf else None)
+        cfg = _interp(active_kf.cfg_scale,
+                      next_kf.cfg_scale if next_kf else None)
+        # Steps: no interpolation (integer), use active keyframe value
+        steps = active_kf.steps
+
+        return denoise, cfg, steps
 
     def get_negative_for_frame(self, frame_idx: int) -> str | None:
         """Return the per-keyframe negative prompt, or *None* for default."""
-        if not self.keyframes:
-            return None
-        active_kf: PromptKeyframe | None = None
-        for kf in self.keyframes:
-            if kf.frame <= frame_idx:
-                active_kf = kf
-            else:
-                break
-        if active_kf is None or not active_kf.negative_prompt:
-            return None
-        return active_kf.negative_prompt
+        info = self.get_blend_info_for_frame(frame_idx)
+        return info.negative_prompt or None
 
     def get_unique_prompts(self) -> set[str]:
         """Return all unique positive prompts (for embedding pre-cache)."""
@@ -155,6 +410,131 @@ class PromptSchedule:
         """Return all unique per-keyframe negative prompts."""
         return {kf.negative_prompt for kf in self.keyframes if kf.negative_prompt}
 
+    # ── Validation ──────────────────────────────────────────────
+
+    def validate(self, total_frames: int | None = None) -> ValidationResult:
+        """Validate the schedule structure.
+
+        Returns a ValidationResult with all errors and warnings.
+        """
+        errors: list[ValidationError] = []
+        warnings: list[ValidationError] = []
+
+        if not self.keyframes and not self.segments:
+            warnings.append(ValidationError(
+                line=None, column=None, code="W002",
+                message="Empty schedule (no keyframes defined)",
+                severity="warning",
+            ))
+            return ValidationResult(valid=True, errors=errors, warnings=warnings)
+
+        # Validate keyframes
+        if self.keyframes:
+            # Check first keyframe starts at 0
+            if self.keyframes[0].frame != 0:
+                warnings.append(ValidationError(
+                    line=None, column=None, code="W001",
+                    message=f"First keyframe at frame {self.keyframes[0].frame}, "
+                            "not frame 0 — implicit frame-0 keyframe will be inserted",
+                    severity="warning",
+                ))
+
+            prev_frame = -1
+            for i, kf in enumerate(self.keyframes):
+                # Chronological order
+                if kf.frame <= prev_frame:
+                    errors.append(ValidationError(
+                        line=None, column=None, code="E003",
+                        message=f"Keyframe {i} at frame {kf.frame} is not after "
+                                f"previous frame {prev_frame}",
+                    ))
+
+                # Range checks
+                if total_frames is not None and kf.frame >= total_frames:
+                    errors.append(ValidationError(
+                        line=None, column=None, code="E001",
+                        message=f"Keyframe {i} at frame {kf.frame} exceeds "
+                                f"total frames {total_frames}",
+                    ))
+
+                # Transition validation
+                if kf.transition not in _VALID_TRANSITION_NAMES:
+                    errors.append(ValidationError(
+                        line=None, column=None, code="E005",
+                        message=f"Invalid transition type: {kf.transition!r}",
+                    ))
+
+                # Transition window vs gap
+                if kf.transition_frames > 0 and i > 0:
+                    gap = kf.frame - self.keyframes[i - 1].frame
+                    if kf.transition_frames > gap:
+                        errors.append(ValidationError(
+                            line=None, column=None, code="E004",
+                            message=f"Keyframe {i}: transition_frames "
+                                    f"({kf.transition_frames}) exceeds gap to "
+                                    f"previous keyframe ({gap} frames)",
+                        ))
+
+                # Weight
+                if kf.weight < 0.1 or kf.weight > 5.0:
+                    errors.append(ValidationError(
+                        line=None, column=None, code="E006",
+                        message=f"Keyframe {i}: weight {kf.weight} out of range "
+                                "[0.1, 5.0]",
+                    ))
+                elif kf.weight > 2.0:
+                    warnings.append(ValidationError(
+                        line=None, column=None, code="W004",
+                        message=f"Keyframe {i}: weight {kf.weight} > 2.0 may "
+                                "cause artifacts",
+                        severity="warning",
+                    ))
+
+                # Denoise
+                if kf.denoise_strength is not None:
+                    if kf.denoise_strength < 0.0 or kf.denoise_strength > 1.0:
+                        errors.append(ValidationError(
+                            line=None, column=None, code="E007",
+                            message=f"Keyframe {i}: denoise {kf.denoise_strength} "
+                                    "out of range [0.0, 1.0]",
+                        ))
+
+                # CFG
+                if kf.cfg_scale is not None:
+                    if kf.cfg_scale < 1.0 or kf.cfg_scale > 30.0:
+                        errors.append(ValidationError(
+                            line=None, column=None, code="E008",
+                            message=f"Keyframe {i}: cfg {kf.cfg_scale} out of "
+                                    "range [1.0, 30.0]",
+                        ))
+
+                # Steps
+                if kf.steps is not None:
+                    if kf.steps < 1 or kf.steps > 150:
+                        errors.append(ValidationError(
+                            line=None, column=None, code="E009",
+                            message=f"Keyframe {i}: steps {kf.steps} out of "
+                                    "range [1, 150]",
+                        ))
+
+                # Short transition warning
+                if kf.transition_frames in (1, 2):
+                    warnings.append(ValidationError(
+                        line=None, column=None, code="W003",
+                        message=f"Keyframe {i}: transition_frames "
+                                f"{kf.transition_frames} is very short — may be "
+                                "visually imperceptible",
+                        severity="warning",
+                    ))
+
+                prev_frame = kf.frame
+
+        return ValidationResult(
+            valid=len(errors) == 0,
+            errors=errors,
+            warnings=warnings,
+        )
+
     # ── Serialization ───────────────────────────────────────────
 
     def to_dict(self) -> dict:
@@ -167,8 +547,15 @@ class PromptSchedule:
                     "prompt": kf.prompt,
                     "negative_prompt": kf.negative_prompt,
                     "weight": kf.weight,
+                    **({"weight_end": kf.weight_end} if kf.weight_end is not None else {}),
                     "transition": kf.transition,
                     "transition_frames": kf.transition_frames,
+                    **({"denoise_strength": kf.denoise_strength}
+                       if kf.denoise_strength is not None else {}),
+                    **({"cfg_scale": kf.cfg_scale}
+                       if kf.cfg_scale is not None else {}),
+                    **({"steps": kf.steps}
+                       if kf.steps is not None else {}),
                 }
                 for kf in self.keyframes
             ],
@@ -207,6 +594,49 @@ class PromptSchedule:
         return PromptSchedule(segments, default_prompt) if segments else None
 
     @staticmethod
+    def _parse_keyframe_dict(d: dict) -> PromptKeyframe | None:
+        """Parse a single keyframe dict. Returns None on failure."""
+        try:
+            frame = int(d.get("frame", -1))
+            prompt = str(d.get("prompt", ""))
+            if frame < 0:
+                log.warning("Skipping keyframe with invalid frame: %s", d)
+                return None
+            transition = str(d.get("transition", "hard_cut"))
+            if transition not in _VALID_TRANSITION_NAMES:
+                log.warning("Invalid transition %r, using hard_cut", transition)
+                transition = "hard_cut"
+
+            weight = float(d.get("weight", 1.0))
+            weight_end_raw = d.get("weight_end")
+            weight_end = float(weight_end_raw) if weight_end_raw is not None else None
+
+            denoise_raw = d.get("denoise_strength")
+            denoise = float(denoise_raw) if denoise_raw is not None else None
+
+            cfg_raw = d.get("cfg_scale")
+            cfg = float(cfg_raw) if cfg_raw is not None else None
+
+            steps_raw = d.get("steps")
+            steps = int(steps_raw) if steps_raw is not None else None
+
+            return PromptKeyframe(
+                frame=frame,
+                prompt=prompt,
+                negative_prompt=str(d.get("negative_prompt", "")),
+                weight=weight,
+                weight_end=weight_end,
+                transition=transition,
+                transition_frames=max(0, int(d.get("transition_frames", 0))),
+                denoise_strength=denoise,
+                cfg_scale=cfg,
+                steps=steps,
+            )
+        except (TypeError, ValueError) as exc:
+            log.warning("Skipping malformed keyframe dict: %s (%s)", d, exc)
+            return None
+
+    @staticmethod
     def from_keyframe_dicts(
         raw_keyframes: list[dict],
         default_prompt: str,
@@ -217,28 +647,9 @@ class PromptSchedule:
         """
         keyframes: list[PromptKeyframe] = []
         for d in raw_keyframes:
-            try:
-                frame = int(d.get("frame", -1))
-                prompt = str(d.get("prompt", ""))
-                if frame < 0:
-                    log.warning("Skipping keyframe with invalid frame: %s", d)
-                    continue
-                transition = str(d.get("transition", "hard_cut"))
-                if transition not in _VALID_TRANSITIONS:
-                    log.warning("Invalid transition %r, using hard_cut", transition)
-                    transition = "hard_cut"
-                kf = PromptKeyframe(
-                    frame=frame,
-                    prompt=prompt,
-                    negative_prompt=str(d.get("negative_prompt", "")),
-                    weight=float(d.get("weight", 1.0)),
-                    transition=transition,
-                    transition_frames=max(0, int(d.get("transition_frames", 0))),
-                )
+            kf = PromptSchedule._parse_keyframe_dict(d)
+            if kf is not None:
                 keyframes.append(kf)
-            except (TypeError, ValueError) as exc:
-                log.warning("Skipping malformed keyframe dict: %s (%s)", d, exc)
-                continue
         if not keyframes:
             return None
         return PromptSchedule([], default_prompt, keyframes=keyframes)
@@ -252,20 +663,9 @@ class PromptSchedule:
         keyframes: list[PromptKeyframe] = []
         segments: list[PromptSegment] = []
         for d in kf_dicts:
-            try:
-                transition = str(d.get("transition", "hard_cut"))
-                if transition not in _VALID_TRANSITIONS:
-                    transition = "hard_cut"
-                keyframes.append(PromptKeyframe(
-                    frame=int(d.get("frame", 0)),
-                    prompt=str(d.get("prompt", "")),
-                    negative_prompt=str(d.get("negative_prompt", "")),
-                    weight=float(d.get("weight", 1.0)),
-                    transition=transition,
-                    transition_frames=max(0, int(d.get("transition_frames", 0))),
-                ))
-            except (TypeError, ValueError):
-                continue
+            kf = PromptSchedule._parse_keyframe_dict(d)
+            if kf is not None:
+                keyframes.append(kf)
         for d in seg_dicts:
             try:
                 seg = PromptSegment(
@@ -320,8 +720,12 @@ def auto_fill_prompts(
             prompt=prompt,
             negative_prompt=kf.negative_prompt,
             weight=kf.weight,
+            weight_end=kf.weight_end,
             transition=kf.transition,
             transition_frames=kf.transition_frames,
+            denoise_strength=kf.denoise_strength,
+            cfg_scale=kf.cfg_scale,
+            steps=kf.steps,
         ))
     log.info("Auto-filled %d/%d keyframe prompts",
              sum(1 for f, o in zip(filled, schedule.keyframes) if f.prompt != o.prompt),
@@ -422,7 +826,7 @@ def auto_generate_segments(
     base_prompt: str,
     prompt_gen: "PromptGenerator",
     locked_fields: dict[str, str] | None = None,
-) -> list[dict]:
+) -> dict:
     """Auto-generate prompt segments aligned to audio structure.
 
     When *randomness* > 0 and no manual segments are provided, this function
@@ -493,7 +897,7 @@ def auto_generate_segments(
     keyframes: list[dict] = []
     locked = {"subject": subject}
     blend_frames = max(4, int((analysis.fps or 24) * 0.5))  # Smooth half-second crossfade
-    
+
     for i in range(len(boundaries) - 1):
         start = boundaries[i]
         try:
@@ -502,12 +906,12 @@ def auto_generate_segments(
             )
         except Exception:
             prompt = base_prompt  # Fallback to original
-            
+
         frame_idx = int(start * (analysis.fps or 24.0))
         keyframes.append({
             "frame": frame_idx,
             "prompt": prompt,
-            "transition": "blend",
+            "transition": "ease_in_out",
             "transition_frames": blend_frames,
         })
 

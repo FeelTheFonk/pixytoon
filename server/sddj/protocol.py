@@ -47,6 +47,7 @@ class Action(str, Enum):
     GET_PROMPT_SCHEDULE = "get_prompt_schedule"
     SAVE_PROMPT_SCHEDULE = "save_prompt_schedule"
     DELETE_PROMPT_SCHEDULE = "delete_prompt_schedule"
+    VALIDATE_DSL = "validate_dsl"
     # Video export
     EXPORT_MP4 = "export_mp4"
     # Server lifecycle
@@ -131,13 +132,26 @@ class PostProcessSpec(BaseModel):
     remove_bg: bool = False
 
 
+
+_VALID_TRANSITIONS = frozenset({
+    "hard_cut", "blend", "linear_blend",
+    "ease_in", "ease_out", "ease_in_out",
+    "cubic", "slerp",
+})
+
+
 class PromptKeyframeSpec(BaseModel):
     frame: int = Field(0, ge=0)
     prompt: str = ""
     negative_prompt: str = ""
     weight: float = Field(1.0, ge=0.0, le=5.0)
+    weight_end: Optional[float] = Field(None, ge=0.0, le=5.0)
     transition: str = "hard_cut"
     transition_frames: int = Field(0, ge=0, le=120)
+    # Per-keyframe parameter overrides (None = inherit base)
+    denoise_strength: Optional[float] = Field(None, ge=0.0, le=1.0)
+    cfg_scale: Optional[float] = Field(None, ge=1.0, le=30.0)
+    steps: Optional[int] = Field(None, ge=1, le=150)
 
     @field_validator("weight", mode="before")
     @classmethod
@@ -158,7 +172,7 @@ class PromptKeyframeSpec(BaseModel):
     @field_validator("transition")
     @classmethod
     def _valid_transition(cls, v: str) -> str:
-        if v not in ("hard_cut", "blend"):
+        if v not in _VALID_TRANSITIONS:
             return "hard_cut"
         return v
 
@@ -307,6 +321,9 @@ class Request(BaseModel):
     prompt_schedule: Optional[dict] = None
     prompt_schedule_name: Optional[str] = None
     prompt_schedule_data: Optional[dict] = None
+    # DSL validation
+    dsl_text: Optional[str] = None
+    total_frames: Optional[int] = None
     # Video export fields
     output_dir: Optional[str] = None
     scale_factor: Optional[int] = None
@@ -650,3 +667,36 @@ class ExportMp4ErrorResponse(BaseModel):
 class ShutdownResponse(BaseModel):
     type: Literal["shutdown_ack"] = "shutdown_ack"
     message: str = "Server shutting down"
+
+
+class ValidateDslResponse(BaseModel):
+    type: Literal["validate_dsl_result"] = "validate_dsl_result"
+    valid: bool
+    keyframe_count: int = 0
+    error_count: int = 0
+    warning_count: int = 0
+    errors: list[dict] = Field(default_factory=list)
+    warnings: list[dict] = Field(default_factory=list)
+    has_auto: bool = False
+
+
+class PromptScheduleListResponse(BaseModel):
+    type: Literal["prompt_schedule_list"] = "prompt_schedule_list"
+    schedules: list[str] = Field(default_factory=list)
+
+
+class PromptScheduleDetailResponse(BaseModel):
+    type: Literal["prompt_schedule_detail"] = "prompt_schedule_detail"
+    name: str
+    schedule_data: dict = Field(default_factory=dict)
+
+
+class PromptScheduleSavedResponse(BaseModel):
+    type: Literal["prompt_schedule_saved"] = "prompt_schedule_saved"
+    name: str
+
+
+class PromptScheduleDeletedResponse(BaseModel):
+    type: Literal["prompt_schedule_deleted"] = "prompt_schedule_deleted"
+    name: str
+

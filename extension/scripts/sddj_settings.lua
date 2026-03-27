@@ -97,10 +97,8 @@ function PT.save_settings()
   s.audio_freeinit_iters = d.audio_freeinit_iters
   -- Audio advanced sub-fields
   s.audio_random_seed    = d.audio_random_seed
-  s.audio_prompt_schedule = d.audio_prompt_schedule
-  s.ps1_time = d.ps1_time; s.ps1_prompt = d.ps1_prompt
-  s.ps2_time = d.ps2_time; s.ps2_prompt = d.ps2_prompt
-  s.ps3_time = d.ps3_time; s.ps3_prompt = d.ps3_prompt
+  -- Prompt schedule DSL text (shared across Generate/Animation/Audio tabs)
+  s.generate_prompt_schedule_dsl = d.generate_prompt_schedule_dsl
   -- MP4 export
   s.mp4_quality          = d.mp4_quality
   s.mp4_scale            = d.mp4_scale
@@ -143,8 +141,7 @@ function PT.apply_settings(s)
                    "expr_palette", "expr_cadence", "expr_motion_x", "expr_motion_y",
                    "expr_motion_zoom", "expr_motion_rot",
                    "expr_motion_tilt_x", "expr_motion_tilt_y",
-                   "ps1_time", "ps1_prompt", "ps2_time", "ps2_prompt",
-                   "ps3_time", "ps3_prompt" }
+                   "generate_prompt_schedule_dsl" }
   for _, id in ipairs(texts) do
     if s[id] ~= nil then PT.dlg:modify{ id = id, text = s[id] } end
   end
@@ -190,7 +187,7 @@ function PT.apply_settings(s)
   local bools = { "use_neg_ti", "pixelate", "quantize_enabled", "remove_bg", "lock_subject", "anim_freeinit",
                    "randomize_before", "loop_check", "random_loop_check", "save_output",
                    "audio_stems_enable", "audio_advanced", "audio_use_expressions",
-                   "audio_freeinit", "audio_random_seed", "audio_prompt_schedule",
+                   "audio_freeinit", "audio_random_seed",
                    "qr_use_source",
   }
   -- Modulation slot booleans
@@ -252,6 +249,14 @@ function PT.apply_settings(s)
   if s.audio_denoise == nil and s.denoise then
     PT.dlg:modify{ id = "audio_denoise", value = s.denoise }
     PT.dlg:modify{ id = "audio_denoise", label = string.format("Strength (%.2f)", s.denoise / 100.0) }
+  end
+
+  -- Initialize prompt schedule state from restored DSL text
+  if PT.update_schedule_state then
+    local restored_dsl = PT.dlg.data.generate_prompt_schedule_dsl or ""
+    if restored_dsl ~= "" then
+      PT.update_schedule_state(restored_dsl)
+    end
   end
 end
 

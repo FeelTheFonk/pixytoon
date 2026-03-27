@@ -1831,7 +1831,7 @@ wheels = [
 
 [[package]]
 name = "sddj-server"
-version = "0.9.65"
+version = "0.9.66"
 source = { editable = "." }
 dependencies = [
     { name = "accelerate" },
@@ -1848,6 +1848,8 @@ dependencies = [
     { name = "pillow" },
     { name = "pydantic-settings" },
     { name = "pyloudnorm" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
     { name = "rembg" },
     { name = "safetensors" },
     { name = "scikit-image" },
@@ -1892,7 +1894,9 @@ requires-dist = [
     { name = "pillow", specifier = ">=10.0,<13.0" },
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "pyloudnorm", specifier = ">=0.1" },
+    { name = "pytest", specifier = ">=8.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
     { name = "rembg", specifier = ">=2.0,<3.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9.0" },

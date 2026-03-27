@@ -148,4 +148,42 @@ function PT.sync_slider_label(id)
   PT.dlg:modify{ id = id, label = label }
 end
 
+-- ─── PARAM_DEFS: Authoritative Modulation Target Registry ────
+-- Defines the real-value range and the percentage→real mapping
+-- for every modulation target. Used by:
+--   • sddj_request.lua  (modulation slot scaling)
+--   • sddj_dsl_editor.lua  (per-keyframe override validation)
+--   • sddj_dialog.lua  (UI hint labels)
+--
+-- Each entry: { real_min, real_max }
+-- The scaling formula is:  real = real_min + pct * (real_max − real_min)
+-- where pct = slider_value / 100.0  (0→1 range)
+
+PT.PARAM_DEFS = {
+  denoise_strength  = { 0.0,   1.0   },   -- 0..1
+  cfg_scale         = { 0.0,  30.0   },   -- 0..30
+  noise_amplitude   = { 0.0,   1.0   },   -- 0..1
+  controlnet_scale  = { 0.0,   2.0   },   -- 0..2
+  seed_offset       = { 0,  1000     },   -- 0..1000 (integer)
+  palette_shift     = { 0.0,   1.0   },   -- 0..1
+  frame_cadence     = { 1.0,   8.0   },   -- 1..8
+  motion_x          = { -5.0,  5.0   },   -- −5..+5 px/frame
+  motion_y          = { -5.0,  5.0   },   -- −5..+5 px/frame
+  motion_zoom       = { 0.92,  1.08  },   -- zoom factor
+  motion_rotation   = { -2.0,  2.0   },   -- degrees/frame
+  motion_tilt_x     = { -3.0,  3.0   },   -- perspective tilt
+  motion_tilt_y     = { -3.0,  3.0   },   -- perspective tilt
+}
+
+--- Scale a 0–100% value to the real range for a given target.
+-- @param target string  PARAM_DEFS key
+-- @param pct number  0..100 percentage
+-- @return number  real value, or pct/100 if target is unknown
+function PT.scale_mod_value(target, pct)
+  local def = PT.PARAM_DEFS[target]
+  if not def then return pct / 100.0 end
+  local t = pct / 100.0  -- normalize to 0..1
+  return def[1] + t * (def[2] - def[1])
+end
+
 end

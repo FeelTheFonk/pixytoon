@@ -388,18 +388,113 @@ local function build_tab_generate()
     onchange = onchange_sync("clip_skip"),
   }
 
-  dlg:separator{ text = "Prompt Schedule (DSL)" }
+  dlg:separator{ text = "Prompt Schedule" }
+
+  -- DSL text entry (shows first line / summary; edit via popup)
   dlg:entry{
     id = "generate_prompt_schedule_dsl",
-    label = "DSL",
+    label = "Schedule",
     text = "",
     hexpand = true,
+    onchange = function()
+      PT.update_schedule_state(dlg.data.generate_prompt_schedule_dsl)
+    end,
   }
+
+  -- Visual timeline canvas
+  dlg:canvas{
+    id = "schedule_timeline",
+    width = 300,
+    height = 30,
+    hexpand = true,
+    vexpand = false,
+    onpaint = function(ev)
+      if PT.paint_schedule_timeline then
+        PT.paint_schedule_timeline(ev)
+      end
+    end,
+    onmousedown = function(ev)
+      if PT.on_timeline_click then
+        PT.on_timeline_click(ev)
+      end
+    end,
+  }
+
+  -- Parse status label
+  dlg:label{
+    id = "schedule_status",
+    text = "No schedule",
+  }
+
+  -- Action buttons row
+  dlg:button{
+    id = "schedule_edit_btn",
+    text = "Edit...",
+    onclick = function()
+      if PT.open_schedule_editor then
+        PT.open_schedule_editor()
+      end
+    end,
+  }
+  dlg:button{
+    id = "schedule_presets_btn",
+    text = "Presets",
+    onclick = function()
+      if PT.open_schedule_presets then
+        PT.open_schedule_presets()
+      end
+    end,
+  }
+  dlg:button{
+    id = "schedule_validate_btn",
+    text = "Validate",
+    onclick = function()
+      if PT.state and PT.state.connected then
+        local dsl = dlg.data.generate_prompt_schedule_dsl or ""
+        if dsl ~= "" then
+          PT.send({
+            action = "validate_dsl",
+            dsl_text = dsl,
+            total_frames = dlg.data.anim_frames or 100,
+            fps = 24,
+          })
+          PT.update_status("Validating DSL...")
+        else
+          PT.update_schedule_status()
+        end
+      else
+        -- Local-only validation
+        PT.update_schedule_state(dlg.data.generate_prompt_schedule_dsl)
+      end
+    end,
+  }
+  dlg:button{
+    id = "schedule_clear_btn",
+    text = "Clear",
+    onclick = function()
+      dlg:modify{ id = "generate_prompt_schedule_dsl", text = "" }
+      PT.update_schedule_state("")
+    end,
+  }
+
+  -- File picker for importing DSL from file (power users)
   dlg:file{
     id = "generate_prompt_schedule_file",
-    label = "Or File",
+    label = "Load File",
     filetypes = { "txt" },
     open = true,
+    onchange = function()
+      local path = dlg.data.generate_prompt_schedule_file or ""
+      if path ~= "" then
+        local fh = io.open(path, "r")
+        if fh then
+          local content = fh:read("*a")
+          fh:close()
+          dlg:modify{ id = "generate_prompt_schedule_dsl", text = content }
+          PT.update_schedule_state(content)
+        end
+      end
+    end,
   }
 end
 

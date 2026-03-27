@@ -464,12 +464,19 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
                 schedule = build_prompt_schedule(req)
                 effective_prompt = req.prompt
                 if schedule and schedule.keyframes:
-                    kf_prompt = schedule.get_prompt_for_frame(0)
-                    if kf_prompt:
-                        effective_prompt = kf_prompt
-                    kf_neg = schedule.get_negative_for_frame(0)
-                    if kf_neg:
-                        effective_neg = self._build_effective_negative(kf_neg, req.negative_ti)
+                    blend_info = schedule.get_blend_info_for_frame(0)
+                    if blend_info.effective_prompt:
+                        effective_prompt = blend_info.effective_prompt
+                    if blend_info.negative_prompt:
+                        effective_neg = self._build_effective_negative(
+                            blend_info.negative_prompt, req.negative_ti)
+                    # Per-keyframe parameter overrides at frame 0
+                    if blend_info.cfg_scale is not None:
+                        req = req.model_copy(update={"cfg_scale": blend_info.cfg_scale})
+                    if blend_info.denoise_strength is not None:
+                        req = req.model_copy(update={"denoise_strength": blend_info.denoise_strength})
+                    if blend_info.steps is not None:
+                        req = req.model_copy(update={"steps": blend_info.steps})
 
                 # ── Mode dispatch ─────────────────────────────────────
 

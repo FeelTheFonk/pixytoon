@@ -173,33 +173,12 @@ function PT.build_audio_reactive_request()
     local prefix = "mod" .. i .. "_"
     if d[prefix .. "enable"] then
       local target = d[prefix .. "target"]
-      local mn = d[prefix .. "min"] / 100.0
-      local mx = d[prefix .. "max"] / 100.0
-      -- Scale to target range
-      if target == "cfg_scale" then
-        mn = mn * 30.0
-        mx = mx * 30.0
-      elseif target == "seed_offset" then
-        mn = math.floor(mn * 1000)
-        mx = math.floor(mx * 1000)
-      elseif target == "controlnet_scale" then
-        mn = mn * 2.0
-        mx = mx * 2.0
-      elseif target == "frame_cadence" then
-        mn = 1.0 + mn * 7.0   -- 0%→1, 100%→8
-        mx = 1.0 + mx * 7.0
-      elseif target == "motion_x" or target == "motion_y" then
-        mn = mn * 10.0 - 5.0  -- 0%→-5, 100%→+5
-        mx = mx * 10.0 - 5.0
-      elseif target == "motion_zoom" then
-        mn = 0.92 + mn * 0.16 -- 0%→0.92, 100%→1.08
-        mx = 0.92 + mx * 0.16
-      elseif target == "motion_rotation" then
-        mn = mn * 4.0 - 2.0   -- 0%→-2, 100%→+2
-        mx = mx * 4.0 - 2.0
-      elseif target == "motion_tilt_x" or target == "motion_tilt_y" then
-        mn = mn * 6.0 - 3.0   -- 0%→-3, 100%→+3
-        mx = mx * 6.0 - 3.0
+      local mn = PT.scale_mod_value(target, d[prefix .. "min"])
+      local mx = PT.scale_mod_value(target, d[prefix .. "max"])
+      -- Integer targets: floor the result
+      if target == "seed_offset" or target == "frame_cadence" then
+        mn = math.floor(mn)
+        mx = math.floor(mx)
       end
       slots[#slots + 1] = {
         source  = d[prefix .. "source"],

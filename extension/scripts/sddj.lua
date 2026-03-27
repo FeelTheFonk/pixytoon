@@ -45,6 +45,7 @@ local modules = {
   "sddj_ws",        -- WebSocket transport + connection
   "sddj_capture",   -- image capture (active layer, flattened, mask)
   "sddj_request",   -- request builders (parse, attach, build)
+  "sddj_dsl_editor",-- schedule editor popup, timeline, presets
   "sddj_import",    -- import result, animation frame
   "sddj_output",    -- output directory, metadata persistence, load/apply
   "sddj_handler",   -- response dispatch table
