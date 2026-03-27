@@ -239,6 +239,7 @@ class TestMelBandIndices:
 
 class TestAudioAnalyzer:
     def test_analyze_sine_wav(self, tmp_path):
+        from sddj.config import settings
         path = _make_sine_wav(tmp_path, freq=440, duration=1.0)
         analyzer = AudioAnalyzer()
         analysis = analyzer.analyze(path, fps=10)
@@ -247,7 +248,7 @@ class TestAudioAnalyzer:
         assert analysis.total_frames == 10
         assert analysis.fps == 10.0
         assert analysis.duration == pytest.approx(1.0, abs=0.1)
-        assert analysis.sample_rate == 44100
+        assert analysis.sample_rate == settings.audio_sample_rate
 
         # Should have all base global features
         expected_features = {
@@ -321,11 +322,12 @@ class TestAudioAnalyzer:
 
     # ─── New pinnacle-quality tests (v0.9.35) ──────────────
 
-    def test_sample_rate_44100(self, tmp_path):
-        """Step 8: Verify analysis uses 44100 Hz sample rate."""
+    def test_sample_rate_matches_settings(self, tmp_path):
+        """Step 8: Verify analysis uses correct settings sample rate."""
+        from sddj.config import settings
         path = _make_sine_wav(tmp_path, duration=1.0)
         analysis = AudioAnalyzer().analyze(path, fps=10)
-        assert analysis.sample_rate == 44100
+        assert analysis.sample_rate == settings.audio_sample_rate
 
     def test_new_spectral_features_exist(self, tmp_path):
         """Step 14-18: All 5 new spectral features must be present."""

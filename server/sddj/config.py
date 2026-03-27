@@ -91,7 +91,7 @@ class Settings(BaseSettings):
     rembg_on_cpu: bool = True  # Keep GPU free for diffusion
 
     # ── Animation ────────────────────────────────────────────
-    max_animation_frames: int = 120
+    max_animation_frames: int = 256
 
     # ── AnimateDiff ──────────────────────────────────────────
     animatediff_model: str = "ByteDance/AnimateDiff-Lightning"
@@ -103,6 +103,15 @@ class Settings(BaseSettings):
     animatediff_lightning_cfg: float = Field(2.0, ge=1.0, le=5.0)  # 2.0 preserves negative prompts
     animatediff_motion_lora_strength: float = Field(0.75, ge=0.0, le=1.0)
     animatediff_lightning_freeu: bool = True  # False = force-disable FreeU for Lightning pipelines
+    # ── FreeNoise — long video temporal coherence (non-Lightning only) ──
+    # Replaces manual chunking with diffusers-native sliding window + noise rescheduling.
+    animatediff_context_length: int = Field(16, ge=8, le=32)
+    animatediff_context_stride: int = Field(4, ge=1, le=16)
+    animatediff_split_inference: bool = True  # Auto-enable SplitInference for long sequences
+    animatediff_spatial_split_size: int = Field(256, ge=64, le=512)
+    animatediff_temporal_split_size: int = Field(16, ge=4, le=32)
+    # Lightning hard cap: FreeNoise is incompatible with distilled few-step models.
+    animatediff_max_frames_lightning: int = Field(32, ge=8, le=64)
 
     # ── Audio Reactivity ──────────────────────────────────────
     audio_cache_dir: str = ""  # empty = system temp dir

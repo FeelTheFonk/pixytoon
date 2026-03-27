@@ -361,18 +361,6 @@ class TestBuildPromptSchedule:
         assert sched.get_prompt_for_frame(0) == "X"
         assert sched.get_prompt_for_frame(3) == "Y"
 
-    def test_legacy_segments_fallback(self):
-        from sddj.engine.helpers import build_prompt_schedule
-
-        class FakeReq:
-            prompt = "default"
-            prompt_schedule = None
-            prompt_segments = [
-                {"start_second": 0.0, "end_second": 5.0, "prompt": "seg1"},
-            ]
-
-        sched = build_prompt_schedule(FakeReq())
-        assert sched is not None
 
     def test_lua_dict_encoded_keyframes(self):
         """Lua json.lua may encode arrays as objects with numeric keys."""

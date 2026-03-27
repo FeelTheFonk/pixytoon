@@ -344,6 +344,17 @@ class AnimationMixin:
         on_progress: Optional[Callable[[ProgressResponse], None]],
     ) -> int:
         """AnimateDiff motion module generation for temporal consistency."""
+
+        # Lightning frame cap: FreeNoise is incompatible with distilled models
+        if settings.is_animatediff_lightning:
+            max_lt = settings.animatediff_max_frames_lightning
+            if req.frame_count > max_lt:
+                raise ValueError(
+                    f"AnimateDiff-Lightning is limited to {max_lt} frames "
+                    f"(requested {req.frame_count}). FreeNoise long-video is "
+                    f"incompatible with distilled few-step models."
+                )
+
         # Smart transition: free ControlNet if not needed for this request
         is_controlnet = req.mode.value.startswith("controlnet_")
         if not is_controlnet and self._controlnet_pipe is not None:
@@ -360,15 +371,16 @@ class AnimationMixin:
         on_frame: Optional[Callable[[AnimationFrameResponse], None]],
         on_progress: Optional[Callable[[ProgressResponse], None]],
     ) -> int:
-        """Core AnimateDiff generation — chunked processing for O(n) scaling.
+        """Core AnimateDiff generation — FreeNoise native sliding window.
 
-        Processes frames in _AD_CHUNK_SIZE chunks with _AD_OVERLAP overlap.
-        Overlap frames are alpha-blended for smooth chunk transitions.
-        Prevents O(n²) temporal attention and VRAM explosion on large batches.
+        For sequences longer than context_length, FreeNoise handles temporal
+        attention windowing + noise rescheduling internally. This replaces
+        the previous manual chunking approach which lacked proper noise
+        rescheduling and produced visible seams between chunks.
+
+        Short sequences (≤ context_length) run as a single pass without
+        FreeNoise overhead.
         """
-        _AD_CHUNK_SIZE = 16
-        _AD_OVERLAP = 4
-
         is_controlnet = req.mode.value.startswith("controlnet_")
         is_img2img = req.mode == GenerationMode.IMG2IMG
 
@@ -383,6 +395,11 @@ class AnimationMixin:
             pipe = self._animatediff.ensure_vid2vid(self._pipe)
         else:
             pipe = self._animatediff.ensure_base(self._pipe)
+
+        total_frames = req.frame_count
+
+        # FreeNoise: enable sliding-window temporal attention for long sequences
+        free_noise_active = self._animatediff.apply_free_noise(pipe, total_frames)
 
         # FreeInit (not supported on vid2vid or Lightning pipelines)
         freeinit_enabled = False
@@ -413,14 +430,25 @@ class AnimationMixin:
 
         seed = req.seed if req.seed >= 0 else random.randint(0, 2**32 - 1)
         seed = seed % (2**32)
+        generator = torch.Generator("cuda").manual_seed(seed)
 
         effective_neg = self._build_effective_negative(req.negative_prompt, req.negative_ti)
         target_w, target_h = round8(req.width), round8(req.height)
 
-        # Build prompt schedule for per-chunk resolution
+        # Prompt schedule: use midpoint prompt for the full sequence
         schedule = build_prompt_schedule(req)
+        gen_prompt = req.prompt
+        gen_neg = effective_neg
+        if schedule and schedule.keyframes:
+            mid_frame = total_frames // 2
+            kf_prompt = schedule.get_prompt_for_frame(mid_frame)
+            if kf_prompt:
+                gen_prompt = kf_prompt
+            kf_neg = schedule.get_negative_for_frame(mid_frame)
+            if kf_neg:
+                gen_neg = self._build_effective_negative(kf_neg, req.negative_ti)
 
-        # Pre-decode images for reuse across chunks
+        # Pre-decode images
         _source_img = None
         if is_img2img:
             if req.source_image is None:
@@ -435,68 +463,23 @@ class AnimationMixin:
 
         t0 = time.perf_counter()
 
-        # Build chunk ranges: [(start, end), ...]
-        total_frames = req.frame_count
-        chunks: list[tuple[int, int]] = []
-        pos = 0
-        while pos < total_frames:
-            end = min(pos + _AD_CHUNK_SIZE, total_frames)
-            if end - pos < _AD_OVERLAP + 1 and chunks:
-                prev_start, _ = chunks[-1]
-                chunks[-1] = (prev_start, end)
-            else:
-                chunks.append((pos, end))
-            pos = end - _AD_OVERLAP if end < total_frames else end
+        step_callback = make_step_callback(
+            self._cancel_event, on_progress, effective_steps,
+            frame_idx=0, total_frames=total_frames,
+        )
 
-        log.info("AnimateDiff: %d frames → %d chunk(s) (size=%d, overlap=%d)",
-                 total_frames, len(chunks), _AD_CHUNK_SIZE, _AD_OVERLAP)
+        log.info("AnimateDiff: %d frames, steps=%d, cfg=%.1f, seed=%d, free_noise=%s",
+                 total_frames, effective_steps, effective_cfg, seed, free_noise_active)
 
-        # Results indexed by global frame index
-        frame_images: dict[int, Image.Image] = {}
-
-        for chunk_idx, (c_start, c_end) in enumerate(chunks):
-            if self._cancel_event.is_set():
-                raise GenerationCancelled("AnimateDiff cancelled between chunks")
-
-            num_frames = c_end - c_start
-            chunk_seed = (seed + c_start) % (2**32)
-            generator = torch.Generator("cuda").manual_seed(chunk_seed)
-
-            step_callback = make_step_callback(
-                self._cancel_event, on_progress, effective_steps,
-                frame_idx=c_start, total_frames=total_frames,
-            )
-
-            # FreeInit: only first chunk
-            if freeinit_enabled and chunk_idx == 1:
-                try:
-                    pipe.disable_free_init()
-                except Exception:
-                    pass
-
-            log.info("Chunk %d/%d [%d-%d): %d frames, seed=%d",
-                     chunk_idx + 1, len(chunks), c_start, c_end, num_frames, chunk_seed)
-
-            # Resolve prompt at chunk midpoint
-            chunk_prompt = req.prompt
-            chunk_neg = effective_neg
-            if schedule and schedule.keyframes:
-                mid_frame = c_start + num_frames // 2
-                kf_prompt = schedule.get_prompt_for_frame(mid_frame)
-                if kf_prompt:
-                    chunk_prompt = kf_prompt
-                kf_neg = schedule.get_negative_for_frame(mid_frame)
-                if kf_neg:
-                    chunk_neg = self._build_effective_negative(kf_neg, req.negative_ti)
-
+        try:
             with torch.inference_mode():
                 if is_img2img:
                     strength, scaled_steps, _ = compute_effective_denoise(
                         effective_steps, req.denoise_strength)
                     kwargs = dict(
-                        video=[_source_img] * num_frames,
-                        prompt=chunk_prompt,
-                        negative_prompt=chunk_neg,
+                        video=[_source_img] * total_frames,
+                        prompt=gen_prompt,
+                        negative_prompt=gen_neg,
                         num_inference_steps=scaled_steps,
                         guidance_scale=effective_cfg,
                         strength=strength,
@@ -507,9 +490,9 @@ class AnimationMixin:
                     )
                 else:
                     kwargs = dict(
-                        prompt=chunk_prompt,
-                        negative_prompt=chunk_neg,
-                        num_frames=num_frames,
+                        prompt=gen_prompt,
+                        negative_prompt=gen_neg,
+                        num_frames=total_frames,
                         num_inference_steps=effective_steps,
                         guidance_scale=effective_cfg,
                         width=target_w,
@@ -520,39 +503,34 @@ class AnimationMixin:
                         output_type="pil",
                     )
                     if is_controlnet and _control_img is not None:
-                        kwargs["conditioning_frames"] = [_control_img] * num_frames
+                        kwargs["conditioning_frames"] = [_control_img] * total_frames
+
+                if self._cancel_event.is_set():
+                    raise GenerationCancelled("AnimateDiff cancelled before inference")
 
                 output = pipe(**kwargs)
 
             pil_frames = output.frames[0] if isinstance(output.frames[0], list) else output.frames
 
-            # Blend overlap with previous chunk
-            for local_idx, pil_img in enumerate(pil_frames):
-                global_idx = c_start + local_idx
-                if global_idx >= total_frames:
-                    break
-                if global_idx in frame_images and chunk_idx > 0:
-                    overlap_pos = local_idx
-                    alpha = overlap_pos / _AD_OVERLAP
-                    frame_images[global_idx] = Image.blend(
-                        frame_images[global_idx], pil_img, alpha)
-                else:
-                    frame_images[global_idx] = pil_img
-
-        # Disable FreeInit if it was enabled
-        if freeinit_enabled:
-            try:
-                pipe.disable_free_init()
-            except Exception:
-                pass
+        finally:
+            # Cleanup: disable FreeNoise + FreeInit regardless of success/failure
+            if free_noise_active:
+                self._animatediff.remove_free_noise(pipe)
+            if freeinit_enabled:
+                try:
+                    pipe.disable_free_init()
+                except Exception:
+                    pass
 
         # Post-process and encode all frames
         frame_count = 0
-        for frame_idx in sorted(frame_images.keys()):
+        for frame_idx, pil_img in enumerate(pil_frames):
+            if frame_idx >= total_frames:
+                break
             if self._cancel_event.is_set():
                 raise GenerationCancelled("AnimateDiff cancelled during post-processing")
             t0_frame = time.perf_counter()
-            image = postprocess_apply(frame_images[frame_idx], req.post_process)
+            image = postprocess_apply(pil_img, req.post_process)
             b64_image = encode_image_raw_b64(image)
             w, h = image.size
             elapsed_ms = int((time.perf_counter() - t0) * 1000)
@@ -575,3 +553,4 @@ class AnimationMixin:
                 on_frame(frame_resp)
 
         return frame_count
+

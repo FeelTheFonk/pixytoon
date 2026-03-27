@@ -527,7 +527,7 @@ local function build_tab_animation()
   dlg:slider{
     id = "anim_frames",
     label = "Frames (8)",
-    min = 2, max = 120, value = 8,
+    min = 2, max = 256, value = 8,
     onchange = onchange_sync("anim_frames"),
   }
 
@@ -569,6 +569,20 @@ local function build_tab_animation()
     id = "anim_freeinit_iters",
     label = "FreeInit Iters",
     min = 1, max = 3, value = 2,
+  }
+
+  dlg:separator{ text = "Prompt Schedule" }
+  dlg:entry{
+    id = "anim_prompt_schedule_dsl",
+    label = "DSL",
+    text = "",
+    hexpand = true,
+  }
+  dlg:file{
+    id = "anim_prompt_schedule_file",
+    label = "Or File",
+    filetypes = { "txt" },
+    open = true,
   }
 end
 
@@ -834,25 +848,19 @@ local function build_tab_audio()
   }
 
   -- Prompt Schedule
-  dlg:check{
-    id = "audio_prompt_schedule",
-    text = "Prompt Schedule",
-    selected = false,
+  dlg:separator{ text = "Prompt Schedule" }
+  dlg:entry{
+    id = "audio_prompt_schedule_dsl",
+    label = "DSL",
+    text = "",
+    hexpand = true,
   }
-  for i = 1, 3 do
-    dlg:entry{
-      id = "ps" .. i .. "_time",
-      label = "T" .. i .. " (s-s)",
-      text = "",
-      hexpand = true,
-    }
-    dlg:entry{
-      id = "ps" .. i .. "_prompt",
-      label = "P" .. i,
-      text = "",
-      hexpand = true,
-    }
-  end
+  dlg:file{
+    id = "audio_prompt_schedule_file",
+    label = "Or File",
+    filetypes = { "txt" },
+    open = true,
+  }
 
   dlg:combobox{
     id = "mp4_quality",

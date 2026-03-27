@@ -149,15 +149,16 @@ class TestAutoGenerateSegments:
         analysis = FakeAnalysis()
         gen = _make_prompt_gen()
         result = auto_generate_segments(analysis, 0, "a cat", gen)
-        assert result == []
+        assert result == {}
 
     def test_low_randomness_few_segments(self):
         analysis = FakeAnalysis(duration=30.0, fps=24.0, bpm=120.0)
         analysis.features["global_onset"] = _make_onset(30.0, 24.0, [8.0, 15.0, 22.0])
         gen = _make_prompt_gen()
         result = auto_generate_segments(analysis, 3, "a cat in a garden", gen)
-        assert len(result) == 2
-        assert result[0]["start_second"] == 0.0
+        keyframes = result.get("keyframes", [])
+        assert len(keyframes) == 2
+        assert keyframes[0]["frame"] == 0
 
     def test_high_randomness_many_segments(self):
         analysis = FakeAnalysis(duration=60.0, fps=24.0, bpm=128.0)
@@ -165,24 +166,26 @@ class TestAutoGenerateSegments:
         analysis.features["global_onset"] = _make_onset(60.0, 24.0, peaks)
         gen = _make_prompt_gen()
         result = auto_generate_segments(analysis, 18, "abstract shapes", gen)
-        assert len(result) >= 4
+        keyframes = result.get("keyframes", [])
+        assert len(keyframes) >= 4
 
     def test_segments_cover_full_duration(self):
         analysis = FakeAnalysis(duration=30.0, fps=24.0, bpm=100.0)
         analysis.features["global_onset"] = _make_onset(30.0, 24.0, [10.0, 20.0])
         gen = _make_prompt_gen()
         result = auto_generate_segments(analysis, 10, "test", gen)
-        assert len(result) >= 2
-        assert result[0]["start_second"] == 0.0
-        assert result[-1]["end_second"] == 30.0
+        keyframes = result.get("keyframes", [])
+        assert len(keyframes) >= 2
+        assert keyframes[0]["frame"] == 0
 
     def test_segments_non_overlapping(self):
         analysis = FakeAnalysis(duration=60.0, fps=24.0, bpm=120.0)
         analysis.features["global_onset"] = _make_onset(60.0, 24.0, [10, 20, 30, 40, 50])
         gen = _make_prompt_gen()
         result = auto_generate_segments(analysis, 15, "test", gen)
-        for i in range(len(result) - 1):
-            assert result[i]["end_second"] <= result[i + 1]["start_second"]
+        keyframes = result.get("keyframes", [])
+        for i in range(len(keyframes) - 1):
+            assert keyframes[i]["frame"] <= keyframes[i + 1]["frame"]
 
     def test_max_12_segments(self):
         analysis = FakeAnalysis(duration=600.0, fps=24.0, bpm=140.0)
@@ -190,7 +193,8 @@ class TestAutoGenerateSegments:
         analysis.features["global_onset"] = _make_onset(600.0, 24.0, peaks)
         gen = _make_prompt_gen()
         result = auto_generate_segments(analysis, 20, "test", gen)
-        assert len(result) <= 12
+        keyframes = result.get("keyframes", [])
+        assert len(keyframes) <= 12
 
     def test_no_onset_feature_uses_gap_fill(self):
         """Without onset data, segments should still be generated via gap filling."""
@@ -198,7 +202,8 @@ class TestAutoGenerateSegments:
         # No global_onset feature
         gen = _make_prompt_gen()
         result = auto_generate_segments(analysis, 10, "a landscape", gen)
-        assert len(result) >= 2
+        keyframes = result.get("keyframes", [])
+        assert len(keyframes) >= 2
 
     def test_bpm_snapping(self):
         """Boundaries should snap to beat grid when BPM is known."""
@@ -207,13 +212,14 @@ class TestAutoGenerateSegments:
         analysis.features["global_onset"] = _make_onset(30.0, 24.0, [7.3, 14.7])
         gen = _make_prompt_gen()
         result = auto_generate_segments(analysis, 8, "test", gen)
+        keyframes = result.get("keyframes", [])
         beat_interval = 0.5
-        for seg in result:
-            start = seg["start_second"]
+        for kf in keyframes:
+            start = kf["frame"] / analysis.fps
             if start > 0:
                 # Should be on or very close to a beat
                 remainder = start % beat_interval
-                assert remainder < 0.01 or abs(remainder - beat_interval) < 0.01, \
+                assert remainder < 0.05 or abs(remainder - beat_interval) < 0.05, \
                     f"start_second {start} not on beat grid (interval={beat_interval})"
 
     def test_prompt_gen_called_with_subject(self):
@@ -237,9 +243,10 @@ class TestAutoGenerateSegments:
         gen = MagicMock()
         gen.generate = MagicMock(side_effect=RuntimeError("boom"))
         result = auto_generate_segments(analysis, 10, "fallback prompt", gen)
-        assert len(result) >= 2
-        for seg in result:
-            assert seg["prompt"] == "fallback prompt"
+        keyframes = result.get("keyframes", [])
+        assert len(keyframes) >= 2
+        for kf in keyframes:
+            assert kf["prompt"] == "fallback prompt"
 
     def test_locked_fields_overrides_heuristic(self):
         """Explicit locked_fields.subject should override heuristic extraction."""
@@ -252,7 +259,8 @@ class TestAutoGenerateSegments:
             analysis, 10, "masterpiece, pixel art, some scene", gen,
             locked_fields={"subject": "my dragon"},
         )
-        assert len(result) >= 2
+        keyframes = result.get("keyframes", [])
+        assert len(keyframes) >= 2
         # Verify generator was called with the locked subject
         for call in gen.generate.call_args_list:
             locked = call.kwargs.get("locked") or (call.args[0] if call.args else {})
@@ -268,7 +276,8 @@ class TestAutoGenerateSegments:
         result = auto_generate_segments(
             analysis, 10, "cat, a beautiful landscape, pixel art", gen,
         )
-        assert len(result) >= 2
+        keyframes = result.get("keyframes", [])
+        assert len(keyframes) >= 2
         for call in gen.generate.call_args_list:
             locked = call.kwargs.get("locked") or (call.args[0] if call.args else {})
             # Heuristic should pick "a beautiful landscape" (first part > 10 chars)

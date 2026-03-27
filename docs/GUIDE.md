@@ -165,6 +165,23 @@ The actual seed used is shown in the status bar after generation and in the laye
 | Generation timed out | Increase `SDDJ_GENERATION_TIMEOUT` or reduce steps/resolution |
 | Wrong colors | Try palette enforcement (CIELAB) or adjust `quantize_colors` |
 
+### Prompt Scheduling (Timeline DSL)
+
+Instead of a single static prompt, you can define **Keyframes** in the Prompt Schedule box (available in Generate, Animation, and Audio modes) to evolve your subject over time. The Timeline DSL accepts raw frames, seconds, and percentages.
+
+**Syntax Example:**
+```
+0%: 1girl, smiling
+# Visual crossfade into crying
+50%(blend:6): 1girl, crying [-] happy, smiling
+100%(hard_cut): 1girl, sleeping
+```
+
+- **Timing**: Use `12:` (frame 12), `2.5s:` (2.5 seconds), or `50%:` (halfway).
+- **Transitions**: Add `(blend:N)` to crossfade between prompts over `N` frames, or `(hard_cut)` to snap immediately.
+- **Negative Prompts**: Use `[-]` inline to define a negative prompt specifically for that keyframe.
+- **File Injection**: Use `file: <path-to-text-file.txt>` to load a massive schedule dynamically.
+
 ---
 
 ## Post-Processing

@@ -125,7 +125,7 @@ class AudioReactiveMixin:
             analysis = self.analyze_audio(req.audio_path, req.fps, req.enable_stems)
 
             # 1b. Auto-generate prompt segments from audio structure
-            if getattr(req, 'randomness', 0) > 0 and not req.prompt_segments:
+            if getattr(req, 'randomness', 0) > 0 and not getattr(req, 'prompt_schedule', None):
                 from ..prompt_schedule import auto_generate_segments
                 from ..prompt_generator import prompt_generator
                 auto_segs = auto_generate_segments(
@@ -133,9 +133,10 @@ class AudioReactiveMixin:
                     locked_fields=getattr(req, 'locked_fields', None),
                 )
                 if auto_segs:
-                    req.prompt_segments = auto_segs
-                    log.info("Auto-generated %d prompt segments (randomness=%d)",
-                             len(auto_segs), req.randomness)
+                    from ..protocol import PromptScheduleSpec
+                    req.prompt_schedule = PromptScheduleSpec(**auto_segs)
+                    log.info("Auto-mapped %d prompt keyframes from audio (randomness=%d)",
+                             len(auto_segs.get("keyframes", [])), req.randomness)
 
             # 2. Resolve modulation slots
             from ..modulation_engine import ModulationSlot, ModulationEngine
@@ -234,11 +235,9 @@ class AudioReactiveMixin:
             _control_img = decode_b64_image(req.control_image).convert("RGB")
             _control_img = resize_to_target(_control_img, target_w, target_h)
 
-        # Build prompt schedule (if segments provided)
-        from ..prompt_schedule import PromptSchedule
-        prompt_sched = PromptSchedule.from_dicts(
-            getattr(req, "prompt_segments", []), req.prompt,
-        )
+        # Build prompt schedule (if segments or spec provided)
+        from .helpers import build_prompt_schedule
+        prompt_sched = build_prompt_schedule(req)
 
         log.info("Audio-reactive chain: %d frames, mode=%s, steps=%d, seed_base=%d",
                  total_frames, req.mode.value, req.steps, base_seed)
@@ -464,7 +463,19 @@ class AudioReactiveMixin:
         Divides the audio timeline into overlapping 16-frame AnimateDiff chunks.
         Each chunk uses averaged modulation parameters from the schedule.
         Overlap frames are alpha-blended for smooth transitions between chunks.
+
+        NOTE: Audio-reactive keeps chunk loop (per-chunk parameter modulation is
+        the feature). FreeNoise within-chunk coherence is handled by the pipeline.
         """
+        # Lightning frame cap (same as standard AnimateDiff path)
+        if settings.is_animatediff_lightning:
+            max_lt = settings.animatediff_max_frames_lightning
+            if schedule.total_frames > max_lt:
+                raise ValueError(
+                    f"AnimateDiff-Lightning is limited to {max_lt} frames "
+                    f"(audio has {schedule.total_frames}). FreeNoise long-video "
+                    f"is incompatible with distilled few-step models."
+                )
         is_controlnet = req.mode.value.startswith("controlnet_")
         if not is_controlnet and self._controlnet_pipe is not None:
             log.info("Smart transition: unloading ControlNet before AnimateDiff audio")
@@ -558,11 +569,9 @@ class AudioReactiveMixin:
         elif is_img2img:
             raise ValueError("AnimateDiff audio img2img requires source_image")
 
-        # Prompt schedule
-        from ..prompt_schedule import PromptSchedule
-        prompt_sched = PromptSchedule.from_dicts(
-            getattr(req, "prompt_segments", []), req.prompt,
-        )
+        # Prompt schedule (if segments or spec provided)
+        from .helpers import build_prompt_schedule
+        prompt_sched = build_prompt_schedule(req)
 
         # Results indexed by frame
         frame_images: dict[int, Image.Image] = {}

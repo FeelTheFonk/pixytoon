@@ -218,22 +218,24 @@ function PT.build_audio_reactive_request()
     end
   end
 
-  -- Prompt schedule segments
-  local prompt_segments = {}
-  if d.audio_prompt_schedule then
-    for i = 1, 3 do
-      local time_str = d["ps" .. i .. "_time"] or ""
-      local prompt_str = d["ps" .. i .. "_prompt"] or ""
-      if time_str ~= "" and prompt_str ~= "" then
-        local s, e = time_str:match("(%d+%.?%d*)-(%d+%.?%d*)")
-        if s and e then
-          prompt_segments[#prompt_segments + 1] = {
-            start_second = tonumber(s),
-            end_second = tonumber(e),
-            prompt = prompt_str,
-          }
-        end
-      end
+  -- Prompt schedule via DSL
+  local dsl_text = d.audio_prompt_schedule_dsl or ""
+  local file_path = d.audio_prompt_schedule_file or ""
+  if file_path ~= "" then
+    dsl_text = "file: " .. file_path
+  end
+  
+  local prompt_schedule = nil
+  if dsl_text ~= "" then
+    local parser = require("sddj_dsl_parser")
+    local total_audio_frames = PT.audio and PT.audio.total_frames or 100
+    local max_f = d.audio_max_frames or 0
+    if max_f > 0 then total_audio_frames = max_f end
+    local success, sched = pcall(parser.parse, dsl_text, total_audio_frames, tonumber(d.audio_fps) or 24)
+    if success and sched and #sched.keyframes > 0 then
+      prompt_schedule = sched
+    elseif not success then
+      app.alert("Syntax error in Prompt Schedule DSL. Please check your formatting.")
     end
   end
 
@@ -256,7 +258,7 @@ function PT.build_audio_reactive_request()
     modulation_slots  = #slots > 0 and slots or nil,
     expressions       = expressions,
     modulation_preset = mod_preset,
-    prompt_segments   = #prompt_segments > 0 and prompt_segments or nil,
+    prompt_schedule   = prompt_schedule,
     randomness        = d.randomness or 0,
     locked_fields     = next(locked) and locked or nil,
     method            = method,
@@ -323,6 +325,26 @@ function PT.build_animation_request()
     end
   end
 
+  -- Prompt schedule via DSL
+  local dsl_text = d.anim_prompt_schedule_dsl or ""
+  local file_path = d.anim_prompt_schedule_file or ""
+  if file_path ~= "" then
+    dsl_text = "file: " .. file_path
+  end
+  
+  local prompt_schedule = nil
+  if dsl_text ~= "" then
+    local parser = require("sddj_dsl_parser")
+    local fps = 24
+    if d.anim_duration then fps = math.floor(1000 / d.anim_duration) end
+    local success, sched = pcall(parser.parse, dsl_text, d.anim_frames or 100, fps)
+    if success and sched and #sched.keyframes > 0 then
+      prompt_schedule = sched
+    elseif not success then
+      app.alert("Syntax error in Prompt Schedule DSL. Please check your formatting.")
+    end
+  end
+
   local req = {
     action = "generate_animation",
     method = d.anim_method,
@@ -341,6 +363,7 @@ function PT.build_animation_request()
     tag_name = tag_name,
     enable_freeinit = d.anim_freeinit,
     freeinit_iterations = d.anim_freeinit_iters,
+    prompt_schedule = prompt_schedule,
     post_process = PT.build_post_process(),
   }
   PT.attach_lora(req)

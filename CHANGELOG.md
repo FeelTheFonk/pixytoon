@@ -1,7 +1,21 @@
 # Changelog
 
+## [0.9.61] — 2026-03
+### Prompt Scheduling DSL & Auto-DJ SOTA Upgrade
+Maximal awareness UX overhaul introducing a powerful Timeline DSL directly inside Aseprite, bridging the robust 0.9.60 backend architecture.
+
+#### Added
+- **Timeline DSL**: Unified prompt scheduling UI offering absolute frame (`12:`), seconds (`2.5s:`), and percent (`50%:`) timing directly in Aseprite. Supports multi-line input and inline negative modifiers `[-]`.
+- **Visual Crossfade Transitions**: Built-in `(blend:N)` transition commands that alternate prompts over `N` frames during the img2img chain to produce mathematically pure visual crossfades.
+- **Universal Payload Specs**: Seamless bridging from the Lua UI to the new backend `PromptScheduleSpec` in generate, animation, and audio modes.
+- **Audio Auto-DJ Upgrade**: Audio-reactive `randomness` auto-generation now synthesizes and injects Keyframe specs with `blend` transitions instead of rigid time dicts, creating flawless music-driven visual morphs.
+- **Graceful Fail-Safes**: Lua AST parser wraps syntax errors in visual `app.alert`s to prevent silent generation failure.
+
+#### Removed
+- Legacy, rigid 3-slot text-box prompt scheduler from the Audio tab UI.
+- All backend legacy `prompt_segments` fallbacks from protocol and payload validators, enforcing extreme SOTA purity.
+
 ## [0.9.60] — 2026-03
-### Prompt Scheduling Architecture
 Decoupled, frame-accurate prompt scheduling for all generation modes — txt2img, img2img, animation (chain + AnimateDiff), and audio-reactive.
 
 #### Added

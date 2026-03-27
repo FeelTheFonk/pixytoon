@@ -97,7 +97,7 @@ class TestSettingsDefaults:
 
     def test_animation_defaults(self):
         s = self._make_settings()
-        assert s.max_animation_frames == 120
+        assert s.max_animation_frames == 256
         assert s.animatediff_model == "ByteDance/AnimateDiff-Lightning"
         assert s.enable_freeinit is False
         assert s.freeinit_iterations == 2

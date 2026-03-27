@@ -38,14 +38,23 @@ def build_prompt_schedule(req) -> "PromptSchedule | None":
                 default = schedule_spec.default_prompt
             elif isinstance(schedule_spec, dict):
                 default = schedule_spec.get("default_prompt", "")
-            return PromptSchedule.from_keyframe_dicts(
+            schedule = PromptSchedule.from_keyframe_dicts(
                 kf_dicts, default or getattr(req, "prompt", ""),
             )
-
-    # Legacy time-range segments (audio-reactive)
-    segments = getattr(req, "prompt_segments", None)
-    if segments:
-        return PromptSchedule.from_dicts(segments, getattr(req, "prompt", ""))
+            is_auto = False
+            if hasattr(schedule_spec, "auto_fill"):
+                is_auto = schedule_spec.auto_fill
+            elif isinstance(schedule_spec, dict):
+                is_auto = schedule_spec.get("auto_fill", False)
+                
+            if schedule and is_auto:
+                from ..prompt_schedule import auto_fill_prompts
+                from ..prompt_generator import prompt_generator
+                schedule = auto_fill_prompts(
+                    schedule, prompt_generator, randomness=getattr(req, "randomness", 5),
+                    locked_fields=getattr(req, "locked_fields", None)
+                )
+            return schedule
 
     return None
 

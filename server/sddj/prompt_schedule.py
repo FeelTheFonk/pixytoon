@@ -438,15 +438,15 @@ def auto_generate_segments(
         locked_fields: Explicit locked fields from client (e.g. {"subject": "..."}).
 
     Returns:
-        List of segment dicts: [{"start_second", "end_second", "prompt"}, ...]
-        Empty list if randomness is 0.
+        Dict defining a prompt schedule: {"keyframes": [...], "default_prompt": "..."}
+        Empty dict if randomness is 0.
     """
     if randomness <= 0 or analysis.duration <= 0:
-        return []
+        return {}
 
     n_segments = _randomness_to_segment_count(randomness, analysis.duration)
     if n_segments < 2:
-        return []
+        return {}
 
     # ── Compute boundaries from onset peaks ──
     bpm = analysis.bpm or 0.0
@@ -489,28 +489,30 @@ def auto_generate_segments(
             else:
                 subject = parts[0]
 
-    # ── Generate varied prompts for each segment ──
-    segments: list[dict] = []
+    # ── Generate varied prompts for each keyframe ──
+    keyframes: list[dict] = []
     locked = {"subject": subject}
+    blend_frames = max(4, int((analysis.fps or 24) * 0.5))  # Smooth half-second crossfade
+    
     for i in range(len(boundaries) - 1):
         start = boundaries[i]
-        end = boundaries[i + 1]
-        if end <= start:
-            continue
         try:
             prompt, _, _ = prompt_gen.generate(
                 locked=locked, randomness=randomness,
             )
         except Exception:
             prompt = base_prompt  # Fallback to original
-        segments.append({
-            "start_second": round(start, 2),
-            "end_second": round(end, 2),
+            
+        frame_idx = int(start * (analysis.fps or 24.0))
+        keyframes.append({
+            "frame": frame_idx,
             "prompt": prompt,
+            "transition": "blend",
+            "transition_frames": blend_frames,
         })
 
     log.info(
-        "Auto-generated %d prompt segments (randomness=%d, duration=%.1fs, bpm=%.0f)",
-        len(segments), randomness, analysis.duration, bpm,
+        "Auto-generated %d prompt keyframes via audio analysis (randomness=%d, duration=%.1fs, bpm=%.0f)",
+        len(keyframes), randomness, analysis.duration, bpm,
     )
-    return segments
+    return {"keyframes": keyframes, "default_prompt": base_prompt}

@@ -246,6 +246,62 @@ class AnimateDiffManager:
         log.info("AnimateDiff + ControlNet pipeline ready (mode=%s)", mode.value)
         return self.controlnet_pipe
 
+    def apply_free_noise(self, pipe, num_frames: int) -> bool:
+        """Enable FreeNoise sliding-window temporal attention for long sequences.
+
+        FreeNoise replaces manual chunking with noise rescheduling + weighted
+        latent averaging across context windows, producing temporally coherent
+        output for arbitrary frame counts.
+
+        Incompatible with AnimateDiff-Lightning (distilled few-step). Returns
+        False when skipped, True when activated.
+        """
+        if settings.is_animatediff_lightning:
+            return False
+
+        if num_frames <= settings.animatediff_context_length:
+            # Short sequence — no sliding window needed
+            return False
+
+        try:
+            pipe.enable_free_noise(
+                context_length=settings.animatediff_context_length,
+                context_stride=settings.animatediff_context_stride,
+            )
+            log.info("FreeNoise enabled (context_length=%d, stride=%d, frames=%d)",
+                     settings.animatediff_context_length,
+                     settings.animatediff_context_stride,
+                     num_frames)
+        except Exception as e:
+            log.warning("FreeNoise unavailable: %s", e)
+            return False
+
+        # SplitInference: chunked attention/resnet for VRAM optimization on long sequences
+        if settings.animatediff_split_inference and num_frames > settings.animatediff_context_length * 2:
+            try:
+                pipe.enable_free_noise_split_inference(
+                    spatial_split_size=settings.animatediff_spatial_split_size,
+                    temporal_split_size=settings.animatediff_temporal_split_size,
+                )
+                log.info("FreeNoise SplitInference enabled (spatial=%d, temporal=%d)",
+                         settings.animatediff_spatial_split_size,
+                         settings.animatediff_temporal_split_size)
+            except Exception as e:
+                log.warning("FreeNoise SplitInference unavailable: %s", e)
+
+        return True
+
+    @staticmethod
+    def remove_free_noise(pipe) -> None:
+        """Disable FreeNoise on the pipeline (cleanup after generation)."""
+        if pipe is not None and getattr(pipe, 'free_noise_enabled', False):
+            try:
+                pipe.disable_free_noise()
+                log.info("FreeNoise disabled")
+            except Exception as e:
+                log.warning("FreeNoise disable failed: %s", e)
+
+
     def unload(self) -> None:
         """Release all AnimateDiff resources — .to(cpu) for immediate VRAM release."""
         from .vram_utils import move_to_cpu, vram_cleanup

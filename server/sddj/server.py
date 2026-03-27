@@ -478,7 +478,7 @@ async def _handle(websocket: WebSocket, req: Request, ws_id: int) -> None:
         elif req.action == Action.GENERATE_ANIMATION:
             anim_req = req.to_animation_request()
 
-            # Server-side frame count validation (protocol allows 120, config may differ)
+            # Server-side frame count validation (protocol allows 256, config may differ)
             if anim_req.frame_count > settings.max_animation_frames:
                 await _send(websocket, ErrorResponse(
                     code="INVALID_REQUEST",

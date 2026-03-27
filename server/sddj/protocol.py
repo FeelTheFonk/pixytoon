@@ -150,7 +150,7 @@ class PromptKeyframeSpec(BaseModel):
 class PromptScheduleSpec(BaseModel):
     keyframes: list[PromptKeyframeSpec] = Field(default_factory=list)
     default_prompt: str = ""
-    auto_fill: Optional[dict] = None
+    auto_fill: bool = False
 
 
 _DEFAULT_NEGATIVE = (
@@ -215,7 +215,7 @@ class AnimationRequest(BaseGenerationParams):
     action: Action = Action.GENERATE_ANIMATION
     method: AnimationMethod = AnimationMethod.CHAIN
     # Animation-specific
-    frame_count: int = Field(8, ge=2, le=120)
+    frame_count: int = Field(8, ge=2, le=256)
     frame_duration_ms: int = Field(100, ge=30, le=2000)
     seed_strategy: SeedStrategy = SeedStrategy.INCREMENT
     tag_name: Optional[str] = Field(None, max_length=64)
@@ -279,7 +279,6 @@ class Request(BaseModel):
     modulation_slots: Optional[list[dict]] = None
     expressions: Optional[dict[str, str]] = None
     modulation_preset: Optional[str] = None
-    prompt_segments: Optional[list[dict]] = None
     # Prompt scheduling
     prompt_schedule: Optional[dict] = None
     prompt_schedule_name: Optional[str] = None
@@ -293,7 +292,7 @@ class Request(BaseModel):
     control_guidance_end: Optional[float] = None
     quality: Optional[str] = None
 
-    @field_validator("modulation_slots", "prompt_segments", "palette_save_colors", mode="before")
+    @field_validator("modulation_slots", "palette_save_colors", mode="before")
     @classmethod
     def _empty_dict_to_list(cls, v: Any) -> Any:
         """Lua json.lua encodes empty tables as {} (object) instead of [] (array).
@@ -405,7 +404,6 @@ class AudioReactiveRequest(BaseGenerationParams):
     modulation_slots: list[ModulationSlotSpec] = Field(default_factory=list)
     expressions: Optional[dict[str, str]] = None
     modulation_preset: Optional[str] = None
-    prompt_segments: list[dict] = Field(default_factory=list)
     randomness: int = Field(0, ge=0, le=20)
     locked_fields: Optional[dict[str, str]] = None
     max_frames: Optional[int] = Field(None, ge=1, le=10800)
@@ -420,7 +418,7 @@ class AudioReactiveRequest(BaseGenerationParams):
     # ── Prompt scheduling (takes precedence over prompt_segments) ──
     prompt_schedule: Optional[PromptScheduleSpec] = None
 
-    @field_validator("modulation_slots", "prompt_segments", mode="before")
+    @field_validator("modulation_slots", mode="before")
     @classmethod
     def _empty_dict_to_list(cls, v: Any) -> Any:
         if isinstance(v, dict) and len(v) == 0:
