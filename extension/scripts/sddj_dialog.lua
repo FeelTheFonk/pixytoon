@@ -387,6 +387,20 @@ local function build_tab_generate()
     min = 1, max = 12, value = 2,
     onchange = onchange_sync("clip_skip"),
   }
+
+  dlg:separator{ text = "Prompt Schedule (DSL)" }
+  dlg:entry{
+    id = "generate_prompt_schedule_dsl",
+    label = "DSL",
+    text = "",
+    hexpand = true,
+  }
+  dlg:file{
+    id = "generate_prompt_schedule_file",
+    label = "Or File",
+    filetypes = { "txt" },
+    open = true,
+  }
 end
 
 -- ─── Tab: Post-Process ──────────────────────────────────────
@@ -569,20 +583,6 @@ local function build_tab_animation()
     id = "anim_freeinit_iters",
     label = "FreeInit Iters",
     min = 1, max = 3, value = 2,
-  }
-
-  dlg:separator{ text = "Prompt Schedule" }
-  dlg:entry{
-    id = "anim_prompt_schedule_dsl",
-    label = "DSL",
-    text = "",
-    hexpand = true,
-  }
-  dlg:file{
-    id = "anim_prompt_schedule_file",
-    label = "Or File",
-    filetypes = { "txt" },
-    open = true,
   }
 end
 
@@ -845,21 +845,6 @@ local function build_tab_audio()
     id = "audio_random_seed",
     text = "Random seed per frame",
     selected = false,
-  }
-
-  -- Prompt Schedule
-  dlg:separator{ text = "Prompt Schedule" }
-  dlg:entry{
-    id = "audio_prompt_schedule_dsl",
-    label = "DSL",
-    text = "",
-    hexpand = true,
-  }
-  dlg:file{
-    id = "audio_prompt_schedule_file",
-    label = "Or File",
-    filetypes = { "txt" },
-    open = true,
   }
 
   dlg:combobox{

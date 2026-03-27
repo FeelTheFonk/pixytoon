@@ -1,7 +1,19 @@
 # Changelog
 
+## [0.9.62] — 2026-03
+### DSL Parser Perfection & UI UX Alignment
+Refinement of the Prompt Scheduling DSL parser, UI layout, and backend fail-safes ensuring 100% zero-crash stability and supreme user experience.
+
+#### Fixed
+- **Implicit Frame 0 Fallback**: Writing raw text without `[time]` tags now implicitly scopes to `frame 0` instead of quietly dropping the text.
+- **Null-Schedule Backend Crash**: Missing or whitespace-only DSL now cleanly evaluates to `None` in the Lua payload, allowing the Python backend to gracefully fall back to standard text prompts without raising `ValidationError` or throwing missing keyframe exceptions.
+
+#### Changed
+- **UI Centralization**: Eradicated the redundant `anim_prompt_schedule_dsl` and `audio_prompt_schedule_dsl` silos from the Animation and Audio tabs. Prompt Scheduling DSL is now globally unified at the bottom of the **Generate** tab.
+- **Parser Syntax SOTA Upgrade**: Restructured the Lua parser to support a clean, multiline bracket-based syntax (e.g., `[0]`, `[50%]`, `@5s`) over the legacy pipe-based format. Allows natural multi-line prompt construction with inline options (`blend: 10`, `weight: 1.2`).
+
 ## [0.9.61] — 2026-03
-### Prompt Scheduling DSL & Auto-DJ SOTA Upgrade
+### Prompt Scheduling DSL & Auto-DJ Upgrade
 Maximal awareness UX overhaul introducing a powerful Timeline DSL directly inside Aseprite, bridging the robust 0.9.60 backend architecture.
 
 #### Added

@@ -100,6 +100,30 @@ function PT.build_locked_fields()
   return { subject = subj }
 end
 
+-- ─── Prompt Schedule Helper ───────────────────────────────
+
+function PT.extract_prompt_schedule(total_frames, fps)
+  if not PT.dlg then return nil end
+  local d = PT.dlg.data
+  local dsl_text = d.generate_prompt_schedule_dsl or ""
+  local file_path = d.generate_prompt_schedule_file or ""
+  if file_path ~= "" then
+    dsl_text = "file: " .. file_path
+  end
+  
+  -- Zéro plantage : on omet totalement le payload si vide
+  if dsl_text:match("^%s*$") then return nil end
+  
+  local parser = require("sddj_dsl_parser")
+  local success, sched = pcall(parser.parse, dsl_text, total_frames, fps)
+  if success and sched and #sched.keyframes > 0 then
+    return sched
+  elseif not success then
+    app.alert("Syntax error in Prompt Schedule DSL. Please check your formatting.\n\n" .. tostring(sched))
+  end
+  return nil
+end
+
 -- ─── Audio Requests ───────────────────────────────────────
 
 function PT.build_analyze_audio_request()
@@ -218,26 +242,12 @@ function PT.build_audio_reactive_request()
     end
   end
 
-  -- Prompt schedule via DSL
-  local dsl_text = d.audio_prompt_schedule_dsl or ""
-  local file_path = d.audio_prompt_schedule_file or ""
-  if file_path ~= "" then
-    dsl_text = "file: " .. file_path
-  end
-  
-  local prompt_schedule = nil
-  if dsl_text ~= "" then
-    local parser = require("sddj_dsl_parser")
-    local total_audio_frames = PT.audio and PT.audio.total_frames or 100
-    local max_f = d.audio_max_frames or 0
-    if max_f > 0 then total_audio_frames = max_f end
-    local success, sched = pcall(parser.parse, dsl_text, total_audio_frames, tonumber(d.audio_fps) or 24)
-    if success and sched and #sched.keyframes > 0 then
-      prompt_schedule = sched
-    elseif not success then
-      app.alert("Syntax error in Prompt Schedule DSL. Please check your formatting.")
-    end
-  end
+  -- Prompt schedule via global DSL
+  local total_audio_frames = PT.audio and PT.audio.total_frames or 100
+  local max_f = d.audio_max_frames or 0
+  if max_f > 0 then total_audio_frames = max_f end
+  local fps = tonumber(d.audio_fps) or 24
+  local prompt_schedule = PT.extract_prompt_schedule(total_audio_frames, fps)
 
   -- Animation method: "chain" or "animatediff_audio"
   local method = d.audio_method or "chain"
@@ -301,6 +311,7 @@ function PT.build_generate_request()
     clip_skip        = PT.dlg.data.clip_skip,
     denoise_strength = PT.dlg.data.denoise / 100.0,
     post_process     = PT.build_post_process(),
+    prompt_schedule  = PT.extract_prompt_schedule(1, 24),
   }
   PT.attach_lora(req)
   PT.attach_neg_ti(req)
@@ -325,25 +336,10 @@ function PT.build_animation_request()
     end
   end
 
-  -- Prompt schedule via DSL
-  local dsl_text = d.anim_prompt_schedule_dsl or ""
-  local file_path = d.anim_prompt_schedule_file or ""
-  if file_path ~= "" then
-    dsl_text = "file: " .. file_path
-  end
-  
-  local prompt_schedule = nil
-  if dsl_text ~= "" then
-    local parser = require("sddj_dsl_parser")
-    local fps = 24
-    if d.anim_duration then fps = math.floor(1000 / d.anim_duration) end
-    local success, sched = pcall(parser.parse, dsl_text, d.anim_frames or 100, fps)
-    if success and sched and #sched.keyframes > 0 then
-      prompt_schedule = sched
-    elseif not success then
-      app.alert("Syntax error in Prompt Schedule DSL. Please check your formatting.")
-    end
-  end
+  -- Prompt schedule via global DSL
+  local fps = 24
+  if d.anim_duration then fps = math.floor(1000 / d.anim_duration) end
+  local prompt_schedule = PT.extract_prompt_schedule(d.anim_frames or 100, fps)
 
   local req = {
     action = "generate_animation",

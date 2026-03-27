@@ -12,7 +12,8 @@ function M.parse(input_str, total_frames, fps)
     default_prompt = ""
   }
   
-  if not input_str or input_str == "" then
+  -- SOTA robust empty check
+  if not input_str or input_str:match("^%s*$") then
     return schedule
   end
   
@@ -33,75 +34,107 @@ function M.parse(input_str, total_frames, fps)
      end
   end
 
-  local segments = {}
-  -- Split by |
-  for segment in string.gmatch(input_str .. "|", "(.-)|") do
-    if trim(segment) ~= "" then
-      table.insert(segments, trim(segment))
+  if not input_str or input_str:match("^%s*$") then
+    return schedule
+  end
+
+  local blocks = {}
+  local current_block = nil
+  
+  -- Parse multiple lines into block segments
+  for line in input_str:gmatch("[^\r\n]+") do
+    local l = trim(line)
+    -- Ignore comments
+    if not (l:match("^#") or l:match("^//")) then
+      -- Match time markers: [0], [50%], [5s] or @0, @50%, @5s
+      local time_str, rest = l:match("^%[(.-)%]%s*(.*)")
+      if not time_str then
+          time_str, rest = l:match("^@([^%s]+)%s*(.*)")
+      end
+      
+      if time_str then
+         current_block = {
+             time_str = trim(time_str),
+             lines = {}
+         }
+         if rest and trim(rest) ~= "" then
+             table.insert(current_block.lines, trim(rest))
+         end
+         table.insert(blocks, current_block)
+      else
+         if not current_block then
+             current_block = {
+                 time_str = "0",
+                 lines = {}
+             }
+             table.insert(blocks, current_block)
+         end
+         if l ~= "" then
+             table.insert(current_block.lines, l)
+         end
+      end
     end
   end
   
-  for _, seg in ipairs(segments) do
-    -- Match generic structure: [time][options]: [prompt] [-] [negative]
-    local time_part, rest = seg:match("^([^:]+):(.*)$")
-    if time_part and rest then
-      time_part = trim(time_part)
-      rest = trim(rest)
-      
-      -- Extract options like (blend:5, w:1.2)
-      local options_str = time_part:match("%((.-)%)")
-      local absolute_time_str = time_part:gsub("%(.-%)", "")
-      absolute_time_str = trim(absolute_time_str)
-      
-      -- Parse time
-      local frame_val = 0
-      if absolute_time_str:match("%%$") then
-        local pct = tonumber(absolute_time_str:sub(1, -2)) or 0
-        frame_val = math.floor((pct / 100.0) * total_frames)
-      elseif absolute_time_str:match("s$") then
-        local sec = tonumber(absolute_time_str:sub(1, -2)) or 0
-        frame_val = math.floor(sec * fps)
-      else
-        frame_val = tonumber(absolute_time_str) or 0
-      end
-      
-      -- Parse prompt and negative
-      local prompt_pt = rest
-      local neg_prompt = ""
-      local neg_idx = rest:find("%[%-%]")
-      if neg_idx then
-        prompt_pt = trim(rest:sub(1, neg_idx - 1))
-        neg_prompt = trim(rest:sub(neg_idx + 3))
-      end
-      
-      -- Parse options
-      local transition = "hard_cut"
-      local transition_frames = 0
-      local weight = 1.0
-      
-      if options_str then
-        if options_str:match("blend") then
-            transition = "blend"
-            local tf = options_str:match("blend:(%d+)")
-            if tf then transition_frames = tonumber(tf) end
-        end
-        if options_str:match("hard_cut") then
-            transition = "hard_cut"
-        end
-        local w = options_str:match("w:([%d%.]+)")
-        if w then weight = tonumber(w) end
-      end
-      
-      table.insert(schedule.keyframes, {
-        frame = frame_val,
-        prompt = prompt_pt,
-        negative_prompt = neg_prompt,
-        weight = weight,
-        transition = transition,
-        transition_frames = transition_frames
-      })
+  for _, block in ipairs(blocks) do
+    local absolute_time_str = block.time_str
+    
+    -- Parse time
+    local frame_val = 0
+    if absolute_time_str:match("%%$") then
+      local pct = tonumber(absolute_time_str:sub(1, -2)) or 0
+      frame_val = math.floor((pct / 100.0) * total_frames)
+    elseif absolute_time_str:match("s$") then
+      local sec = tonumber(absolute_time_str:sub(1, -2)) or 0
+      frame_val = math.floor(sec * fps)
+    else
+      frame_val = tonumber(absolute_time_str) or 0
     end
+    
+    local prompt_lines = {}
+    local negative_prompt = ""
+    local in_negative = false
+    local weight = 1.0
+    local transition = "hard_cut"
+    local transition_frames = 0
+    
+    for _, l in ipairs(block.lines) do
+      if l:match("^%-%-") then
+          in_negative = true
+          negative_prompt = trim(l:sub(3))
+      elseif l:match("^blend:%s*(%d+)") then
+          transition = "blend"
+          transition_frames = tonumber(l:match("^blend:%s*(%d+)"))
+      elseif l:match("^transition:%s*(%w+)") then
+          transition = trim(l:match("^transition:%s*(%w+)"))
+      elseif l:match("^weight:%s*([%d%.]+)") or l:match("^w:%s*([%d%.]+)") then
+          weight = tonumber(l:match("^w.-:%s*([%d%.]+)")) or weight
+      else
+          if l ~= "" then
+              if in_negative then
+                  negative_prompt = negative_prompt .. " " .. l
+              else
+                  table.insert(prompt_lines, l)
+              end
+          end
+      end
+    end
+    
+    local prompt_pt = trim(table.concat(prompt_lines, " "))
+    negative_prompt = trim(negative_prompt)
+    
+    table.insert(schedule.keyframes, {
+      frame = frame_val,
+      prompt = prompt_pt,
+      negative_prompt = negative_prompt,
+      weight = weight,
+      transition = transition,
+      transition_frames = transition_frames
+    })
   end
+  
+  -- Sort ascending by frame
+  table.sort(schedule.keyframes, function(a, b) return a.frame < b.frame end)
   
   return schedule
 end
