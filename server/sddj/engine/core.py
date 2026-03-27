@@ -52,7 +52,7 @@ from ..image_codec import (
     round8,
 )
 from ..lora_fuser import LoRAFuser
-from .helpers import GenerationCancelled, scale_steps_for_denoise
+from .helpers import GenerationCancelled, build_prompt_schedule, scale_steps_for_denoise
 from .animation import AnimationMixin
 from .audio_reactive import AudioReactiveMixin
 
@@ -460,19 +460,30 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
                         on_progress(ProgressResponse(step=step_idx + 1, total=req.steps))
                     return callback_kwargs
 
+                # ── Prompt schedule resolution (single-image: use frame 0) ──
+                schedule = build_prompt_schedule(req)
+                effective_prompt = req.prompt
+                if schedule and schedule.keyframes:
+                    kf_prompt = schedule.get_prompt_for_frame(0)
+                    if kf_prompt:
+                        effective_prompt = kf_prompt
+                    kf_neg = schedule.get_negative_for_frame(0)
+                    if kf_neg:
+                        effective_neg = self._build_effective_negative(kf_neg, req.negative_ti)
+
                 # ── Mode dispatch ─────────────────────────────────────
 
                 if req.mode == GenerationMode.TXT2IMG:
-                    image = self._txt2img(req, generator, step_callback, effective_neg)
+                    image = self._txt2img(req, generator, step_callback, effective_prompt, effective_neg)
 
                 elif req.mode == GenerationMode.IMG2IMG:
-                    image = self._img2img(req, generator, step_callback, effective_neg)
+                    image = self._img2img(req, generator, step_callback, effective_prompt, effective_neg)
 
                 elif req.mode == GenerationMode.INPAINT:
-                    image = self._inpaint(req, generator, step_callback, effective_neg)
+                    image = self._inpaint(req, generator, step_callback, effective_prompt, effective_neg)
 
                 elif req.mode.value.startswith("controlnet_"):
-                    image = self._controlnet_generate(req, generator, step_callback, effective_neg)
+                    image = self._controlnet_generate(req, generator, step_callback, effective_prompt, effective_neg)
 
                 else:
                     raise ValueError(f"Unknown mode: {req.mode}")
@@ -505,11 +516,11 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
 
     # ─── PRIVATE GENERATION METHODS ──────────────────────────
 
-    def _txt2img(self, req, generator, callback, effective_neg):
+    def _txt2img(self, req, generator, callback, prompt, negative):
         torch.compiler.cudagraph_mark_step_begin()
         return self._pipe(
-            prompt=req.prompt,
-            negative_prompt=effective_neg,
+            prompt=prompt,
+            negative_prompt=negative,
             num_inference_steps=req.steps,
             guidance_scale=req.cfg_scale,
             width=round8(req.width),
@@ -520,7 +531,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
             output_type="pil",
         ).images[0]
 
-    def _img2img(self, req, generator, callback, effective_neg):
+    def _img2img(self, req, generator, callback, prompt, negative):
         if req.source_image is None:
             raise ValueError("img2img requires source_image")
         source = decode_b64_image(req.source_image)
@@ -539,8 +550,8 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         # Suspend DeepCache for the img2img call to avoid the mismatch.
         with deepcache_manager.suspended(self._deepcache_helper):
             return self._img2img_pipe(
-                prompt=req.prompt,
-                negative_prompt=effective_neg,
+                prompt=prompt,
+                negative_prompt=negative,
                 image=source,
                 num_inference_steps=scaled_steps,
                 guidance_scale=req.cfg_scale,
@@ -551,7 +562,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
                 output_type="pil",
             ).images[0]
 
-    def _inpaint(self, req, generator, callback, effective_neg):
+    def _inpaint(self, req, generator, callback, prompt, negative):
         """Inpaint: img2img full image, then composite via mask."""
         if req.source_image is None:
             raise ValueError("inpaint requires source_image")
@@ -575,8 +586,8 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         # Same DeepCache suspension as _img2img — shared UNet, different scheduler.
         with deepcache_manager.suspended(self._deepcache_helper):
             inpainted = self._img2img_pipe(
-                prompt=req.prompt,
-                negative_prompt=effective_neg,
+                prompt=prompt,
+                negative_prompt=negative,
                 image=source,
                 num_inference_steps=scaled_steps,
                 guidance_scale=req.cfg_scale,
@@ -590,7 +601,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         # Composite: keep original where mask is black, use inpainted where white
         return composite_with_mask(source, inpainted, mask)
 
-    def _controlnet_generate(self, req, generator, callback, effective_neg):
+    def _controlnet_generate(self, req, generator, callback, prompt, negative):
         self._ensure_controlnet(req.mode)
         width = round8(req.width)
         height = round8(req.height)
@@ -610,8 +621,8 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
             source = resize_to_target(source, width, height)
 
         call_kwargs = dict(
-            prompt=req.prompt,
-            negative_prompt=effective_neg,
+            prompt=prompt,
+            negative_prompt=negative,
             num_inference_steps=req.steps,
             guidance_scale=req.cfg_scale,
             width=width,

@@ -51,6 +51,8 @@ class TestAction:
             "list_modulation_presets", "get_modulation_preset",
             "list_expression_presets", "get_expression_preset",
             "list_choreography_presets", "get_choreography_preset",
+            "list_prompt_schedules", "get_prompt_schedule",
+            "save_prompt_schedule", "delete_prompt_schedule",
             "export_mp4",
             "shutdown",
         }

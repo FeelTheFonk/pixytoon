@@ -425,6 +425,18 @@ async def _handle(websocket: WebSocket, req: Request, ws_id: int) -> None:
         elif req.action == Action.GET_CHOREOGRAPHY_PRESET:
             await _handle_get_choreography_preset(websocket, req)
 
+        elif req.action == Action.LIST_PROMPT_SCHEDULES:
+            await _handle_list_prompt_schedules(websocket)
+
+        elif req.action == Action.GET_PROMPT_SCHEDULE:
+            await _handle_get_prompt_schedule(websocket, req)
+
+        elif req.action == Action.SAVE_PROMPT_SCHEDULE:
+            await _handle_save_prompt_schedule(websocket, req)
+
+        elif req.action == Action.DELETE_PROMPT_SCHEDULE:
+            await _handle_delete_prompt_schedule(websocket, req)
+
         elif req.action == Action.GENERATE_AUDIO_REACTIVE:
             await _handle_generate_audio_reactive(websocket, req, ws_id)
 
@@ -817,6 +829,63 @@ async def _handle_get_choreography_preset(websocket: WebSocket, req: Request) ->
         slots=choreo.get("slots", []),
         expressions=choreo.get("expressions", {}),
     ))
+
+
+async def _handle_list_prompt_schedules(websocket: WebSocket) -> None:
+    from .prompt_schedule_presets import PromptSchedulePresetsManager
+    mgr = PromptSchedulePresetsManager(settings.prompt_schedules_dir)
+    items = mgr.list_presets()
+    await _send(websocket, ListResponse(list_type="prompt_schedules", items=items))
+
+
+async def _handle_get_prompt_schedule(websocket: WebSocket, req: Request) -> None:
+    name = req.prompt_schedule_name
+    if not name:
+        await _send(websocket, ErrorResponse(
+            code="INVALID_REQUEST", message="prompt_schedule_name required"))
+        return
+    from .prompt_schedule_presets import PromptSchedulePresetsManager
+    mgr = PromptSchedulePresetsManager(settings.prompt_schedules_dir)
+    try:
+        data = mgr.get_preset(name)
+        await _send(websocket, PresetResponse(name=name, data=data))
+    except (FileNotFoundError, ValueError) as e:
+        await _send(websocket, ErrorResponse(
+            code="INVALID_REQUEST", message=str(e)))
+
+
+async def _handle_save_prompt_schedule(websocket: WebSocket, req: Request) -> None:
+    name = req.prompt_schedule_name
+    data = req.prompt_schedule_data
+    if not name or not data:
+        await _send(websocket, ErrorResponse(
+            code="INVALID_REQUEST",
+            message="prompt_schedule_name and prompt_schedule_data required"))
+        return
+    from .prompt_schedule_presets import PromptSchedulePresetsManager
+    mgr = PromptSchedulePresetsManager(settings.prompt_schedules_dir)
+    try:
+        mgr.save_preset(name, data)
+        await _send(websocket, PresetSavedResponse(name=name))
+    except ValueError as e:
+        await _send(websocket, ErrorResponse(
+            code="INVALID_REQUEST", message=str(e)))
+
+
+async def _handle_delete_prompt_schedule(websocket: WebSocket, req: Request) -> None:
+    name = req.prompt_schedule_name
+    if not name:
+        await _send(websocket, ErrorResponse(
+            code="INVALID_REQUEST", message="prompt_schedule_name required"))
+        return
+    from .prompt_schedule_presets import PromptSchedulePresetsManager
+    mgr = PromptSchedulePresetsManager(settings.prompt_schedules_dir)
+    try:
+        mgr.delete_preset(name)
+        await _send(websocket, PresetDeletedResponse(name=name))
+    except (FileNotFoundError, ValueError) as e:
+        await _send(websocket, ErrorResponse(
+            code="INVALID_REQUEST", message=str(e)))
 
 
 async def _handle_export_mp4(websocket: WebSocket, req: Request) -> None:

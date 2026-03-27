@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.9.60] — 2026-03
+### Prompt Scheduling Architecture
+Decoupled, frame-accurate prompt scheduling for all generation modes — txt2img, img2img, animation (chain + AnimateDiff), and audio-reactive.
+
+#### Added
+- **`PromptKeyframe` dataclass** — frame-indexed keyframe with `hard_cut`/`blend` transitions, per-keyframe negative prompts, and weight.
+- **`PromptSchedule` keyframe engine** — `get_prompt_for_frame()` (hard_cut + blend alternation), `get_negative_for_frame()`, `get_unique_prompts()`/`get_unique_negatives()` for embedding pre-cache, `auto_fill_prompts()` via `PromptGenerator`.
+- **`PromptSchedulePresetsManager`** — CRUD with path traversal protection, name validation, 50-preset cap. 5 structural factory presets: `evolving_3act`, `style_morph_4`, `beat_alternating`, `slow_drift`, `rapid_cuts_6`.
+- **Protocol expansion** — 4 new `Action` entries (`LIST_PROMPT_SCHEDULES`, `GET_PROMPT_SCHEDULE`, `SAVE_PROMPT_SCHEDULE`, `DELETE_PROMPT_SCHEDULE`), `PromptKeyframeSpec`/`PromptScheduleSpec` Pydantic models with transition validator, `prompt_schedule` field on `GenerateRequest`, `AnimationRequest`, `AudioReactiveRequest`.
+- **`build_prompt_schedule()` helper** — unified entry point resolving `PromptScheduleSpec`, raw dict, or legacy segments. Includes Lua `json.lua` dict-encoded array normalization.
+- **Server dispatch** — 4 CRUD handlers wired in `server.py`.
+- **`prompt_schedules_dir`** config path.
+- 41 new unit tests in `test_prompt_schedule_keyframes.py` (engine, presets, protocol, helper, auto-fill, backward compat, Lua edge case).
+
+#### Changed
+- **`core.py` `generate()`** — schedule resolves frame 0 prompt/negative before mode dispatch; all 4 private methods (`_txt2img`, `_img2img`, `_inpaint`, `_controlnet_generate`) accept resolved `prompt`/`negative` parameters.
+- **`animation.py` chain loop** — per-frame prompt/negative resolution at all 6 pipeline call sites.
+- **`animation.py` AnimateDiff loop** — per-chunk midpoint resolution at 2 pipeline call sites.
+- **Precedence**: `prompt_schedule` > `prompt_segments` > static `prompt` (backward compatible).
+
+
+
 ## [0.9.59] — 2026-03
 ### LoRA Management & Configuration Audit
 Exhaustive multi-level audit of LoRA management system and environment configuration.

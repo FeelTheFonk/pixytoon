@@ -9,6 +9,47 @@ from ..config import settings
 from ..protocol import ProgressResponse
 
 
+def build_prompt_schedule(req) -> "PromptSchedule | None":
+    """Build a PromptSchedule from any request type.
+
+    Resolution order:
+    1. ``req.prompt_schedule`` (new keyframe format) — if present
+    2. ``req.prompt_segments`` (legacy audio segments) — if present
+    3. None (no schedule, use static ``req.prompt``)
+    """
+    from ..prompt_schedule import PromptSchedule, PromptKeyframe
+
+    # New keyframe-based schedule
+    schedule_spec = getattr(req, "prompt_schedule", None)
+    if schedule_spec is not None:
+        # Handle both PromptScheduleSpec (Pydantic) and raw dict
+        if hasattr(schedule_spec, "keyframes"):
+            kf_dicts = [kf.model_dump() for kf in schedule_spec.keyframes]
+        elif isinstance(schedule_spec, dict):
+            kf_dicts = schedule_spec.get("keyframes", [])
+        else:
+            kf_dicts = []
+        if kf_dicts:
+            # Lua json.lua may encode arrays as objects with numeric keys
+            if isinstance(kf_dicts, dict):
+                kf_dicts = list(kf_dicts.values())
+            default = ""
+            if hasattr(schedule_spec, "default_prompt"):
+                default = schedule_spec.default_prompt
+            elif isinstance(schedule_spec, dict):
+                default = schedule_spec.get("default_prompt", "")
+            return PromptSchedule.from_keyframe_dicts(
+                kf_dicts, default or getattr(req, "prompt", ""),
+            )
+
+    # Legacy time-range segments (audio-reactive)
+    segments = getattr(req, "prompt_segments", None)
+    if segments:
+        return PromptSchedule.from_dicts(segments, getattr(req, "prompt", ""))
+
+    return None
+
+
 class GenerationCancelled(Exception):
     """Raised when a client cancels an in-progress generation."""
 

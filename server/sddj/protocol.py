@@ -42,6 +42,11 @@ class Action(str, Enum):
     GET_EXPRESSION_PRESET = "get_expression_preset"
     LIST_CHOREOGRAPHY_PRESETS = "list_choreography_presets"
     GET_CHOREOGRAPHY_PRESET = "get_choreography_preset"
+    # Prompt schedule presets
+    LIST_PROMPT_SCHEDULES = "list_prompt_schedules"
+    GET_PROMPT_SCHEDULE = "get_prompt_schedule"
+    SAVE_PROMPT_SCHEDULE = "save_prompt_schedule"
+    DELETE_PROMPT_SCHEDULE = "delete_prompt_schedule"
     # Video export
     EXPORT_MP4 = "export_mp4"
     # Server lifecycle
@@ -126,6 +131,28 @@ class PostProcessSpec(BaseModel):
     remove_bg: bool = False
 
 
+class PromptKeyframeSpec(BaseModel):
+    frame: int = Field(0, ge=0)
+    prompt: str = ""
+    negative_prompt: str = ""
+    weight: float = Field(1.0, ge=0.0, le=5.0)
+    transition: str = "hard_cut"
+    transition_frames: int = Field(0, ge=0, le=120)
+
+    @field_validator("transition")
+    @classmethod
+    def _valid_transition(cls, v: str) -> str:
+        if v not in ("hard_cut", "blend"):
+            return "hard_cut"
+        return v
+
+
+class PromptScheduleSpec(BaseModel):
+    keyframes: list[PromptKeyframeSpec] = Field(default_factory=list)
+    default_prompt: str = ""
+    auto_fill: Optional[dict] = None
+
+
 _DEFAULT_NEGATIVE = (
     "blurry, antialiased, smooth gradient, photorealistic, 3d render, "
     "soft edges, anti-aliasing, bokeh, depth of field, "
@@ -176,6 +203,8 @@ class GenerateRequest(BaseGenerationParams):
     controlnet_conditioning_scale: float = Field(1.5, ge=0.0, le=3.0)
     control_guidance_start: float = Field(0.0, ge=0.0, le=1.0)
     control_guidance_end: float = Field(1.0, ge=0.0, le=1.0)
+    # ── Prompt scheduling ──
+    prompt_schedule: Optional[PromptScheduleSpec] = None
 
     @model_validator(mode='after')
     def _check_mode_images(self):
@@ -193,6 +222,8 @@ class AnimationRequest(BaseGenerationParams):
     # AnimateDiff-specific
     enable_freeinit: bool = False
     freeinit_iterations: int = Field(2, ge=1, le=3)
+    # ── Prompt scheduling ──
+    prompt_schedule: Optional[PromptScheduleSpec] = None
 
     @model_validator(mode='after')
     def _check_mode_images(self):
@@ -249,6 +280,10 @@ class Request(BaseModel):
     expressions: Optional[dict[str, str]] = None
     modulation_preset: Optional[str] = None
     prompt_segments: Optional[list[dict]] = None
+    # Prompt scheduling
+    prompt_schedule: Optional[dict] = None
+    prompt_schedule_name: Optional[str] = None
+    prompt_schedule_data: Optional[dict] = None
     # Video export fields
     output_dir: Optional[str] = None
     scale_factor: Optional[int] = None
@@ -289,6 +324,8 @@ class Request(BaseModel):
             # Resource / export fields
             "preset_name", "preset_data", "palette_save_name", "palette_save_colors",
             "max_frames", "output_dir", "scale_factor", "quality",
+            # Prompt schedule CRUD fields (not generation)
+            "prompt_schedule_name", "prompt_schedule_data",
         }
         data = self.model_dump(exclude_none=True, exclude=_exclude)
         return GenerateRequest(**data)
@@ -308,6 +345,8 @@ class Request(BaseModel):
             "max_frames", "output_dir", "scale_factor", "quality",
             # ControlNet conditioning fields (generate-only)
             "controlnet_conditioning_scale", "control_guidance_start", "control_guidance_end",
+            # Prompt schedule CRUD fields (not generation)
+            "prompt_schedule_name", "prompt_schedule_data",
         }
         data = self.model_dump(exclude_none=True, exclude=_exclude)
         return AnimationRequest(**data)
@@ -329,6 +368,8 @@ class Request(BaseModel):
             "output_dir", "scale_factor", "quality",
             # ControlNet conditioning fields (generate-only)
             "controlnet_conditioning_scale", "control_guidance_start", "control_guidance_end",
+            # Prompt schedule CRUD fields (not generation)
+            "prompt_schedule_name", "prompt_schedule_data",
         }
         data = self.model_dump(exclude_none=True, exclude=_exclude)
         return AudioReactiveRequest(**data)
@@ -376,6 +417,8 @@ class AudioReactiveRequest(BaseGenerationParams):
     # Audio-reactive uses fps instead; retained for metadata backward compat only.
     frame_duration_ms: Optional[int] = Field(None, ge=30, le=2000)
     tag_name: Optional[str] = Field(None, max_length=64)
+    # ── Prompt scheduling (takes precedence over prompt_segments) ──
+    prompt_schedule: Optional[PromptScheduleSpec] = None
 
     @field_validator("modulation_slots", "prompt_segments", mode="before")
     @classmethod

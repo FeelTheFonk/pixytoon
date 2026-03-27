@@ -34,7 +34,7 @@ from ..image_codec import (
     resize_to_target,
     round8,
 )
-from .helpers import GenerationCancelled, apply_temporal_coherence, compute_effective_denoise, make_step_callback, scale_steps_for_denoise
+from .helpers import GenerationCancelled, apply_temporal_coherence, build_prompt_schedule, compute_effective_denoise, make_step_callback, scale_steps_for_denoise
 
 log = logging.getLogger("sddj.engine")
 
@@ -145,6 +145,9 @@ class AnimationMixin:
         log.info("Chain animation: %d frames, mode=%s, steps=%d (scaled=%d), denoise=%.2f, seed_base=%d",
                  req.frame_count, req.mode.value, req.steps, chain_scaled_steps, chain_denoise, base_seed)
 
+        # Build prompt schedule (resolved per-frame inside loop)
+        schedule = build_prompt_schedule(req)
+
         with torch.inference_mode():
             for frame_idx in range(req.frame_count):
                 if self._cancel_event.is_set():
@@ -181,11 +184,22 @@ class AnimationMixin:
                 log.info("Chain frame %d/%d: seed=%d, mode=%s",
                          frame_idx, req.frame_count, frame_seed, req.mode.value)
 
+                # Resolve per-frame prompt from schedule
+                frame_prompt = req.prompt
+                frame_neg = effective_neg
+                if schedule and schedule.keyframes:
+                    kf_prompt = schedule.get_prompt_for_frame(frame_idx)
+                    if kf_prompt:
+                        frame_prompt = kf_prompt
+                    kf_neg = schedule.get_negative_for_frame(frame_idx)
+                    if kf_neg:
+                        frame_neg = self._build_effective_negative(kf_neg, req.negative_ti)
+
                 if frame_idx == 0:
                     if req.mode == GenerationMode.TXT2IMG:
                         image = self._pipe(
-                            prompt=req.prompt,
-                            negative_prompt=effective_neg,
+                            prompt=frame_prompt,
+                            negative_prompt=frame_neg,
                             num_inference_steps=req.steps,
                             guidance_scale=req.cfg_scale,
                             width=target_w,
@@ -199,8 +213,8 @@ class AnimationMixin:
                         if _source_img is None:
                             raise ValueError("img2img requires source_image")
                         image = self._img2img_pipe(
-                            prompt=req.prompt,
-                            negative_prompt=effective_neg,
+                            prompt=frame_prompt,
+                            negative_prompt=frame_neg,
                             image=_source_img,
                             num_inference_steps=chain_scaled_steps,
                             guidance_scale=req.cfg_scale,
@@ -214,8 +228,8 @@ class AnimationMixin:
                         if _source_img is None or _mask_img is None:
                             raise ValueError("inpaint requires source_image and mask_image")
                         inpainted = self._img2img_pipe(
-                            prompt=req.prompt,
-                            negative_prompt=effective_neg,
+                            prompt=frame_prompt,
+                            negative_prompt=frame_neg,
                             image=_source_img,
                             num_inference_steps=chain_scaled_steps,
                             guidance_scale=req.cfg_scale,
@@ -231,8 +245,8 @@ class AnimationMixin:
                             raise ValueError("controlnet requires control_image")
                         self._ensure_controlnet(req.mode)
                         image = self._controlnet_pipe(
-                            prompt=req.prompt,
-                            negative_prompt=effective_neg,
+                            prompt=frame_prompt,
+                            negative_prompt=frame_neg,
                             image=_control_img,
                             num_inference_steps=req.steps,
                             guidance_scale=req.cfg_scale,
@@ -257,8 +271,8 @@ class AnimationMixin:
                         # so we fall through to plain img2img for frame coherence)
                         log.info("Chain frame %d: ControlNet mode uses img2img for frame coherence", frame_idx)
                         image = self._img2img_pipe(
-                            prompt=req.prompt,
-                            negative_prompt=effective_neg,
+                            prompt=frame_prompt,
+                            negative_prompt=frame_neg,
                             image=source,
                             num_inference_steps=chain_scaled_steps,
                             guidance_scale=req.cfg_scale,
@@ -274,8 +288,8 @@ class AnimationMixin:
                                  type(self._img2img_pipe.unet).__name__,
                                  type(self._img2img_pipe.scheduler).__name__)
                         image = self._img2img_pipe(
-                            prompt=req.prompt,
-                            negative_prompt=effective_neg,
+                            prompt=frame_prompt,
+                            negative_prompt=frame_neg,
                             image=source,
                             num_inference_steps=chain_scaled_steps,
                             guidance_scale=req.cfg_scale,
@@ -403,6 +417,9 @@ class AnimationMixin:
         effective_neg = self._build_effective_negative(req.negative_prompt, req.negative_ti)
         target_w, target_h = round8(req.width), round8(req.height)
 
+        # Build prompt schedule for per-chunk resolution
+        schedule = build_prompt_schedule(req)
+
         # Pre-decode images for reuse across chunks
         _source_img = None
         if is_img2img:
@@ -460,14 +477,26 @@ class AnimationMixin:
             log.info("Chunk %d/%d [%d-%d): %d frames, seed=%d",
                      chunk_idx + 1, len(chunks), c_start, c_end, num_frames, chunk_seed)
 
+            # Resolve prompt at chunk midpoint
+            chunk_prompt = req.prompt
+            chunk_neg = effective_neg
+            if schedule and schedule.keyframes:
+                mid_frame = c_start + num_frames // 2
+                kf_prompt = schedule.get_prompt_for_frame(mid_frame)
+                if kf_prompt:
+                    chunk_prompt = kf_prompt
+                kf_neg = schedule.get_negative_for_frame(mid_frame)
+                if kf_neg:
+                    chunk_neg = self._build_effective_negative(kf_neg, req.negative_ti)
+
             with torch.inference_mode():
                 if is_img2img:
                     strength, scaled_steps, _ = compute_effective_denoise(
                         effective_steps, req.denoise_strength)
                     kwargs = dict(
                         video=[_source_img] * num_frames,
-                        prompt=req.prompt,
-                        negative_prompt=effective_neg,
+                        prompt=chunk_prompt,
+                        negative_prompt=chunk_neg,
                         num_inference_steps=scaled_steps,
                         guidance_scale=effective_cfg,
                         strength=strength,
@@ -478,8 +507,8 @@ class AnimationMixin:
                     )
                 else:
                     kwargs = dict(
-                        prompt=req.prompt,
-                        negative_prompt=effective_neg,
+                        prompt=chunk_prompt,
+                        negative_prompt=chunk_neg,
                         num_frames=num_frames,
                         num_inference_steps=effective_steps,
                         guidance_scale=effective_cfg,

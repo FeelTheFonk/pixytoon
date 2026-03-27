@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     embeddings_dir: Path = _SERVER_ROOT / "models" / "embeddings"
     palettes_dir: Path = _SERVER_ROOT / "palettes"
     presets_dir: Path = _SERVER_ROOT / "presets"
+    prompt_schedules_dir: Path = _SERVER_ROOT / "prompt_schedules"
     prompts_data_dir: Path = _SERVER_ROOT / "data" / "prompts"
 
     # ── Default checkpoint ───────────────────────────────────
