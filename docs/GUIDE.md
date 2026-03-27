@@ -217,6 +217,7 @@ The **Animation tab** generates multi-frame animations via two methods:
 | Seed Mode | increment | `fixed` = same seed, `increment` = +1, `random` = random per frame |
 | Tag Name | (empty) | Creates an Aseprite tag for the animation range |
 | FreeInit | off | AnimateDiff only — improves temporal consistency (doubles generation time) |
+| Prompt Schedule | off | **Frame-based prompt evolution** — define different prompts at keyframe indices with hard_cut/blend transitions. See [Audio — Prompt Schedule](AUDIO.md#prompt-schedule) |
 
 ### AnimateDiff-Lightning
 

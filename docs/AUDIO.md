@@ -310,9 +310,48 @@ To use: in the Audio tab, set **Method** to `animatediff`. Minimum useful sequen
 
 ## Prompt Schedule
 
-Enable **Advanced → Prompt Schedule** for different prompts across time ranges.
+Prompt scheduling evolves the generation prompt across frames — different scenes, styles, or subjects at different points in the timeline.
 
-Format: `start-end` in seconds paired with a prompt.
+### Keyframe Scheduling (New)
+
+Define frame-indexed keyframes with transition modes. Works in **all generation modes** (Generate, Animation, Audio).
+
+| Field | Description |
+|-------|-------------|
+| `frame` | Frame index where this prompt activates |
+| `prompt` | Positive prompt for this keyframe |
+| `negative_prompt` | Per-keyframe negative (overrides global) |
+| `transition` | `hard_cut` (instant switch) or `blend` (frame-alternating crossfade) |
+| `transition_frames` | Blend window length (blend mode only) |
+
+**Example** — 3-act animation with a blended transition:
+```
+KF 0 : "pixel art forest, morning light"        [hard_cut]
+KF 5 : "pixel art ocean, sunset"                 [blend, 3 frames]
+KF 10: "pixel art volcano, dramatic sky"         [hard_cut]
+```
+
+Frames 0–4 show the forest. Frames 5–7 alternate between forest and ocean (visual crossfade via img2img chain). Frames 8+ show the ocean, then volcano from frame 10.
+
+#### Built-in Presets
+
+| Preset | Structure | Transitions |
+|--------|-----------|-------------|
+| `evolving_3act` | 3 keyframes (0, 3, 6) | All hard_cut |
+| `style_morph_4` | 4 keyframes (0, 2, 5, 8) | 3 blends (2-frame window) |
+| `beat_alternating` | 2 keyframes (0, 4) | All hard_cut |
+| `slow_drift` | 2 keyframes (0, 4) | 1 blend (4-frame window) |
+| `rapid_cuts_6` | 6 keyframes (0, 2, 4, 6, 8, 10) | All hard_cut |
+
+Presets are structural — prompts are empty by default. Fill them manually or use **Auto-Fill** (server-side `PromptGenerator` fills empty keyframes with varied prompts based on randomness level).
+
+#### Precedence
+
+`prompt_schedule` (keyframes) > `prompt_segments` (legacy) > static `prompt`.
+
+### Time-Range Segments (Legacy)
+
+For audio-reactive mode, time-based segments still work. Format: `start-end` in seconds paired with a prompt.
 
 ```
 T1: 0-8   / serene forest, green canopy, morning light

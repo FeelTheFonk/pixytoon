@@ -17,6 +17,7 @@ Local SOTA image generation and animation for Aseprite via Stable Diffusion + An
 - **ControlNet** — OpenPose, Canny, Scribble, Lineart spatial conditioning
 - **AnimateDiff** — temporal consistency for multi-frame animation (Chain + AnimateDiff-Lightning)
 - **Audio Reactivity** — DSP engine mapping audio features to diffusion parameters (Deforum-style)
+- **Prompt Scheduling** — frame-indexed keyframe scheduling with transitions, presets, and auto-fill across all modes
 - **Post-Processing** — pixel-art pipeline: background removal, NEAREST downscale, CIELAB quantization, dithering
 - **100% Offline** — no telemetry, no cloud, no API keys
 
@@ -48,7 +49,7 @@ Lightweight Lua frontend inside Aseprite communicates over WebSockets to a Pytho
 | Document | Purpose |
 |----------|---------|
 | **[Guide](docs/GUIDE.md)** | Setup, generation modes, parameters, animation, post-processing, performance |
-| **[Audio](docs/AUDIO.md)** | Audio-reactive animation: modulation matrix, presets, expressions, motion |
+| **[Audio](docs/AUDIO.md)** | Audio-reactive animation: modulation matrix, presets, expressions, motion, prompt scheduling |
 | **[Recipes](docs/RECIPES.md)** | Parameter matrix, workflow techniques, palette reference, anti-patterns |
 | **[Reference](docs/REFERENCE.md)** | Architecture, WebSocket API, environment variables |
 | **[Sources](docs/SOURCES.md)** | Scientific papers and technical references |

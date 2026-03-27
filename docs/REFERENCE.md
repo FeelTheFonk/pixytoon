@@ -97,7 +97,10 @@ server/
 │   ├── pipeline_factory.py — Dynamic model routing, torch.compile, scheduler swaps
 │   ├── audio_analyzer.py   — DSP feature extraction
 │   ├── modulation_engine.py — Parameter scheduling
+│   ├── prompt_schedule.py   — Keyframe-based prompt scheduling engine
+│   ├── prompt_schedule_presets.py — Prompt schedule CRUD manager + factory presets
 │   └── postprocess.py      — Pixel art rendering stages
+├── prompt_schedules/        — User-saved prompt schedule presets (JSON)
 models/                      — Local weight storage (no runtime downloads)
 extension/
 └── scripts/             — Lua modules (dialog, state, ws, handler, import, output, request)
@@ -133,6 +136,8 @@ All messages are JSON. Maximum 5 concurrent connections.
 | `list_modulation_presets` / `get_modulation_preset` | Modulation preset lookup |
 | `list_expression_presets` / `get_expression_preset` | Expression preset lookup |
 | `list_choreography_presets` / `get_choreography_preset` | Camera choreography lookup |
+| `list_prompt_schedules` / `get_prompt_schedule` | Prompt schedule preset lookup |
+| `save_prompt_schedule` / `delete_prompt_schedule` | Prompt schedule preset management |
 
 ### Generate Request
 
@@ -161,6 +166,38 @@ All messages are JSON. Maximum 5 concurrent connections.
   }
 }
 ```
+
+#### Prompt Schedule (Optional)
+
+Add `prompt_schedule` to any generate, animation, or audio-reactive request for frame-based prompt evolution:
+
+```json
+{
+  "prompt_schedule": {
+    "keyframes": [
+      { "frame": 0, "prompt": "pixel art forest, morning light", "negative_prompt": "blurry", "transition": "hard_cut" },
+      { "frame": 5, "prompt": "pixel art ocean, sunset", "transition": "blend", "transition_frames": 3 }
+    ],
+    "default_prompt": "pixel art landscape"
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `keyframes[].frame` | int ≥ 0 | 0 | Frame index where this prompt activates |
+| `keyframes[].prompt` | string | `""` | Positive prompt for this keyframe |
+| `keyframes[].negative_prompt` | string | `""` | Per-keyframe negative (overrides global) |
+| `keyframes[].weight` | float 0.0–5.0 | 1.0 | Keyframe weight |
+| `keyframes[].transition` | `hard_cut` / `blend` | `hard_cut` | Transition type |
+| `keyframes[].transition_frames` | int 0–120 | 0 | Blend window length (blend mode only) |
+| `default_prompt` | string | `""` | Fallback for frames before first keyframe |
+
+**Transition modes:**
+- `hard_cut` — instant prompt switch at keyframe boundary
+- `blend` — alternates outgoing/incoming on even/odd frames within window (img2img chain produces visual crossfade)
+
+**Precedence**: `prompt_schedule` > `prompt_segments` (legacy) > static `prompt`.
 
 For **inpaint**, add `source_image` (base64 PNG) and `mask_image` (base64 PNG, white=repaint).
 
@@ -271,6 +308,17 @@ For **inpaint**, add `source_image` (base64 PNG) and `mask_image` (base64 PNG, w
 
 For the complete list of modulation **sources** and **targets**, see [Audio — Modulation Matrix](AUDIO.md#modulation-matrix).
 
+### Prompt Schedule Preset Management
+
+```json
+{ "action": "list_prompt_schedules" }
+{ "action": "get_prompt_schedule", "prompt_schedule_name": "evolving_3act" }
+{ "action": "save_prompt_schedule", "prompt_schedule_name": "my_sched", "prompt_schedule_data": { "keyframes": [...] } }
+{ "action": "delete_prompt_schedule", "prompt_schedule_name": "my_sched" }
+```
+
+Built-in presets (structural, no hardcoded prompts): `evolving_3act`, `style_morph_4`, `beat_alternating`, `slow_drift`, `rapid_cuts_6`. User presets saved as JSON (max 50).
+
 ### Palette Management
 
 ```json
@@ -324,6 +372,10 @@ For the complete list of modulation **sources** and **targets**, see [Audio — 
 | `expression_preset_detail` | `name`, `targets`, `description`, `category` |
 | `choreography_presets_list` | `presets` ([{name, description, slot_count, expression_targets}]) |
 | `choreography_preset_detail` | `name`, `description`, `slots`, `expressions` |
+| `prompt_schedules_list` | `presets` (names list) |
+| `prompt_schedule_detail` | `name`, `keyframes`, `description`, `auto_fill` |
+| `prompt_schedule_saved` | `name` |
+| `prompt_schedule_deleted` | `name` |
 | `export_mp4_complete` | `path`, `size_mb`, `duration_s` |
 | `export_mp4_error` | `message` |
 | `shutdown_ack` | `message` |
@@ -383,6 +435,7 @@ All environment variables are prefixed with `SDDJ_`. **Priority**: system env > 
 | `SDDJ_EMBEDDINGS_DIR` | `server/models/embeddings` | TI embeddings |
 | `SDDJ_PALETTES_DIR` | `server/palettes` | Palette JSON files |
 | `SDDJ_PRESETS_DIR` | `server/presets` | Generation presets |
+| `SDDJ_PROMPT_SCHEDULES_DIR` | `server/prompt_schedules` | Prompt schedule presets |
 | `SDDJ_PROMPTS_DATA_DIR` | `server/data/prompts` | Auto-prompt data |
 
 ### Model
