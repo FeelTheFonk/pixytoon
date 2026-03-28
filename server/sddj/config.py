@@ -186,6 +186,19 @@ class Settings(BaseSettings):
             object.__setattr__(self, 'compile_dynamic', False)
         if self.enable_torch_compile and not self.enable_lora_hotswap:
             log.warning("torch_compile without lora_hotswap: LoRA switches will trigger full recompilation (~20s)")
+        # AnimateDiff performance warnings
+        if self.enable_freeinit and self.freeinit_iterations > 2:
+            log.warning(
+                "FreeInit iterations=%d: each iteration runs a FULL denoising pass. "
+                "Recommended: 1-2 for interactive use, 3+ for offline batch only.",
+                self.freeinit_iterations,
+            )
+        if self.animatediff_context_stride < 4:
+            log.warning(
+                "FreeNoise stride=%d is very aggressive: more overlapping windows = "
+                "better coherence but significantly slower. Recommended: 4-8.",
+                self.animatediff_context_stride,
+            )
         return self
 
 

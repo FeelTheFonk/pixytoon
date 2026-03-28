@@ -69,6 +69,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         self._controlnet_img2img_pipe = None
         self._controlnet_mode: Optional[GenerationMode] = None
         self._deepcache_helper = None
+        self._dc_state = None  # Mode-aware DeepCache wrapper (avoids redundant toggles)
         self._lora_fuser = LoRAFuser()
         self._animatediff = AnimateDiffManager()
         self._loaded_ti_tokens: set[str] = set()
@@ -158,6 +159,8 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
 
         # 6. DeepCache — AFTER torch.compile
         self._deepcache_helper = deepcache_manager.create_helper(self._pipe)
+        if self._deepcache_helper is not None:
+            self._dc_state = deepcache_manager.DeepCacheState(self._deepcache_helper)
 
         # 7. Create img2img pipeline from same components
         self._img2img_pipe = pipeline_factory.create_img2img_pipeline(self._pipe)
@@ -303,6 +306,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         self._controlnet_img2img_pipe = None
         self._controlnet_mode = None
         self._deepcache_helper = None
+        self._dc_state = None
         self._lora_fuser = LoRAFuser()
         self._loaded_ti_tokens.clear()
         self._loaded = False

@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.9.68] — 2026-03
+### AnimateDiff Performance Optimization
+Systematic elimination of pipeline initialization and DeepCache toggle overhead across all AnimateDiff paths.
+
+#### Performance
+- **UNet sharing** — `ensure_vid2vid` and `ensure_controlnet` now reuse the already-converted `UNetMotionModel` from the base pipeline instead of calling `get_uncompiled_unet(base_pipe)` which triggered a redundant `UNetMotionModel.from_unet2d()` deep-copy (~5-6s each). All AnimateDiff pipeline variants share a single UNet instance.
+- **DeepCacheState activated** — the mode-aware `DeepCacheState` class (previously dead code since v0.9.58) is now wired into `DiffusionEngine` and used for both `animation.py` and `audio_reactive.py` AnimateDiff paths. Eliminates redundant `disable()`/`enable()` cycles (100-300ms per toggle) on consecutive AnimateDiff calls.
+- **GPU-accurate timing** — `torch.cuda.synchronize()` barriers around inference in `_generate_animatediff_inner` provide precise setup/inference/post-process breakdown in logs.
+
+#### Improved
+- **FreeNoise window count logging** — log message now includes computed number of temporal attention windows for immediate performance visibility.
+- **Config performance warnings** — Pydantic model validator warns at startup on `freeinit_iterations > 2` (each is a FULL denoising pass) and `animatediff_context_stride < 4` (excessive windowing overhead).
+- **UNet sharing verification** — soft `log.error` assertion after vid2vid and controlnet pipeline creation detects if diffusers unexpectedly re-wraps the UNet.
+
+#### Cleanup
+- Removed 4 dead imports: `deepcache_manager` and `get_uncompiled_unet` from `animation.py`, `get_uncompiled_unet` and `scale_steps_for_denoise` from `audio_reactive.py`.
+- `deepcache_manager` import removed from `audio_reactive.py` (suspended() replaced by DeepCacheState).
+
+#### Tests
+- **561 tests passing, 0 failures.**
+- Ruff lint: 0 errors across all modified files.
+
 ## [0.9.67] — 2026-03
 ### CUDA Hotswap Fix, Systemic Hardening & Edge-Case Lockdown
 Comprehensive 11-phase remediation: critical bug fix, security hardening, performance optimization, and cross-stack alignment.

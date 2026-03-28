@@ -168,7 +168,11 @@ class AnimateDiffManager:
         # Ensure base pipeline + motion adapter are loaded first
         self.ensure_base(base_pipe)
 
-        unet = get_uncompiled_unet(base_pipe)
+        # Reuse the already-converted UNetMotionModel from base AnimateDiff pipeline.
+        # AnimateDiffPipeline.__init__ already called UNetMotionModel.from_unet2d()
+        # in ensure_base(). Passing UNetMotionModel directly skips the expensive
+        # re-conversion (~5-6s). All AnimateDiff pipeline variants share one UNet.
+        unet = self.pipe.unet
 
         try:
             self.vid2vid_pipe = AnimateDiffVideoToVideoPipeline(
@@ -181,6 +185,11 @@ class AnimateDiffManager:
                 feature_extractor=None,
             )
             self.vid2vid_pipe.to("cuda")
+
+            # Verify UNet sharing is effective (diffusers should not re-wrap)
+            if self.vid2vid_pipe.unet is not self.pipe.unet:
+                log.error("UNet not shared with vid2vid pipeline — diffusers re-wrapped. "
+                          "First vid2vid init will be ~5s slower than expected.")
 
             self._apply_lightning_scheduler(self.vid2vid_pipe)
             self._apply_freeu_if_enabled(self.vid2vid_pipe)
@@ -219,8 +228,8 @@ class AnimateDiffManager:
                 model_id, **load_kwargs,
             ).to("cuda")
 
-        # UNet already PEFT-stripped by ensure_base() above
-        unet = get_uncompiled_unet(base_pipe)
+        # Reuse UNetMotionModel from base pipeline (same sharing as vid2vid)
+        unet = self.pipe.unet
 
         try:
             self.controlnet_pipe = AnimateDiffControlNetPipeline(
@@ -234,6 +243,10 @@ class AnimateDiffManager:
                 feature_extractor=None,
             )
             self.controlnet_pipe.to("cuda")
+
+            # Verify UNet sharing
+            if self.controlnet_pipe.unet is not self.pipe.unet:
+                log.error("UNet not shared with controlnet pipeline — diffusers re-wrapped.")
 
             self._apply_lightning_scheduler(self.controlnet_pipe)
             self._apply_freeu_if_enabled(self.controlnet_pipe)
@@ -268,10 +281,12 @@ class AnimateDiffManager:
                 context_length=settings.animatediff_context_length,
                 context_stride=settings.animatediff_context_stride,
             )
-            log.info("FreeNoise enabled (context_length=%d, stride=%d, frames=%d)",
+            num_windows = max(1, (num_frames - settings.animatediff_context_length)
+                              // settings.animatediff_context_stride + 1)
+            log.info("FreeNoise enabled (context_length=%d, stride=%d, frames=%d, windows=%d)",
                      settings.animatediff_context_length,
                      settings.animatediff_context_stride,
-                     num_frames)
+                     num_frames, num_windows)
         except Exception as e:
             log.warning("FreeNoise unavailable: %s", e)
             return False

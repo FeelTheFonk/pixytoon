@@ -25,9 +25,7 @@ from ..protocol import (
     ProgressResponse,
     SeedStrategy,
 )
-from .. import deepcache_manager
 from .. import pipeline_factory
-from ..animatediff_manager import get_uncompiled_unet
 from .compile_utils import eager_pipeline
 from ..vram_utils import vram_cleanup
 from ..image_codec import (
@@ -435,8 +433,15 @@ class AnimationMixin:
             self._controlnet_pipe = None
             self._controlnet_mode = None
 
-        with deepcache_manager.suspended(self._deepcache_helper):
+        # Mode-aware DeepCache: only toggles on actual mode transition
+        # (avoids 100-300ms disable/enable overhead on consecutive AnimateDiff calls)
+        if self._dc_state is not None:
+            self._dc_state.suppress_for("animatediff")
+        try:
             return self._generate_animatediff_inner(req, on_frame, on_progress)
+        finally:
+            if self._dc_state is not None:
+                self._dc_state.restore()
 
     def _generate_animatediff_inner(
         self,
@@ -581,7 +586,15 @@ class AnimationMixin:
                 if self._cancel_event.is_set():
                     raise GenerationCancelled("AnimateDiff cancelled before inference")
 
+                # GPU-accurate timing: sync before measuring inference
+                torch.cuda.synchronize()
+                t_pre_inf = time.perf_counter()
+
                 output = pipe(**kwargs)
+
+                # Sync after inference for accurate measurement
+                torch.cuda.synchronize()
+                t_inference = time.perf_counter() - t_pre_inf
 
             pil_frames = output.frames[0] if isinstance(output.frames[0], list) else output.frames
 
@@ -597,6 +610,7 @@ class AnimationMixin:
 
         # Post-process and encode all frames
         frame_count = 0
+        t_post_start = time.perf_counter()
         for frame_idx, pil_img in enumerate(pil_frames):
             if frame_idx >= total_frames:
                 break
@@ -624,6 +638,12 @@ class AnimationMixin:
             frame_count += 1
             if on_frame:
                 on_frame(frame_resp)
+
+        t_post = time.perf_counter() - t_post_start
+        t_setup = t_pre_inf - t0
+        t_total = time.perf_counter() - t0
+        log.info("AnimateDiff timing: setup=%.1fs, inference=%.1fs, post=%.1fs, total=%.1fs",
+                 t_setup, t_inference, t_post, t_total)
 
         return frame_count
 

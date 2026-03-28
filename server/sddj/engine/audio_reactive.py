@@ -20,9 +20,7 @@ from ..protocol import (
     GenerationMode,
     ProgressResponse,
 )
-from .. import deepcache_manager
 from .. import pipeline_factory
-from ..animatediff_manager import get_uncompiled_unet
 from .compile_utils import eager_pipeline
 from ..vram_utils import vram_cleanup
 from ..image_codec import (
@@ -33,7 +31,7 @@ from ..image_codec import (
     resize_to_target,
     round8,
 )
-from .helpers import GenerationCancelled, _apply_hue_shift, apply_frame_motion, apply_noise_injection, apply_temporal_coherence, compute_effective_denoise, make_step_callback, scale_steps_for_denoise
+from .helpers import GenerationCancelled, _apply_hue_shift, apply_frame_motion, apply_noise_injection, apply_temporal_coherence, compute_effective_denoise, make_step_callback
 
 log = logging.getLogger("sddj.engine")
 
@@ -483,10 +481,17 @@ class AudioReactiveMixin:
             self._controlnet_pipe = None
             self._controlnet_mode = None
 
-        with deepcache_manager.suspended(self._deepcache_helper):
+        # Mode-aware DeepCache: only toggles on actual mode transition
+        # (consistent with animation.py AnimateDiff path)
+        if self._dc_state is not None:
+            self._dc_state.suppress_for("animatediff")
+        try:
             return self._generate_audio_animatediff_inner(
                 req, analysis, schedule, on_frame, on_progress,
             )
+        finally:
+            if self._dc_state is not None:
+                self._dc_state.restore()
 
     def _generate_audio_animatediff_inner(
         self,

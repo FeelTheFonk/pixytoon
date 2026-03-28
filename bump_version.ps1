@@ -36,7 +36,14 @@ $Content = $Content -replace 'PT\.VERSION\s*=\s*"[^"]+"', "PT.VERSION = ""$Versi
 Set-Content -Path $Lua -Value $Content -NoNewline
 Write-Host "[OK] sddj_state.lua -> $Version" -ForegroundColor Green
 
-# ── 4. uv.lock ──
+# ── 4. README.md ──
+$Readme = Join-Path -Path $Root -ChildPath "README.md"
+$Content = Get-Content -Path $Readme -Raw
+$Content = $Content -replace '(?m)^(# SDDj v)\S+', "`$1$Version"
+Set-Content -Path $Readme -Value $Content -NoNewline
+Write-Host "[OK] README.md       -> $Version" -ForegroundColor Green
+
+# ── 5. uv.lock ──
 Push-Location -Path (Join-Path -Path $Root -ChildPath "server")
 try {
     uv lock --quiet 2>$null
