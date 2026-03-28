@@ -39,7 +39,7 @@ Write-Host "[OK] sddj_state.lua -> $Version" -ForegroundColor Green
 # ── 4. README.md ──
 $Readme = Join-Path -Path $Root -ChildPath "README.md"
 $Content = Get-Content -Path $Readme -Raw
-$Content = $Content -replace '(?m)^(# SDDj v)\S+', "`$1$Version"
+$Content = $Content -replace '(?m)^(# SDDj v)\S+', "`${1}$Version"
 Set-Content -Path $Readme -Value $Content -NoNewline
 Write-Host "[OK] README.md       -> $Version" -ForegroundColor Green
 
