@@ -72,6 +72,9 @@ Comprehensive 11-phase remediation: critical bug fix, security hardening, perfor
 - `test_validation.py`: Added `validate_path_in_sandbox` tests (traversal, symlink escape, valid paths).
 - **561 tests passing, 0 failures.**
 
+## [0.9.66] — 2026-03
+*Version number skipped (no release under this version).*
+
 ## [0.9.65] — 2026-03
 ### Absolute Rigor & Empty Input Defenses
 Total lockdown of the DSL parser edge cases and Aseprite widget pass-through bugs.

@@ -1,23 +1,19 @@
-# Contributing to SDDj
-
-First off, thank you for considering contributing to SDDj! The project aims to provide the ultimate SOTA generative AI experience within Aseprite.
-
 ## Development Setup
 
 SDDj uses `uv` for lightning-fast Python dependency management and builds.
 
 1. **Clone the repository**
-   ```bash
+   ```powershell
    git clone https://github.com/FeelTheFonk/sddj.git
    cd sddj
    ```
 2. **Install dependencies**
-   ```bash
+   ```powershell
    cd server
    uv sync --all-extras
    ```
 3. **Run the server in dev mode**
-   ```bash
+   ```powershell
    uv run python run.py
    ```
 
@@ -27,6 +23,9 @@ SDDj is split into two halves that communicate over WebSockets:
 
 * `server/` — Python backend (FastAPI, PyTorch, Diffusers, Librosa). Does the heavy lifting.
 * `extension/` — Lua frontend (Aseprite scripting API). Handles the UI, image extraction, and canvas injection.
+* `docs/` — Documentation suite (user guide, audio reference, API reference, DSL spec, recipes, sources).
+* `scripts/` — Utility scripts (model download, extension build, integration tests).
+* `bin/` — Bundled binaries (Aseprite launcher).
 
 Detailed architecture diagrams are available in **[docs/REFERENCE.md](docs/REFERENCE.md#architecture)**.
 
@@ -40,7 +39,7 @@ We use [Ruff](https://astral.sh/ruff) for linting and formatting.
 * **Imports**: Grouped and sorted by Ruff.
 
 Run Ruff before committing:
-```bash
+```powershell
 uv run ruff check .
 uv run ruff format .
 ```
@@ -49,7 +48,7 @@ uv run ruff format .
 
 The Aseprite extension is written in standard Lua 5.3.
 
-* **Modularity**: Code is split across `sddj_*.lua` files (dialog, state, network, generic utils). Do not put everything in `sddj.lua`.
+* **Modularity**: Code is split across `sddj_*.lua` files (dialog, state, network, utils, DSL editor/parser, settings, capture). Do not put everything in `sddj.lua`.
 * **State Management**: UI state is centralized in `sddj_state.lua` to ensure the dialog can be closed and reopened safely.
 * **Error Handling**: Use `pcall` when interacting with Aseprite's API if there's a risk of the user having closed the sprite/layer mid-generation.
 
@@ -57,13 +56,13 @@ The Aseprite extension is written in standard Lua 5.3.
 
 New features or bug fixes in the Python server must include `pytest` tests.
 
-```bash
+```powershell
 cd server
 uv run pytest -v
 ```
 
 * **Core Logic**: Test prompt generation, metadata parsing, file routing, and DSP (audio) math heavily.
-* **Integration**: `tests/test_generation.py` ensures the diffusion pipeline actually compiles and runs end-to-end. We mock network calls but run the actual PyTorch operations.
+* **Integration**: `scripts/test_generate.py` runs end-to-end diffusion pipeline tests. We mock network calls but run the actual PyTorch operations.
 
 ## Pull Request Process
 

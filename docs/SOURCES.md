@@ -38,6 +38,10 @@ Si, C., Huang, Z., Jiang, Y., & Liu, Z. (2023). *FreeU: Free Lunch in Diffusion 
 Wu, T., Si, C., Jiang, Y., Huang, Z., & Liu, Z. (2023). *FreeInit: Bridging Initialization Gap in Video Diffusion Models*. CVPR 2024.
 [arXiv:2312.07537](https://arxiv.org/abs/2312.07537)
 
+**FreeNoise** — Tuning-free longer video generation with sliding window noise rescheduling
+Qiu, H., Weng, M., Zhuo, Y., et al. (2023). *FreeNoise: Tuning-Free Longer Video Diffusion via Noise Rescheduling*. ICLR 2024.
+[arXiv:2310.15169](https://arxiv.org/abs/2310.15169)
+
 **ControlNet** — Spatial conditioning via auxiliary networks
 Zhang, L., Rao, A., & Agrawala, M. (2023). *Adding Conditional Control to Text-to-Image Diffusion Models*. ICCV 2023.
 [arXiv:2302.05543](https://arxiv.org/abs/2302.05543) · [GitHub](https://github.com/lllyasviel/ControlNet)

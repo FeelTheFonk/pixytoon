@@ -1,4 +1,4 @@
-$10.9.69
+# SDDj v0.9.69
 
 Local SOTA image generation and animation for Aseprite via Stable Diffusion + AnimateDiff.
 
@@ -14,7 +14,7 @@ Local SOTA image generation and animation for Aseprite via Stable Diffusion + An
 ## Features
 
 - **txt2img · img2img · inpaint** — full generation pipeline from text or existing artwork
-- **ControlNet** — OpenPose, Canny, Scribble, Lineart spatial conditioning
+- **ControlNet** — OpenPose, Canny, Scribble, Lineart, QR Code spatial conditioning
 - **AnimateDiff** — temporal consistency for multi-frame animation (Chain + AnimateDiff-Lightning)
 - **Audio Reactivity** — DSP engine mapping audio features to diffusion parameters (Deforum-style)
 - **Prompt Scheduling** — frame-indexed keyframe scheduling with transitions, presets, and auto-fill across all modes
@@ -52,6 +52,7 @@ Lightweight Lua frontend inside Aseprite communicates over WebSockets to a Pytho
 | **[Audio](docs/AUDIO.md)** | Audio-reactive animation: modulation matrix, presets, expressions, motion, prompt scheduling |
 | **[Recipes](docs/RECIPES.md)** | Parameter matrix, workflow techniques, palette reference, anti-patterns |
 | **[Reference](docs/REFERENCE.md)** | Architecture, WebSocket API, environment variables |
+| **[Prompt Schedule DSL](docs/PROMPT_SCHEDULE_DSL.md)** | DSL grammar, transition types, per-keyframe overrides, validation rules |
 | **[Sources](docs/SOURCES.md)** | Scientific papers and technical references |
 
 ## Requirements

@@ -41,13 +41,21 @@ Light-duty UI responsibilities: dialog construction (Aseprite Dialog API), setti
 
 | Module | Role |
 |--------|------|
-| `sddj_dialog.lua` | 4-tab UI construction |
+| `sddj.lua` | Extension entry point — registers Aseprite script command |
+| `sddj_dialog.lua` | 4-tab UI construction (Generate, Post-Process, Animation, Audio) |
 | `sddj_state.lua` | Centralized memory state + `settings.json` sync |
 | `sddj_ws.lua` | Non-blocking WebSocket client (Aseprite internal WS) |
 | `sddj_handler.lua` | Server response routing (generate, animation, audio) |
 | `sddj_request.lua` | Request payload construction |
 | `sddj_import.lua` | Image decode + Aseprite canvas injection |
 | `sddj_output.lua` | Frame output (layer/sequence/file) |
+| `sddj_capture.lua` | Canvas/layer/selection capture to Base64 PNG |
+| `sddj_utils.lua` | Shared utility functions |
+| `sddj_settings.lua` | Settings persistence and migration |
+| `sddj_base64.lua` | Pure Lua Base64 encoding/decoding |
+| `sddj_dsl_editor.lua` | Prompt Schedule DSL editor UI panel |
+| `sddj_dsl_parser.lua` | Client-side DSL parser (syntax validation + preview) |
+| `json.lua` | JSON encoding/decoding library |
 
 ### Server Layer (Python)
 
@@ -93,17 +101,49 @@ graph LR
 ```
 server/
 ├── sddj/
-│   ├── engine/          — Diffusion orchestrators (core, animation, audio_reactive, helpers)
-│   ├── pipeline_factory.py — Dynamic model routing, torch.compile, scheduler swaps
-│   ├── audio_analyzer.py   — DSP feature extraction
-│   ├── modulation_engine.py — Parameter scheduling
-│   ├── prompt_schedule.py   — Keyframe-based prompt scheduling engine
+│   ├── __init__.py              — Package init + version
+│   ├── server.py                — FastAPI WebSocket router + request dispatch
+│   ├── protocol.py              — Pydantic request/response schemas + enums
+│   ├── config.py                — pydantic-settings configuration (all SDDJ_* env vars)
+│   ├── engine/
+│   │   ├── core.py              — Single-frame diffusion orchestrator
+│   │   ├── animation.py         — Multi-frame chain + AnimateDiff orchestrator
+│   │   ├── audio_reactive.py    — Audio-driven frame generation loop
+│   │   ├── helpers.py           — Shared helpers (motion, noise, temporal coherence)
+│   │   └── compile_utils.py     — torch.compile wrapper + cache management
+│   ├── pipeline_factory.py      — Dynamic model routing, scheduler swaps, LoRA hotswap
+│   ├── animatediff_manager.py   — AnimateDiff model loading, motion adapter, Lightning config
+│   ├── audio_analyzer.py        — DSP feature extraction (librosa + K-weighting)
+│   ├── audio_cache.py           — Analysis result caching with TTL + config-aware keys
+│   ├── auto_calibrate.py        — Audio-based preset auto-selection
+│   ├── modulation_engine.py     — Parameter scheduling (slots + expressions + EMA)
+│   ├── prompt_schedule.py       — Keyframe-based prompt scheduling engine
 │   ├── prompt_schedule_presets.py — Prompt schedule CRUD manager + factory presets
-│   └── postprocess.py      — Pixel art rendering stages
-├── prompt_schedules/        — User-saved prompt schedule presets (JSON)
-models/                      — Local weight storage (no runtime downloads)
+│   ├── prompt_generator.py      — Auto-prompt generation from curated templates
+│   ├── dsl_parser.py            — Server-side DSL text parser
+│   ├── embedding_blend.py       — SLERP embedding blending for prompt transitions
+│   ├── expression_presets.py    — Mathematical expression presets for modulation
+│   ├── postprocess.py           — 6-stage pixel art rendering pipeline
+│   ├── image_codec.py           — Image encode/decode, motion warp, color matching
+│   ├── lora_fuser.py            — LoRA loading, fusing, hotswap logic
+│   ├── lora_manager.py          — LoRA directory scanning
+│   ├── ti_manager.py            — Textual Inversion embedding loader
+│   ├── deepcache_manager.py     — DeepCache enable/disable lifecycle
+│   ├── freeu_applicator.py      — FreeU v2 application helper
+│   ├── palette_manager.py       — Palette CRUD + built-in presets
+│   ├── presets_manager.py       — Generation preset CRUD
+│   ├── stem_separator.py        — Demucs stem separation wrapper
+│   ├── rembg_wrapper.py         — Background removal (rembg) wrapper
+│   ├── video_export.py          — ffmpeg MP4 export with metadata embedding
+│   ├── vram_utils.py            — VRAM monitoring + budget guards
+│   ├── resource_manager.py      — GPU cleanup + garbage collection
+│   └── validation.py            — Shared input validators
+├── prompt_schedules/            — User-saved prompt schedule presets (JSON)
+├── tests/                       — pytest test suite (27 test modules)
+models/                          — Local weight storage (no runtime downloads)
+scripts/                         — Utility scripts (download_models, build_extension, integration tests)
 extension/
-└── scripts/             — Lua modules (dialog, state, ws, handler, import, output, request)
+└── scripts/                     — 15 Lua modules (see Extension Layer table)
 ```
 
 ---
@@ -138,6 +178,7 @@ All messages are JSON. Maximum 5 concurrent connections.
 | `list_choreography_presets` / `get_choreography_preset` | Camera choreography lookup |
 | `list_prompt_schedules` / `get_prompt_schedule` | Prompt schedule preset lookup |
 | `save_prompt_schedule` / `delete_prompt_schedule` | Prompt schedule preset management |
+| `validate_dsl` | Validate DSL text → `validate_dsl_result` |
 
 ### Generate Request
 
@@ -188,16 +229,30 @@ Add `prompt_schedule` to any generate, animation, or audio-reactive request for 
 | `keyframes[].frame` | int ≥ 0 | 0 | Frame index where this prompt activates |
 | `keyframes[].prompt` | string | `""` | Positive prompt for this keyframe |
 | `keyframes[].negative_prompt` | string | `""` | Per-keyframe negative (overrides global) |
-| `keyframes[].weight` | float 0.0–5.0 | 1.0 | Keyframe weight |
-| `keyframes[].transition` | `hard_cut` / `blend` | `hard_cut` | Transition type |
-| `keyframes[].transition_frames` | int 0–120 | 0 | Blend window length (blend mode only) |
+| `keyframes[].weight` | float 0.0–5.0 | 1.0 | Keyframe blend weight (start) |
+| `keyframes[].weight_end` | float 0.0–5.0 | null | Weight ramp endpoint (null = constant) |
+| `keyframes[].transition` | string | `hard_cut` | Transition type (see table below) |
+| `keyframes[].transition_frames` | int 0–120 | 0 | Transition window length |
+| `keyframes[].denoise_strength` | float 0.0–1.0 | null | Per-keyframe denoise override (null = inherit base) |
+| `keyframes[].cfg_scale` | float 1.0–30.0 | null | Per-keyframe CFG override (null = inherit base) |
+| `keyframes[].steps` | int 1–150 | null | Per-keyframe steps override (null = inherit base) |
 | `default_prompt` | string | `""` | Fallback for frames before first keyframe |
+| `auto_fill` | boolean | false | Auto-fill empty keyframe prompts via PromptGenerator |
 
-**Transition modes:**
-- `hard_cut` — instant prompt switch at keyframe boundary
-- `blend` — alternates outgoing/incoming on even/odd frames within window (img2img chain produces visual crossfade)
+**Transition types:**
 
-**Precedence**: `prompt_schedule` > `prompt_segments` (legacy) > static `prompt`.
+| Transition | Description |
+|------------|-------------|
+| `hard_cut` | Instant prompt switch at keyframe boundary |
+| `blend` | Alternates outgoing/incoming on even/odd frames (img2img visual crossfade) |
+| `linear_blend` | Linear interpolation between embedding weights over the transition window |
+| `ease_in` | Slow start, accelerating transition |
+| `ease_out` | Fast start, decelerating transition |
+| `ease_in_out` | Smooth sigmoid-style transition (slow→fast→slow) |
+| `cubic` | Cubic Bézier interpolation for natural motion |
+| `slerp` | Spherical linear interpolation between prompt embeddings |
+
+**Precedence**: `prompt_schedule` > static `prompt`.
 
 For **inpaint**, add `source_image` (base64 PNG) and `mask_image` (base64 PNG, white=repaint).
 
@@ -247,7 +302,7 @@ For **inpaint**, add `source_image` (base64 PNG) and `mask_image` (base64 PNG, w
 | Field | Values | Default |
 |-------|--------|---------|
 | `method` | `chain`, `animatediff`, `animatediff_audio` | `chain` |
-| `frame_count` | 2–120 | 8 |
+| `frame_count` | 2–256 | 8 |
 | `frame_duration_ms` | 30–2000 | 100 |
 | `seed_strategy` | `fixed`, `increment`, `random` | `increment` |
 | `enable_freeinit` | boolean | false |
@@ -287,9 +342,6 @@ For **inpaint**, add `source_image` (base64 PNG) and `mask_image` (base64 PNG, w
   ],
   "expressions": null,
   "modulation_preset": null,
-  "prompt_segments": [
-    { "start_second": 0, "end_second": 10, "prompt": "forest at dawn" }
-  ],
   "randomness": 0,
   "prompt": "fantasy landscape",
   "mode": "txt2img",
@@ -307,6 +359,28 @@ For **inpaint**, add `source_image` (base64 PNG) and `mask_image` (base64 PNG, w
 > **Modulation priority** (highest overrides lowest): `expressions` > `modulation_preset` > `modulation_slots`.
 
 For the complete list of modulation **sources** and **targets**, see [Audio — Modulation Matrix](AUDIO.md#modulation-matrix).
+
+### DSL Validation
+
+```json
+{
+  "action": "validate_dsl",
+  "dsl_text": "[0]\n1girl, smiling\n\n[50%]\nblend: 6\n1girl, crying",
+  "total_frames": 120
+}
+```
+
+**Response** (`validate_dsl_result`):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `valid` | boolean | Whether the DSL parsed without errors |
+| `keyframe_count` | int | Number of keyframes parsed |
+| `error_count` | int | Number of errors |
+| `warning_count` | int | Number of warnings |
+| `errors` | array | `[{line, code, message}]` |
+| `warnings` | array | `[{line, code, message}]` |
+| `has_auto` | boolean | Whether auto-fill placeholders were detected |
 
 ### Prompt Schedule Preset Management
 
@@ -372,8 +446,9 @@ Built-in presets (structural, no hardcoded prompts): `evolving_3act`, `style_mor
 | `expression_preset_detail` | `name`, `targets`, `description`, `category` |
 | `choreography_presets_list` | `presets` ([{name, description, slot_count, expression_targets}]) |
 | `choreography_preset_detail` | `name`, `description`, `slots`, `expressions` |
-| `prompt_schedules_list` | `presets` (names list) |
-| `prompt_schedule_detail` | `name`, `keyframes`, `description`, `auto_fill` |
+| `validate_dsl_result` | `valid`, `keyframe_count`, `error_count`, `warning_count`, `errors`, `warnings`, `has_auto` |
+| `prompt_schedule_list` | `schedules` (names list) |
+| `prompt_schedule_detail` | `name`, `schedule_data` |
 | `prompt_schedule_saved` | `name` |
 | `prompt_schedule_deleted` | `name` |
 | `export_mp4_complete` | `path`, `size_mb`, `duration_s` |
@@ -442,7 +517,7 @@ All environment variables are prefixed with `SDDJ_`. **Priority**: system env > 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SDDJ_DEFAULT_CHECKPOINT` | `Lykon/dreamshaper-8` | SD1.5 checkpoint |
+| `SDDJ_DEFAULT_CHECKPOINT` | `models/checkpoints/liberteRedmond_v10.safetensors` | SD1.5 checkpoint (HF repo ID, local dir, or .safetensors path) |
 | `SDDJ_HYPER_SD_REPO` | `ByteDance/Hyper-SD` | Hyper-SD repo |
 | `SDDJ_HYPER_SD_LORA_FILE` | `Hyper-SD15-8steps-CFG-lora.safetensors` | Hyper-SD LoRA file |
 | `SDDJ_HYPER_SD_FUSE_SCALE` | `0.8` | Hyper-SD fusion scale |
@@ -469,7 +544,7 @@ All environment variables are prefixed with `SDDJ_`. **Priority**: system env > 
 | `SDDJ_ENABLE_TF32` | `True` | Ampere+ ~15–30% free speedup |
 | `SDDJ_ENABLE_DEEPCACHE` | `True` | DeepCache acceleration |
 | `SDDJ_ENABLE_FREEU` | `True` | FreeU v2 quality boost |
-| `SDDJ_ENABLE_ATTENTION_SLICING` | `True` | Attention slicing (PyTorch < 2.0 fallback) |
+| `SDDJ_ENABLE_ATTENTION_SLICING` | `True` | Attention slicing (reduces VRAM peak by splitting attention computation) |
 | `SDDJ_ENABLE_VAE_TILING` | `True` | VAE tiling for large images |
 | `SDDJ_ENABLE_WARMUP` | `True` | Warmup generation at startup |
 | `SDDJ_ENABLE_LORA_HOTSWAP` | `True` | Avoids torch.compile recompilation on LoRA switch |
@@ -493,10 +568,23 @@ All environment variables are prefixed with `SDDJ_`. **Priority**: system env > 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SDDJ_MAX_ANIMATION_FRAMES` | `120` | Max frames per animation |
+| `SDDJ_MAX_ANIMATION_FRAMES` | `256` | Max frames per animation |
 | `SDDJ_ANIMATEDIFF_MODEL` | `ByteDance/AnimateDiff-Lightning` | Motion adapter |
 | `SDDJ_ENABLE_FREEINIT` | `False` | FreeInit for AnimateDiff |
 | `SDDJ_FREEINIT_ITERATIONS` | `2` | FreeInit iteration count |
+
+### FreeNoise (Long Sequences)
+
+Sliding window + noise rescheduling for temporal coherence on non-Lightning models.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SDDJ_ANIMATEDIFF_CONTEXT_LENGTH` | `16` | FreeNoise window size (8–32 frames) |
+| `SDDJ_ANIMATEDIFF_CONTEXT_STRIDE` | `4` | Window stride (1–16, lower = more overlap = better coherence, slower) |
+| `SDDJ_ANIMATEDIFF_SPLIT_INFERENCE` | `True` | Auto-enable SplitInference for long sequences |
+| `SDDJ_ANIMATEDIFF_SPATIAL_SPLIT_SIZE` | `256` | Spatial split tile size (64–512) |
+| `SDDJ_ANIMATEDIFF_TEMPORAL_SPLIT_SIZE` | `16` | Temporal split chunk size (4–32) |
+| `SDDJ_ANIMATEDIFF_MAX_FRAMES_LIGHTNING` | `32` | Hard cap for Lightning models (FreeNoise incompatible) |
 
 ### AnimateDiff-Lightning
 
@@ -508,6 +596,15 @@ Active when model is `ByteDance/AnimateDiff-Lightning`.
 | `SDDJ_ANIMATEDIFF_LIGHTNING_CFG` | `2.0` | CFG (1.0–5.0, preserves negative prompt) |
 | `SDDJ_ANIMATEDIFF_MOTION_LORA_STRENGTH` | `0.75` | Motion LoRA strength (0.0–1.0) |
 | `SDDJ_ANIMATEDIFF_LIGHTNING_FREEU` | `True` | FreeU for Lightning pipelines |
+
+### ControlNet QR Code
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SDDJ_QR_CONTROLNET_CONDITIONING_SCALE` | `1.5` | QR ControlNet conditioning strength (0.0–3.0) |
+| `SDDJ_QR_CONTROL_GUIDANCE_START` | `0.0` | Guidance start fraction (0.0–1.0) |
+| `SDDJ_QR_CONTROL_GUIDANCE_END` | `0.8` | Guidance end fraction (0.0–1.0) |
+| `SDDJ_QR_DEFAULT_STEPS` | `20` | Default steps for QR mode (4–50) |
 
 ### Audio
 

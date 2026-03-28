@@ -263,7 +263,7 @@ Expressions override slot values with math formulas. Enable via **Advanced → C
 | `global_rms`, `global_onset`, `global_centroid`, `global_beat` | Current frame's feature values |
 | `global_low`, `global_mid`, `global_high` | Band energies |
 | `global_sub_bass`, `global_upper_mid`, `global_presence` | Extended bands |
-| `global_spectral_contrast`, `spectral_flatness`, `spectral_flux`, `spectral_rolloff`, `spectral_bandwidth` | Spectral features |
+| `global_spectral_contrast`, `global_spectral_flatness`, `global_spectral_flux`, `global_spectral_rolloff`, `global_spectral_bandwidth` | Spectral features |
 | `global_chroma_energy` | Chromagram energy |
 | Per-stem variables | Available if stems enabled |
 
@@ -363,19 +363,7 @@ Presets are structural — prompts are empty by default. Fill them manually or u
 
 #### Precedence
 
-`prompt_schedule` (keyframes) > `prompt_segments` (legacy) > static `prompt`.
-
-### Time-Range Segments (Legacy)
-
-For audio-reactive mode, time-based segments still work. Format: `start-end` in seconds paired with a prompt.
-
-```
-T1: 0-8   / serene forest, green canopy, morning light
-T2: 8-16  / dark cave, glowing crystals, underground
-T3: 16-24 / volcanic landscape, flowing lava, dramatic sky
-```
-
-The default prompt (Generate tab) covers any time not matched by segments.
+`prompt_schedule` (keyframes) > static `prompt`. See **[Prompt Schedule DSL](PROMPT_SCHEDULE_DSL.md)** for the full grammar specification.
 
 ### Audio-Linked Randomness
 
@@ -397,7 +385,7 @@ Longer audio increases segments proportionally (capped at 12). Boundaries snap t
 
 Optional CPU-based stem separation via demucs (htdemucs model).
 
-- **Install**: `pip install demucs>=4.0`
+- **Install**: `uv add "demucs>=4.0"` (or `pip install demucs>=4.0` if not using uv)
 - **Performance**: ~20–60 seconds per minute of audio (first run, then cached 24h)
 - **Available stems**: drums, bass, vocals, other — each gets all 34 features
 - **When to use**: specific instrument reactivity (e.g., drums → denoise, vocals → CFG)
@@ -481,7 +469,7 @@ The generation mode from the Generate tab applies to audio generation:
 | Problem | Solution |
 |---------|----------|
 | Audio file not found | Use absolute path |
-| Stem separation unavailable | `pip install demucs>=4.0` |
+| Stem separation unavailable | `uv add "demucs>=4.0"` |
 | Modulation too subtle | Increase min/max range or try wider preset (`glitch_chaos`) |
 | Modulation too aggressive | Increase release frames, decrease max range |
 | Quiet passages too dynamic | Sub-floor blending handles this. If still too dynamic, lower slot max |

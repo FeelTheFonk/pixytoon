@@ -93,7 +93,7 @@ The dialog has **4 tabs**: Generate, Post-Process, Animation, and Audio. The act
 
 ## Generation Modes
 
-The **Mode** dropdown in the Generate tab offers 7 modes:
+The **Mode** dropdown in the Generate tab offers 8 modes:
 
 | Mode | Input | Best for |
 |------|-------|----------|
@@ -104,6 +104,7 @@ The **Mode** dropdown in the Generate tab offers 7 modes:
 | **controlnet_scribble** | Rough sketch layer | Transforming quick sketches |
 | **controlnet_openpose** | Pose stick figure | Character poses |
 | **controlnet_lineart** | Line drawing layer | Colorizing line drawings |
+| **controlnet_qrcode** | QR code / pattern image | Embedding QR codes, optical illusions, hidden patterns |
 
 > [!NOTE]
 > In txt2img mode, the Strength slider is hidden. In other modes, the Mode label shows a hint: "needs mask" for inpaint, "needs layer" for img2img and ControlNet.
@@ -190,6 +191,8 @@ happy, smiling
 - **Negative Prompts**: Use `--` before text to separate the positive from the negative prompt specifically for that keyframe.
 - **File Injection**: Use the `Prompt Schedule (File)` selector in the UI to load a massive schedule dynamically.
 
+See **[Prompt Schedule DSL](PROMPT_SCHEDULE_DSL.md)** for the full grammar specification, all 8 transition types, per-keyframe parameter overrides, and validation rules.
+
 ---
 
 ## Post-Processing
@@ -236,13 +239,13 @@ The **Animation tab** generates multi-frame animations via two methods:
 
 | Parameter | Default | Effect |
 |-----------|---------|--------|
-| Frames | 8 | Number of frames (2–120) |
+| Frames | 8 | Number of frames (2–256) |
 | Duration | 100 ms | Time per frame in the animation |
 | Strength | 0.30 | Frame-to-frame change (chain) or overall denoise (AnimateDiff) |
 | Seed Mode | increment | `fixed` = same seed, `increment` = +1, `random` = random per frame |
 | Tag Name | (empty) | Creates an Aseprite tag for the animation range |
 | FreeInit | off | AnimateDiff only — improves temporal consistency (doubles generation time) |
-| Prompt Schedule | off | **Frame-based prompt evolution** — define different prompts at keyframe indices with hard_cut/blend transitions. See [Audio — Prompt Schedule](AUDIO.md#prompt-schedule) |
+| Prompt Schedule | off | **Frame-based prompt evolution** — define different prompts at keyframe indices with 8 transition types (hard_cut, blend, slerp, ease_in/out, etc.). See [Prompt Schedule DSL](PROMPT_SCHEDULE_DSL.md) |
 
 ### AnimateDiff-Lightning
 
@@ -336,7 +339,7 @@ Embeddings like **EasyNegative** encode complex negative concepts in a single to
 Edit `server/.env`:
 
 ```
-SDDJ_DEFAULT_CHECKPOINT=Lykon/dreamshaper-8
+SDDJ_DEFAULT_CHECKPOINT=models/checkpoints/liberteRedmond_v10.safetensors
 ```
 
 Any SD 1.5-compatible checkpoint works. Downloads from HuggingFace on first launch if not cached.

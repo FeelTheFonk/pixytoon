@@ -147,6 +147,37 @@ Set **Palette** to **Preset** in Post-Process.
 
 ---
 
+## QR Code / Illusion Art
+
+Use `controlnet_qrcode` mode to embed scannable QR codes or hidden patterns inside generated imagery.
+
+### Recipe: Scannable QR Art
+
+| Parameter | Value | Note |
+|-----------|-------|------|
+| **Mode** | `controlnet_qrcode` | QR Code Monster ControlNet |
+| **Steps** | 20 | Higher than default — QR needs resolution |
+| **CFG** | 7–10 | Structure enforcement |
+| **Conditioning Scale** | 1.3–1.5 | Lower = more artistic, higher = more scannable |
+| **Guidance End** | 0.7–0.85 | Stop conditioning late but not at 100% — allows artistic finishing |
+| **Denoise** | 1.0 | Full generation |
+
+**Tips:**
+- The **control image** should be a high-contrast QR code (black on white, centered, with quiet zone)
+- Test scannability with a phone camera after generation
+- Lower `conditioning_scale` for more artistic blending, raise it if QR fails to scan
+- Works well with architectural/landscape prompts: `"a medieval castle, detailed stone walls, dramatic lighting"`
+- Pair with pixelate post-processing for stylized scannable art
+
+**Environment overrides** (optional):
+```
+SDDJ_QR_CONTROLNET_CONDITIONING_SCALE=1.5
+SDDJ_QR_CONTROL_GUIDANCE_END=0.8
+SDDJ_QR_DEFAULT_STEPS=20
+```
+
+---
+
 ## Anti-Patterns
 
 | Mistake | Symptom | Fix |
