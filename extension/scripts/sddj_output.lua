@@ -65,8 +65,8 @@ function PT.save_to_output(resp, meta)
     _output_counter = _output_counter + 1
     local base_name = time_str .. "_" .. string.format("%04d", _output_counter) .. "_s" .. seed_str
 
-    -- Decode and validate
-    local img_data = PT.base64_decode(resp.image)
+    -- Reuse decoded bytes from import (no double decode)
+    local img_data = resp._decoded_bytes or PT.base64_decode(resp.image)
     if not img_data or #img_data == 0 then return end
 
     -- Save PNG (encoding-aware: handles both PNG and raw_rgba)
@@ -240,9 +240,9 @@ function PT.apply_metadata(meta)
   if meta.negative_prompt then PT.dlg:modify{ id = "negative_prompt", text = meta.negative_prompt } end
   if meta.seed then PT.dlg:modify{ id = "seed", text = tostring(meta.seed) } end
 
-  -- Combobox fields
-  if meta.mode then PT.dlg:modify{ id = "mode", option = meta.mode } end
-  if meta.output_size then PT.dlg:modify{ id = "output_size", option = meta.output_size } end
+  -- Combobox fields (pcall: option may not exist in current list)
+  if meta.mode then pcall(PT.dlg.modify, PT.dlg, { id = "mode", option = meta.mode }) end
+  if meta.output_size then pcall(PT.dlg.modify, PT.dlg, { id = "output_size", option = meta.output_size }) end
 
   -- Slider fields (requires inverse scaling)
   if meta.steps then PT.dlg:modify{ id = "steps", value = meta.steps } end
@@ -272,7 +272,7 @@ function PT.apply_metadata(meta)
 
   -- LoRA
   if meta.lora and meta.lora.name then
-    PT.dlg:modify{ id = "lora_name", option = meta.lora.name }
+    pcall(PT.dlg.modify, PT.dlg, { id = "lora_name", option = meta.lora.name })
     if meta.lora.weight then
       local v = math.floor(meta.lora.weight * 100)
       PT.dlg:modify{ id = "lora_weight", value = v }
@@ -294,19 +294,19 @@ function PT.apply_metadata(meta)
     end
     if pp.quantize_enabled ~= nil then PT.dlg:modify{ id = "quantize_enabled", selected = pp.quantize_enabled } end
     if pp.quantize_colors then PT.dlg:modify{ id = "colors", value = pp.quantize_colors } end
-    if pp.quantize_method then PT.dlg:modify{ id = "quantize_method", option = pp.quantize_method } end
-    if pp.dither then PT.dlg:modify{ id = "dither", option = pp.dither } end
+    if pp.quantize_method then pcall(PT.dlg.modify, PT.dlg, { id = "quantize_method", option = pp.quantize_method }) end
+    if pp.dither then pcall(PT.dlg.modify, PT.dlg, { id = "dither", option = pp.dither }) end
     if pp.remove_bg ~= nil then PT.dlg:modify{ id = "remove_bg", selected = pp.remove_bg } end
     if pp.palette then
-      if pp.palette.mode then PT.dlg:modify{ id = "palette_mode", option = pp.palette.mode } end
-      if pp.palette.name then PT.dlg:modify{ id = "palette_name", option = pp.palette.name } end
+      if pp.palette.mode then pcall(PT.dlg.modify, PT.dlg, { id = "palette_mode", option = pp.palette.mode }) end
+      if pp.palette.name then pcall(PT.dlg.modify, PT.dlg, { id = "palette_name", option = pp.palette.name }) end
     end
   end
 
   -- Animation-specific fields
-  if meta.method then PT.dlg:modify{ id = "anim_method", option = meta.method } end
+  if meta.method then pcall(PT.dlg.modify, PT.dlg, { id = "anim_method", option = meta.method }) end
   if meta.frame_count then PT.dlg:modify{ id = "anim_frames", value = meta.frame_count } end
-  if meta.seed_strategy then PT.dlg:modify{ id = "anim_seed_strategy", option = meta.seed_strategy } end
+  if meta.seed_strategy then pcall(PT.dlg.modify, PT.dlg, { id = "anim_seed_strategy", option = meta.seed_strategy }) end
   if meta.tag_name then
     if meta.action == "generate_audio_reactive" then
       pcall(function() PT.dlg:modify{ id = "audio_tag", text = meta.tag_name } end)

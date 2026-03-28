@@ -14,8 +14,9 @@ local _EMPTY_ARRAY_MT = {}
 json.EMPTY_ARRAY = setmetatable({}, _EMPTY_ARRAY_MT)
 
 -- Hard limits — prevent stack overflow on circular or adversarial data.
-local _MAX_ENCODE_DEPTH = 128
-local _MAX_DECODE_DEPTH = 128
+local _MAX_ENCODE_DEPTH  = 128
+local _MAX_DECODE_DEPTH  = 128
+local _MAX_STRING_LENGTH = 50 * 1024 * 1024  -- 50 MB max decoded string
 
 -- ─── DECODE ──────────────────────────────────────────────────
 
@@ -29,9 +30,18 @@ local function decode_string(s, i)
   local j = i + 1
   local parts = {}
   while j <= #s do
-    local c = s:sub(j, j)
+    -- Batch plain characters up to next special (O(n) instead of per-char)
+    local next_special = s:find('[\\"]', j)
+    if not next_special then error("Unterminated string") end
+    if next_special > j then
+      parts[#parts + 1] = s:sub(j, next_special - 1)
+    end
+    local c = s:sub(next_special, next_special)
+    j = next_special
     if c == '"' then
-      return table.concat(parts), j + 1
+      local result = table.concat(parts)
+      if #result > _MAX_STRING_LENGTH then error("JSON string too long") end
+      return result, j + 1
     elseif c == '\\' then
       j = j + 1
       local esc = s:sub(j, j)
@@ -83,10 +93,8 @@ local function decode_string(s, i)
           )
         end
       end
-    else
-      parts[#parts+1] = c
+      j = j + 1
     end
-    j = j + 1
   end
   error("Unterminated string")
 end

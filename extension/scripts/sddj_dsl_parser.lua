@@ -10,6 +10,10 @@ local M = {}
 
 -- ─── Transition Types ──────────────────────────────────────
 
+-- Safety limits
+local _MAX_DSL_LENGTH = 100000   -- 100 KB max DSL text
+local _MAX_KEYFRAMES  = 500      -- max keyframes in a schedule
+
 local VALID_TRANSITIONS = {
   hard_cut = true,
   blend = true,
@@ -202,6 +206,16 @@ function M.parse(dsl_text, total_frames, fps, base_dir)
     }
   end
 
+  if #dsl_text > _MAX_DSL_LENGTH then
+    return {
+      keyframes = {},
+      has_auto = false,
+      errors = { { line = nil, code = "E013",
+        message = string.format("DSL text too long (%d bytes, max %d)", #dsl_text, _MAX_DSL_LENGTH) } },
+      warnings = {},
+    }
+  end
+
   -- Handle file: reference (single-line DSL)
   local trimmed = dsl_text:match("^%s*(.-)%s*$")
   local file_path = trimmed:match("^file:%s*(.+)$")
@@ -381,6 +395,15 @@ function M.parse(dsl_text, total_frames, fps, base_dir)
   local keyframes = {}
   for _, b in ipairs(builders) do
     keyframes[#keyframes + 1] = finalize_builder(b)
+  end
+
+  -- Enforce keyframe count limit
+  if #keyframes > _MAX_KEYFRAMES then
+    errors[#errors + 1] = {
+      line = nil, code = "E014",
+      message = string.format("Too many keyframes (%d, max %d) — truncated", #keyframes, _MAX_KEYFRAMES),
+    }
+    for i = #keyframes, _MAX_KEYFRAMES + 1, -1 do keyframes[i] = nil end
   end
 
   -- Validate chronological order

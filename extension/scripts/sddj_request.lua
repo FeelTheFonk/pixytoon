@@ -4,6 +4,9 @@
 
 return function(PT)
 
+-- Clamp a numeric value to [lo, hi]
+local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v or lo)) end
+
 function PT.parse_size()
   local s = PT.dlg.data.output_size
   local w, h = s:match("(%d+)x(%d+)")
@@ -259,10 +262,10 @@ function PT.build_audio_reactive_request()
     width             = gw,
     height            = gh,
     seed              = PT.parse_seed(),
-    steps             = d.audio_steps,
-    cfg_scale         = d.audio_cfg / 10.0,
-    clip_skip         = d.clip_skip,
-    denoise_strength  = d.audio_denoise / 100.0,
+    steps             = clamp(d.audio_steps, 1, 150),
+    cfg_scale         = clamp(d.audio_cfg / 10.0, 0, 30),
+    clip_skip         = clamp(d.clip_skip, 1, 12),
+    denoise_strength  = clamp(d.audio_denoise / 100.0, 0, 1),
 
     tag_name          = tag_name,
     post_process      = PT.build_post_process(),
@@ -285,10 +288,10 @@ function PT.build_generate_request()
     width            = gw,
     height           = gh,
     seed             = PT.parse_seed(),
-    steps            = PT.dlg.data.steps,
-    cfg_scale        = PT.dlg.data.cfg_scale / 10.0,
-    clip_skip        = PT.dlg.data.clip_skip,
-    denoise_strength = PT.dlg.data.denoise / 100.0,
+    steps            = clamp(PT.dlg.data.steps, 1, 150),
+    cfg_scale        = clamp(PT.dlg.data.cfg_scale / 10.0, 0, 30),
+    clip_skip        = clamp(PT.dlg.data.clip_skip, 1, 12),
+    denoise_strength = clamp(PT.dlg.data.denoise / 100.0, 0, 1),
     post_process     = PT.build_post_process(),
     prompt_schedule  = PT.extract_prompt_schedule(1, 24),
   }
@@ -328,11 +331,11 @@ function PT.build_animation_request()
     mode = d.mode,
     width = gw, height = gh,
     seed = PT.parse_seed(),
-    steps = d.anim_steps,
-    cfg_scale = d.anim_cfg / 10.0,
-    clip_skip = d.clip_skip,
-    denoise_strength = d.anim_denoise / 100.0,
-    frame_count = d.anim_frames,
+    steps = clamp(d.anim_steps, 1, 150),
+    cfg_scale = clamp(d.anim_cfg / 10.0, 0, 30),
+    clip_skip = clamp(d.clip_skip, 1, 12),
+    denoise_strength = clamp(d.anim_denoise / 100.0, 0, 1),
+    frame_count = clamp(d.anim_frames, 1, 1000),
     frame_duration_ms = d.anim_duration,
     seed_strategy = d.anim_seed_strategy,
     tag_name = tag_name,
@@ -362,13 +365,13 @@ function PT.build_qr_request()
     width                         = gw,
     height                        = gh,
     seed                          = PT.parse_seed(),
-    steps                         = d.qr_steps or 20,
-    cfg_scale                     = d.qr_cfg / 10.0,
-    clip_skip                     = d.clip_skip,
-    denoise_strength              = use_source and (d.qr_denoise / 100.0) or 1.0,
-    controlnet_conditioning_scale = d.qr_conditioning_scale / 100.0,
-    control_guidance_start        = d.qr_guidance_start / 100.0,
-    control_guidance_end          = d.qr_guidance_end / 100.0,
+    steps                         = clamp(d.qr_steps or 20, 1, 150),
+    cfg_scale                     = clamp(d.qr_cfg / 10.0, 0, 30),
+    clip_skip                     = clamp(d.clip_skip, 1, 12),
+    denoise_strength              = use_source and clamp(d.qr_denoise / 100.0, 0, 1) or 1.0,
+    controlnet_conditioning_scale = clamp(d.qr_conditioning_scale / 100.0, 0, 3),
+    control_guidance_start        = clamp(d.qr_guidance_start / 100.0, 0, 1),
+    control_guidance_end          = clamp(d.qr_guidance_end / 100.0, 0, 1),
     post_process                  = PT.build_post_process(),
   }
   PT.attach_lora(req)

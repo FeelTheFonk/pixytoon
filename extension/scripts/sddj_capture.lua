@@ -7,6 +7,9 @@ return function(PT)
 function PT.capture_active_layer()
   local spr = app.sprite
   if spr == nil then return nil end
+  if spr.width > 2048 or spr.height > 2048 then
+    PT.update_status("Warning: large sprite — capture may be slow")
+  end
   local cel = app.cel
   if cel == nil or cel.image == nil then return nil end
   local full = Image(spr.spec)

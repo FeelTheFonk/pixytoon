@@ -147,11 +147,14 @@ function PT.stop_connect_timer()
 end
 
 function PT.connect()
+  if PT.state.connecting then return end  -- prevent double-connect race
+  PT.state.connecting = true
   PT.reconnect.manual_disconnect = false
   -- Validate URL before connecting (basic scheme check — allows paths, ports, IPs)
   local url = PT.cfg.DEFAULT_SERVER_URL or ""
   if not url:match("^wss?://[%w%.%-_]+") then
     PT.update_status("Invalid server URL: " .. url)
+    PT.state.connecting = false
     return
   end
   if PT.ws_handle then pcall(function() PT.ws_handle:close() end); PT.ws_handle = nil end
@@ -160,6 +163,7 @@ function PT.connect()
     url = url,
     onreceive = function(msg_type, data)
       if msg_type == WebSocketMessageType.OPEN then
+        PT.state.connecting = false
         PT.stop_connect_timer()
         PT.timers.reconnect = PT.stop_timer(PT.timers.reconnect)
         PT.reconnect.attempts = 0
@@ -171,6 +175,7 @@ function PT.connect()
         return
       end
       if msg_type == WebSocketMessageType.CLOSE then
+        PT.state.connecting = false
         PT.set_connected(false)
         PT.res.requested = false
         PT.update_status("Disconnected (server closed)")
@@ -182,6 +187,10 @@ function PT.connect()
         return
       end
       if msg_type == WebSocketMessageType.TEXT then
+        if #data > PT.cfg.MAX_WS_MESSAGE_SIZE then
+          PT.update_status("Message rejected: too large (" .. #data .. " bytes)")
+          return
+        end
         local ok, response = pcall(PT.json.decode, data)
         if not ok then
           PT.update_status("JSON error: " .. tostring(response))
@@ -203,6 +212,7 @@ function PT.connect()
     interval = PT.cfg.CONNECT_TIMEOUT,
     ontick = function()
       PT.stop_connect_timer()
+      PT.state.connecting = false
       if not PT.state.connected then
         if PT.ws_handle then pcall(function() PT.ws_handle:close() end); PT.ws_handle = nil end
         if not PT.reconnect.manual_disconnect then
@@ -217,6 +227,7 @@ function PT.connect()
 end
 
 function PT.disconnect()
+  PT.state.connecting = false
   PT.reconnect.manual_disconnect = true
   PT.timers.reconnect = PT.stop_timer(PT.timers.reconnect)
   PT.stop_connect_timer()

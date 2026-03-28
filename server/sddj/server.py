@@ -993,17 +993,30 @@ async def _handle_export_mp4(websocket: WebSocket, req: Request) -> None:
             message="output_dir is required"))
         return
 
-    # Security: validate output_dir exists and contains SDDj frames
+    # Security: validate output_dir exists and is within the output sandbox
     real_dir = os.path.realpath(output_dir)
     if not os.path.isdir(real_dir):
         await _send(websocket, ExportMp4ErrorResponse(
             message=f"Output directory not found: {output_dir}"))
         return
-    # Ensure dir contains .png frames (prevents arbitrary dir export)
-    has_frames = any(f.endswith(".png") for f in os.listdir(real_dir))
+    # Sandbox: output_dir must be under the project output/ directory
+    from pathlib import Path
+    from .validation import validate_path_in_sandbox
+    from .config import _SERVER_ROOT
+    try:
+        output_root = _SERVER_ROOT.parent / "output"
+        validate_path_in_sandbox(Path(real_dir), output_root)
+    except ValueError:
+        await _send(websocket, ExportMp4ErrorResponse(
+            message="Output directory is outside the allowed sandbox"))
+        return
+    # Ensure dir contains SDDj-named frame files (frame_N.png convention)
+    import re
+    frame_pattern = re.compile(r"^frame_\d+\.png$")
+    has_frames = any(frame_pattern.match(f) for f in os.listdir(real_dir))
     if not has_frames:
         await _send(websocket, ExportMp4ErrorResponse(
-            message="Output directory contains no PNG frames"))
+            message="Output directory contains no SDDj frame files"))
         return
 
     # Validate audio_path if provided

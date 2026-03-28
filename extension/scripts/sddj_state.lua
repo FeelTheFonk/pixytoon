@@ -6,7 +6,7 @@ return function(PT)
 
 -- ─── Constants ──────────────────────────────────────────────
 
-PT.VERSION = "0.9.70"
+PT.VERSION = "0.9.71"
 
 PT.cfg = {
   DEFAULT_SERVER_URL      = "ws://127.0.0.1:9876/ws",
@@ -19,6 +19,11 @@ PT.cfg = {
   DIRTY_STEP_DIVISOR      = 32,
   RECONNECT_BASE_DELAY    = 2.0,
   RECONNECT_MAX_DELAY     = 30.0,
+  -- Safety limits
+  MAX_WS_MESSAGE_SIZE     = 50 * 1024 * 1024,   -- 50 MB (matches server ws_max_size)
+  MAX_BASE64_SIZE         = 100 * 1024 * 1024,   -- 100 MB max base64 input
+  DRAIN_BATCH_SIZE        = 4,                    -- messages per drain tick
+  MAX_QUEUE_SIZE          = 2000,                 -- response queue ceiling
 }
 
 -- ─── Mutable State ──────────────────────────────────────────
@@ -30,6 +35,7 @@ PT.dlg       = nil
 
 PT.state = {
   connected      = false,
+  connecting     = false,
   generating     = false,
   animating      = false,
   cancel_pending = false,

@@ -6,19 +6,29 @@ return function(PT)
 
 local b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
--- ─── Encode (unchanged — encode is fast enough) ─────────────
+-- ─── Encode (O(n) via table.concat + LUT) ──────────────────
 
 function PT.base64_encode(data)
-  return ((data:gsub(".", function(x)
-    local r, b = "", x:byte()
-    for i = 8, 1, -1 do r = r .. (b % 2^i - b % 2^(i-1) > 0 and "1" or "0") end
-    return r
-  end) .. "0000"):gsub("%d%d%d?%d?%d?%d?", function(x)
-    if #x < 6 then return "" end
-    local c = 0
-    for i = 1, 6 do c = c + (x:sub(i,i) == "1" and 2^(6-i) or 0) end
-    return b64chars:sub(c+1, c+1)
-  end) .. ({ "", "==", "=" })[#data % 3 + 1])
+  local t, n = {}, 0
+  local acc, bits = 0, 0
+  for i = 1, #data do
+    acc = acc * 256 + data:byte(i)
+    bits = bits + 8
+    while bits >= 6 do
+      bits = bits - 6
+      n = n + 1
+      t[n] = b64chars:sub(math.floor(acc / _pow2[bits]) % 64 + 1, math.floor(acc / _pow2[bits]) % 64 + 1)
+      acc = acc % _pow2[bits]
+    end
+  end
+  if bits > 0 then
+    n = n + 1
+    local shifted = acc * _pow2[6 - bits]
+    t[n] = b64chars:sub(shifted % 64 + 1, shifted % 64 + 1)
+  end
+  local pad = (3 - #data % 3) % 3
+  for _ = 1, pad do n = n + 1; t[n] = "=" end
+  return table.concat(t)
 end
 
 -- ─── Decode (lookup table — O(1) per character) ─────────────
@@ -37,6 +47,9 @@ local _pow2 = {}
 for i = 0, 24 do _pow2[i] = 2 ^ i end
 
 function PT.base64_decode(data)
+  if #data > (PT.cfg and PT.cfg.MAX_BASE64_SIZE or 104857600) then
+    return nil
+  end
   local t, n = {}, 0
   local acc, bits = 0, 0
   for i = 1, #data do

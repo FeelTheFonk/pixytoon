@@ -33,7 +33,8 @@ end
 
 function PT.import_result(resp)
   local ok, err = pcall(function()
-    local img, _ = _decode_to_image(resp)
+    local img, decoded_bytes = _decode_to_image(resp)
+    resp._decoded_bytes = decoded_bytes  -- reuse in save_to_output (no double decode)
     if not img then
       PT.update_status("Decode failed — skipped")
       return

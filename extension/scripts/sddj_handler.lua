@@ -78,6 +78,8 @@ handlers.result = function(resp)
   if PT.dlg and PT.dlg.data.save_output then
     PT.save_to_output(resp, meta)
   end
+  resp._decoded_bytes = nil  -- release decoded bytes for GC
+  resp.image = nil           -- release base64 string for GC
 
   -- Loop mode: schedule next generation
   if PT.loop.mode and PT.dlg then
@@ -140,27 +142,49 @@ handlers.result = function(resp)
   end
 end
 
+-- ─── Helper: Streaming Frame (shared by animation + audio) ──
+
+local function _handle_streaming_frame(resp, progress_label)
+  if PT.state.cancel_pending then return end
+  if not resp.image or resp.image == "" then
+    PT.update_status("Error: missing image in frame response")
+    return
+  end
+  if resp.frame_index == nil then return end
+  -- Start refresh timer on first frame
+  if resp.frame_index == 0 then PT.start_refresh_timer() end
+  -- Gap detection: check frame index continuity
+  if PT.anim.last_frame_index >= 0 and resp.frame_index ~= PT.anim.last_frame_index + 1 then
+    local gap = resp.frame_index - PT.anim.last_frame_index - 1
+    PT.update_status("Warning: " .. gap .. " frame(s) dropped before F" .. (resp.frame_index + 1))
+  end
+  PT.anim.last_frame_index = resp.frame_index
+  -- Per-frame progress (audio reactive shows ETA, animation uses separate progress handler)
+  if progress_label then
+    local total = resp.total_frames or 1
+    local idx = resp.frame_index + 1
+    local pct = math.floor((idx / total) * 100)
+    local eta_str = ""
+    if PT.state.gen_step_start and idx > 1 then
+      local elapsed = os.clock() - PT.state.gen_step_start
+      local remaining = (elapsed / (idx - 1)) * (total - idx)
+      if remaining < 60 then
+        eta_str = string.format(" ~%.0fs", remaining)
+      else
+        eta_str = string.format(" ~%.1fmin", remaining / 60)
+      end
+    end
+    PT.update_status(progress_label .. " " .. idx .. "/" .. total .. " (" .. pct .. "%)" .. eta_str)
+  end
+  PT.import_animation_frame(resp)
+  PT.save_animation_frame(resp)
+  resp._decoded_bytes = nil  -- release decoded bytes for GC
+end
+
 -- ─── Animation Frame ────────────────────────────────────────
 
 handlers.animation_frame = function(resp)
-  if PT.state.cancel_pending then return end
-  if not resp.image or resp.image == "" then
-    PT.update_status("Error: missing image in animation_frame response")
-    return
-  end
-  if resp.frame_index ~= nil then
-    -- Start refresh timer on first frame
-    if resp.frame_index == 0 then PT.start_refresh_timer() end
-    -- Gap detection: check frame index continuity
-    if PT.anim.last_frame_index >= 0 and resp.frame_index ~= PT.anim.last_frame_index + 1 then
-      local gap = resp.frame_index - PT.anim.last_frame_index - 1
-      PT.update_status("Warning: " .. gap .. " frame(s) dropped before F" .. (resp.frame_index + 1))
-    end
-    PT.anim.last_frame_index = resp.frame_index
-    PT.import_animation_frame(resp)
-    -- Write frame to output directory incrementally (no memory accumulation)
-    PT.save_animation_frame(resp)
-  end
+  _handle_streaming_frame(resp, nil)
 end
 
 -- ─── Helper: Chunked Finalize (Bresenham Sync) ────────────
@@ -219,17 +243,18 @@ local function chunked_finalize_durations(target_fps, resp, on_complete)
   process_chunk(0, 0)
 end
 
--- ─── Animation Complete ─────────────────────────────────────
+-- ─── Helper: Streaming Complete (shared by animation + audio) ──
 
-handlers.animation_complete = function(resp)
+local function _handle_streaming_complete(resp, opts)
   PT.state.animating = false
   PT.state.gen_step_start = nil
   PT.stop_gen_timeout()
   PT.state.cancel_pending = false
   PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
   PT.stop_refresh_timer()
+  if opts.on_start then opts.on_start() end
 
-  -- Validate frame count
+  -- Frame count validation
   if resp.total_frames and PT.anim.frame_count ~= resp.total_frames then
     PT.update_status("Warning: received " .. PT.anim.frame_count .. "/" .. resp.total_frames .. " frames")
   end
@@ -237,12 +262,10 @@ handlers.animation_complete = function(resp)
     and " (" .. PT.anim.decode_failures .. " decode failures)" or ""
 
   -- Determine loop continuation before finalize
-  local should_loop = PT.loop.mode and PT.loop.target == "animate" and PT.dlg
+  local should_loop = PT.loop.mode and PT.loop.target == opts.loop_target and PT.dlg
 
   if should_loop then
-    local seed_info = tostring(resp.seed or "?")
-    PT.update_status("Animate Loop #" .. PT.loop.counter .. " done" .. decode_note .. " — next...")
-    -- Seed handling for next iteration
+    PT.update_status(opts.loop_label .. " Loop #" .. PT.loop.counter .. " done" .. decode_note .. " — next...")
     if PT.loop.seed_mode == "increment" and resp.seed then
       PT.dlg:modify{ id = "seed", text = tostring(resp.seed + 1) }
     else
@@ -251,26 +274,26 @@ handlers.animation_complete = function(resp)
   elseif PT.dlg then
     local tag_str = ""
     if resp.tag_name and resp.tag_name ~= "" then tag_str = ", tag=" .. resp.tag_name end
-    PT.update_status("Animation done (" .. tostring(resp.total_frames or "?") .. " frames, "
+    PT.update_status(opts.done_label .. " done (" .. tostring(resp.total_frames or "?") .. " frames, "
       .. tostring(resp.total_time_ms or "?") .. "ms" .. tag_str .. decode_note .. ")")
     PT.reset_ui_buttons()
+    if opts.on_done_ui then opts.on_done_ui() end
   end
 
   -- Finalize frames (set durations + tag)
   local spr = app.sprite
-  if spr and PT.anim.frame_count > 0 then
-    local dur_ms = (PT.dlg and tonumber(PT.dlg.data.anim_duration) or 100)
-    local fps = 1000.0 / math.max(1, dur_ms)
-    chunked_finalize_durations(fps, resp, function()
-      PT.save_animation_meta(resp)
-      reset_anim_state()
-    end)
-  else
+  local function on_finalize()
     PT.save_animation_meta(resp)
+    if opts.pre_reset then opts.pre_reset() end
     reset_anim_state()
   end
+  if spr and PT.anim.frame_count > 0 then
+    chunked_finalize_durations(opts.get_fps(), resp, on_finalize)
+  else
+    on_finalize()
+  end
 
-  -- Schedule loop iteration via timer (after finalize starts processing)
+  -- Schedule loop iteration via timer
   if should_loop then
     PT.timers.loop = PT.stop_timer(PT.timers.loop)
     PT.timers.loop = Timer{
@@ -278,22 +301,33 @@ handlers.animation_complete = function(resp)
       ontick = function()
         PT.timers.loop = PT.stop_timer(PT.timers.loop)
         if not PT.loop.mode or not PT.dlg or not PT.state.connected or PT.state.animating then return end
-
         PT.loop.counter = PT.loop.counter + 1
-
-        -- Random loop: generate new prompt first
         if PT.loop.random_mode then
-          PT.update_status("Random Loop #" .. PT.loop.counter .. " — Generating prompt, then animation...")
+          PT.update_status("Random Loop #" .. PT.loop.counter .. " — Generating prompt, then " .. opts.random_label .. "...")
           PT.send({ action = "generate_prompt", locked_fields = PT.loop.locked_fields, randomness = PT.dlg and PT.dlg.data.randomness or 0 })
           return
         end
-
-        -- Standard loop: trigger animate directly
-        PT.trigger_animate()
+        opts.trigger_fn()
       end,
     }
     PT.timers.loop:start()
   end
+end
+
+-- ─── Animation Complete ─────────────────────────────────────
+
+handlers.animation_complete = function(resp)
+  _handle_streaming_complete(resp, {
+    loop_target = "animate",
+    loop_label = "Animate",
+    done_label = "Animation",
+    random_label = "animation",
+    trigger_fn = PT.trigger_animate,
+    get_fps = function()
+      local dur_ms = (PT.dlg and tonumber(PT.dlg.data.anim_duration) or 100)
+      return 1000.0 / math.max(1, dur_ms)
+    end,
+  })
 end
 
 -- ─── Error ──────────────────────────────────────────────────
@@ -351,61 +385,41 @@ end
 
 -- ─── Resource Lists ─────────────────────────────────────────
 
+local function _update_resource_combobox(widget_id, items, default_opt, resource_label)
+  if not PT.dlg then return end
+  local prev = PT.dlg.data[widget_id]
+  local opts = {}
+  if default_opt then opts[1] = default_opt end
+  for _, n in ipairs(items) do opts[#opts + 1] = n end
+  PT.dlg:modify{ id = widget_id, options = opts }
+  if prev then
+    for _, o in ipairs(opts) do
+      if o == prev then PT.dlg:modify{ id = widget_id, option = prev }; return end
+    end
+    if prev ~= default_opt then
+      PT.update_status(resource_label .. " '" .. prev .. "' no longer available")
+    end
+  end
+end
+
+local _list_config = {
+  palettes = { res = "palettes", widget = "palette_name", default = nil,         label = "Palette" },
+  loras    = { res = "loras",    widget = "lora_name",    default = "(default)",  label = "LoRA" },
+  presets  = { res = "presets",   widget = "preset_name",  default = "(none)",     label = "Preset" },
+}
+
 handlers.list = function(resp)
   local lt = resp.list_type or ""
   local items = resp.items or {}
 
-  if lt == "palettes" then
-    PT.res.palettes = items
-    if PT.dlg and #items > 0 then
-      local prev = PT.dlg.data.palette_name
-      local opts = {}
-      for _, n in ipairs(items) do opts[#opts + 1] = n end
-      PT.dlg:modify{ id = "palette_name", options = opts }
-      if prev then
-        local found = false
-        for _, o in ipairs(opts) do
-          if o == prev then PT.dlg:modify{ id = "palette_name", option = prev }; found = true; break end
-        end
-        if not found then
-          PT.update_status("Palette '" .. prev .. "' no longer available")
-        end
-      end
-    end
-  elseif lt == "loras" then
-    PT.res.loras = items
-    if PT.dlg then
-      local prev = PT.dlg.data.lora_name
-      local opts = { "(default)" }
-      for _, n in ipairs(items) do opts[#opts + 1] = n end
-      PT.dlg:modify{ id = "lora_name", options = opts }
-      if prev then
-        local found = false
-        for _, o in ipairs(opts) do
-          if o == prev then PT.dlg:modify{ id = "lora_name", option = prev }; found = true; break end
-        end
-        if not found and prev ~= "(default)" then
-          PT.update_status("LoRA '" .. prev .. "' no longer available")
-        end
-      end
-    end
-  elseif lt == "embeddings" then
+  if lt == "embeddings" then
     PT.res.embeddings = items
-  elseif lt == "presets" then
-    PT.res.presets = items
-    if PT.dlg then
-      local prev = PT.dlg.data.preset_name
-      local opts = { "(none)" }
-      for _, n in ipairs(items) do opts[#opts + 1] = n end
-      PT.dlg:modify{ id = "preset_name", options = opts }
-      if prev then
-        local found = false
-        for _, o in ipairs(opts) do
-          if o == prev then PT.dlg:modify{ id = "preset_name", option = prev }; found = true; break end
-        end
-        if not found and prev ~= "(none)" then
-          PT.update_status("Preset '" .. prev .. "' no longer available")
-        end
+  else
+    local cfg = _list_config[lt]
+    if cfg then
+      PT.res[cfg.res] = items
+      if cfg.default or #items > 0 then
+        _update_resource_combobox(cfg.widget, items, cfg.default, cfg.label)
       end
     end
   end
@@ -663,120 +677,30 @@ handlers.audio_analysis = function(resp)
 end
 
 handlers.audio_reactive_frame = function(resp)
-  if PT.state.cancel_pending then return end
-  if not resp.image or resp.image == "" then
-    PT.update_status("Error: missing image in audio_reactive_frame")
-    return
-  end
-  if resp.frame_index ~= nil then
-    -- Start refresh timer on first frame
-    if resp.frame_index == 0 then PT.start_refresh_timer() end
-    -- Gap detection: check frame index continuity
-    if PT.anim.last_frame_index >= 0 and resp.frame_index ~= PT.anim.last_frame_index + 1 then
-      local gap = resp.frame_index - PT.anim.last_frame_index - 1
-      PT.update_status("Warning: " .. gap .. " frame(s) dropped before F" .. (resp.frame_index + 1))
-    end
-    PT.anim.last_frame_index = resp.frame_index
-    -- Status with percentage and ETA
-    local total = resp.total_frames or 1
-    local idx = resp.frame_index + 1
-    local pct = math.floor((idx / total) * 100)
-    local eta_str = ""
-    if PT.state.gen_step_start and idx > 1 then
-      local elapsed = os.clock() - PT.state.gen_step_start
-      local remaining = (elapsed / (idx - 1)) * (total - idx)
-      if remaining < 60 then
-        eta_str = string.format(" ~%.0fs", remaining)
-      else
-        eta_str = string.format(" ~%.1fmin", remaining / 60)
-      end
-    end
-    PT.update_status("Audio " .. idx .. "/" .. total .. " (" .. pct .. "%)" .. eta_str)
-    -- Reuse the animation frame import mechanism
-    PT.import_animation_frame(resp)
-    -- Write frame to output directory incrementally
-    PT.save_animation_frame(resp)
-  end
+  _handle_streaming_frame(resp, "Audio")
 end
 
 handlers.audio_reactive_complete = function(resp)
-  PT.state.animating = false
-  PT.audio.generating = false
-  PT.state.gen_step_start = nil
-  PT.stop_gen_timeout()
-  PT.state.cancel_pending = false
-  PT.timers.cancel_safety = PT.stop_timer(PT.timers.cancel_safety)
-  PT.stop_refresh_timer()
-
-  -- Frame count validation (parity with animation_complete)
-  if resp.total_frames and PT.anim.frame_count ~= resp.total_frames then
-    PT.update_status("Warning: received " .. PT.anim.frame_count .. "/" .. resp.total_frames .. " frames")
-  end
-  local decode_note = PT.anim.decode_failures > 0
-    and " (" .. PT.anim.decode_failures .. " decode failures)" or ""
-
-  -- Determine loop continuation before finalize
-  local should_loop = PT.loop.mode and PT.loop.target == "audio" and PT.dlg
-
-  if should_loop then
-    PT.update_status("Audio Loop #" .. PT.loop.counter .. " done" .. decode_note .. " — next...")
-    -- Seed handling for next iteration
-    if PT.loop.seed_mode == "increment" and resp.seed then
-      PT.dlg:modify{ id = "seed", text = tostring(resp.seed + 1) }
-    else
-      PT.dlg:modify{ id = "seed", text = "-1" }
-    end
-  elseif PT.dlg then
-    local tag_str = ""
-    if resp.tag_name and resp.tag_name ~= "" then tag_str = ", tag=" .. resp.tag_name end
-    PT.update_status("Audio animation done (" .. tostring(resp.total_frames or "?") .. " frames, "
-      .. tostring(resp.total_time_ms or "?") .. "ms" .. tag_str .. decode_note .. ")")
-    PT.reset_ui_buttons()
-    PT.dlg:modify{ id = "action_btn", enabled = PT.state.connected }
-    -- Enable MP4 export (output dir preserved in audio.last_output_dir after reset)
-    PT.dlg:modify{ id = "export_mp4_btn", enabled = true }
-  end
-
-  -- Finalize frames (set durations + tag)
-  local spr = app.sprite
-  if spr and PT.anim.frame_count > 0 then
-    local fps = (PT.dlg and tonumber(PT.dlg.data.audio_fps)) or 24
-    if fps <= 0 then fps = 24 end
-    chunked_finalize_durations(fps, resp, function()
-      PT.save_animation_meta(resp)
+  _handle_streaming_complete(resp, {
+    loop_target = "audio",
+    loop_label = "Audio",
+    done_label = "Audio animation",
+    random_label = "audio",
+    trigger_fn = PT.trigger_audio_generate,
+    on_start = function() PT.audio.generating = false end,
+    on_done_ui = function()
+      PT.dlg:modify{ id = "action_btn", enabled = PT.state.connected }
+      PT.dlg:modify{ id = "export_mp4_btn", enabled = true }
+    end,
+    pre_reset = function()
       PT.audio.last_output_dir = PT.anim.output_dir
-      reset_anim_state()
-    end)
-  else
-    PT.save_animation_meta(resp)
-    PT.audio.last_output_dir = PT.anim.output_dir
-    reset_anim_state()
-  end
-
-  -- Schedule loop iteration via timer
-  if should_loop then
-    PT.timers.loop = PT.stop_timer(PT.timers.loop)
-    PT.timers.loop = Timer{
-      interval = PT.cfg.LOOP_DELAY,
-      ontick = function()
-        PT.timers.loop = PT.stop_timer(PT.timers.loop)
-        if not PT.loop.mode or not PT.dlg or not PT.state.connected or PT.state.animating then return end
-
-        PT.loop.counter = PT.loop.counter + 1
-
-        -- Random loop: generate new prompt first
-        if PT.loop.random_mode then
-          PT.update_status("Random Loop #" .. PT.loop.counter .. " — Generating prompt, then audio...")
-          PT.send({ action = "generate_prompt", locked_fields = PT.loop.locked_fields, randomness = PT.dlg and PT.dlg.data.randomness or 0 })
-          return
-        end
-
-        -- Standard loop: trigger audio directly
-        PT.trigger_audio_generate()
-      end,
-    }
-    PT.timers.loop:start()
-  end
+    end,
+    get_fps = function()
+      local fps = (PT.dlg and tonumber(PT.dlg.data.audio_fps)) or 24
+      if fps <= 0 then fps = 24 end
+      return fps
+    end,
+  })
 end
 
 handlers.stems_available = function(resp)
@@ -1142,8 +1066,8 @@ local function _drain_next()
     PT.clear_response_queue()
     return
   end
-  -- Process up to 4 messages per tick to clear backlog faster (B6 fix)
-  local batch = math.min(#_response_queue, 4)
+  -- Process up to DRAIN_BATCH_SIZE messages per tick to clear backlog faster
+  local batch = math.min(#_response_queue, PT.cfg.DRAIN_BATCH_SIZE)
   for _ = 1, batch do
     if #_response_queue == 0 then break end
     local queued = table.remove(_response_queue, 1)
@@ -1183,6 +1107,9 @@ end
 
 function PT.handle_response(resp)
   if _processing then
+    if #_response_queue >= PT.cfg.MAX_QUEUE_SIZE then
+      table.remove(_response_queue, 1)  -- drop oldest to prevent OOM
+    end
     _response_queue[#_response_queue + 1] = resp
     return
   end

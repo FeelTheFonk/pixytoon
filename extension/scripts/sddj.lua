@@ -86,44 +86,46 @@ end
 
 function exit(plugin)
   if not _PT then return end
+  local pt = _PT
+  _PT = nil  -- prevent re-entry from nested event pumping
 
   -- Cancel any in-progress generation
-  if _PT.state and (_PT.state.generating or _PT.state.animating) then
-    pcall(function() _PT.send({ action = "cancel" }) end)
+  if pt.state and (pt.state.generating or pt.state.animating) then
+    pcall(function() pt.send({ action = "cancel" }) end)
   end
 
   -- Save settings before exit
-  if _PT.save_settings then pcall(_PT.save_settings) end
+  if pt.save_settings then pcall(pt.save_settings) end
   -- Fallback: if dlg was already nil (destroyed by onclose), write cached settings
-  if not _PT.dlg and _PT._last_encoded_settings and _PT.cfg then
+  if not pt.dlg and pt._last_encoded_settings and pt.cfg then
     pcall(function()
-      pcall(os.remove, _PT.cfg.SETTINGS_FILE)
-      local f = io.open(_PT.cfg.SETTINGS_FILE, "w")
-      if f then f:write(_PT._last_encoded_settings); f:close() end
+      pcall(os.remove, pt.cfg.SETTINGS_FILE)
+      local f = io.open(pt.cfg.SETTINGS_FILE, "w")
+      if f then f:write(pt._last_encoded_settings); f:close() end
     end)
   end
 
   -- Send shutdown to server (auto-stop)
-  if _PT.state and _PT.state.connected and _PT.ws_handle then
-    pcall(function() _PT.ws_handle:sendText('{"action":"shutdown"}') end)
+  if pt.state and pt.state.connected and pt.ws_handle then
+    pcall(function() pt.ws_handle:sendText('{"action":"shutdown"}') end)
   end
 
   -- Disconnect WebSocket
-  if _PT.ws_handle then
-    pcall(function() _PT.ws_handle:close() end)
-    _PT.ws_handle = nil
+  if pt.ws_handle then
+    pcall(function() pt.ws_handle:close() end)
+    pt.ws_handle = nil
   end
 
   -- Stop all named timers
-  if _PT.timers then
-    for key, timer in pairs(_PT.timers) do
+  if pt.timers then
+    for key, timer in pairs(pt.timers) do
       if timer then pcall(function() timer:stop() end) end
-      _PT.timers[key] = nil
+      pt.timers[key] = nil
     end
   end
 
   -- Clean up session temp files
-  if _PT.cleanup_session_temp_files then
-    pcall(_PT.cleanup_session_temp_files)
+  if pt.cleanup_session_temp_files then
+    pcall(pt.cleanup_session_temp_files)
   end
 end

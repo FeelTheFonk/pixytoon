@@ -491,12 +491,16 @@ local function build_tab_postprocess()
     id = "pixelate",
     label = "Pixelate",
     selected = false,
+    onchange = function()
+      dlg:modify{ id = "pixel_size", enabled = dlg.data.pixelate }
+    end,
   }
 
   dlg:slider{
     id = "pixel_size",
     label = "Target (128px)",
     min = 8, max = 512, value = 128,
+    enabled = false,
     onchange = onchange_sync("pixel_size"),
   }
 
@@ -504,12 +508,19 @@ local function build_tab_postprocess()
     id = "quantize_enabled",
     label = "Quantize Colors",
     selected = false,
+    onchange = function()
+      local en = dlg.data.quantize_enabled
+      dlg:modify{ id = "colors", enabled = en }
+      dlg:modify{ id = "quantize_method", enabled = en }
+      dlg:modify{ id = "dither", enabled = en }
+    end,
   }
 
   dlg:slider{
     id = "colors",
     label = "Colors (32)",
     min = 2, max = 256, value = 32,
+    enabled = false,
     onchange = onchange_sync("colors"),
   }
 
@@ -518,6 +529,7 @@ local function build_tab_postprocess()
     label = "Quantize",
     options = { "kmeans", "median_cut", "octree" },
     option = "kmeans",
+    enabled = false,
   }
 
   dlg:combobox{
@@ -525,6 +537,7 @@ local function build_tab_postprocess()
     label = "Dithering",
     options = { "none", "floyd_steinberg", "bayer_2x2", "bayer_4x4", "bayer_8x8" },
     option = "none",
+    enabled = false,
   }
 
   dlg:combobox{
@@ -532,6 +545,11 @@ local function build_tab_postprocess()
     label = "Palette",
     options = { "auto", "preset", "custom" },
     option = "auto",
+    onchange = function()
+      local m = dlg.data.palette_mode
+      dlg:modify{ id = "palette_name", enabled = (m == "preset") }
+      dlg:modify{ id = "palette_custom_colors", enabled = (m == "custom") }
+    end,
   }
 
   dlg:combobox{
@@ -539,6 +557,7 @@ local function build_tab_postprocess()
     label = "Preset",
     options = { "pico8" },
     option = "pico8",
+    enabled = false,
   }
 
   dlg:entry{
@@ -546,6 +565,7 @@ local function build_tab_postprocess()
     label = "Custom Hex",
     text = "",
     hexpand = true,
+    enabled = false,
   }
 
   dlg:button{
@@ -656,12 +676,16 @@ local function build_tab_animation()
     id = "anim_freeinit",
     label = "FreeInit",
     selected = false,
+    onchange = function()
+      dlg:modify{ id = "anim_freeinit_iters", enabled = dlg.data.anim_freeinit }
+    end,
   }
 
   dlg:slider{
     id = "anim_freeinit_iters",
     label = "FreeInit Iters",
     min = 1, max = 3, value = 2,
+    enabled = false,
   }
 end
 
@@ -758,11 +782,15 @@ local function build_tab_audio()
     id = "audio_freeinit",
     text = "FreeInit (1st chunk)",
     selected = false,
+    onchange = function()
+      dlg:modify{ id = "audio_freeinit_iters", enabled = dlg.data.audio_freeinit }
+    end,
   }
   dlg:slider{
     id = "audio_freeinit_iters",
     label = "FreeInit Iters",
     min = 1, max = 3, value = 2,
+    enabled = false,
   }
 
   -- Choreography
@@ -823,7 +851,17 @@ local function build_tab_audio()
     id = "mod_slot_count",
     label = "Slots (2)",
     min = 1, max = 6, value = 2,
-    onchange = onchange_sync("mod_slot_count"),
+    onchange = function()
+      PT.sync_slider_label("mod_slot_count")
+      local count = dlg.data.mod_slot_count
+      for i = 1, 6 do
+        local en = (i <= count)
+        local p = "mod" .. i .. "_"
+        for _, s in ipairs({ "enable", "invert", "source", "target", "min", "max", "attack", "release" }) do
+          dlg:modify{ id = p .. s, enabled = en }
+        end
+      end
+    end,
   }
 
   -- Auto-switch to (custom) when any mod slot field is changed by the user
@@ -890,6 +928,14 @@ local function build_tab_audio()
     }
   end
 
+  -- Initial: disable slots beyond default count (2)
+  for i = 3, 6 do
+    local p = "mod" .. i .. "_"
+    for _, s in ipairs({ "enable", "invert", "source", "target", "min", "max", "attack", "release" }) do
+      dlg:modify{ id = p .. s, enabled = false }
+    end
+  end
+
   dlg:check{
     id = "audio_advanced",
     text = "Advanced",
@@ -900,12 +946,20 @@ local function build_tab_audio()
     id = "audio_use_expressions",
     text = "Custom Expressions",
     selected = false,
+    onchange = function()
+      local en = dlg.data.audio_use_expressions
+      dlg:modify{ id = "audio_expr_preset", enabled = en }
+      for _, e in ipairs(EXPR_FIELDS) do
+        dlg:modify{ id = e[1], enabled = en }
+      end
+    end,
   }
   dlg:combobox{
     id = "audio_expr_preset",
     label = "Expr Preset",
     options = { "(manual)" },
     option = "(manual)",
+    enabled = false,
     onchange = function()
       local sel = dlg.data.audio_expr_preset
       if sel == "(manual)" then return end
@@ -917,7 +971,7 @@ local function build_tab_audio()
 
   -- Expression entry fields (data-driven)
   for _, e in ipairs(EXPR_FIELDS) do
-    dlg:entry{ id = e[1], label = e[2], text = "", hexpand = true }
+    dlg:entry{ id = e[1], label = e[2], text = "", hexpand = true, enabled = false }
   end
 
   dlg:check{

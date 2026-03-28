@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.9.71] — 2026-03
+### Systemic Hardening & DRY Refactoring
+14-file cross-stack audit: security hardening, performance optimization, DRY refactoring, and edge-case elimination.
+
+#### Security
+- **JSON decode string length limit**: 50 MB cap on decoded strings prevents memory exhaustion from adversarial payloads.
+- **WebSocket message size guard**: Rejects incoming messages exceeding `MAX_WS_MESSAGE_SIZE` before JSON parsing.
+- **Base64 decode size guard**: `MAX_BASE64_SIZE` limit prevents memory exhaustion from oversized image payloads.
+- **DSL parser input limits**: `MAX_DSL_LENGTH` (100 KB) and `MAX_KEYFRAMES` (500) prevent stack overflow on adversarial prompt schedules.
+- **Frame filename validation**: `export_mp4` validates frame filenames match `frame_\d+.png` pattern (aligned with `video_export.py`).
+- **Server sandbox validation**: `export_mp4` rejects output directories outside the allowed sandbox via `os.path.realpath` check.
+- **Anti-double-connect**: `PT.state.connecting` flag prevents WebSocket race conditions across all connect/disconnect/timeout paths.
+
+#### Refactored
+- **Handler DRY** (`sddj_handler.lua`, -78 lines): Extracted `_handle_streaming_frame()` and `_handle_streaming_complete(resp, opts)` with opts-table pattern — animation and audio-reactive handlers now share ~80 lines of common streaming logic.
+- **Resource list DRY**: `_update_resource_combobox()` helper + `_list_config` lookup table replaces 7 near-identical handler blocks.
+- **Settings schema-driven** (`sddj_settings.lua`): `_FIELD_SCHEMA` array as single source of truth for save/apply — eliminates dual-list maintenance when adding new dialog fields.
+- **Request parameter clamping** (`sddj_request.lua`): All numeric request params go through `clamp(v, lo, hi)` with nil-safe fallback before server transmission.
+- **Extension exit cleanup** (`sddj.lua`): Re-entry guard with `_PT = nil` + local `pt` prevents double-exit crashes.
+
+#### Improved
+- **Conditional widget enable/disable** (`sddj_dialog.lua`): Pixelate, quantize, palette, FreeInit, expression, and modulation slot widgets are disabled on construction and toggled via `onchange` callbacks — prevents invalid parameter combinations.
+- **Settings restore widget sync** (`sddj_settings.lua`): After restoring saved settings, explicit sync block re-applies conditional enable/disable states (since `dlg:modify` doesn't fire `onchange`).
+- **Type-validated settings restore**: `_apply_field()` checks `type(val)` before applying, with `pcall` for combobox options — prevents crashes from corrupted settings files.
+- **Base64 encoder rewrite** (`sddj_base64.lua`): O(n) table.concat approach replaces O(n²) string concatenation.
+- **Large sprite warning** (`sddj_capture.lua`): Warns when capturing sprites >2048px.
+- **GC cleanup in handlers**: Decoded image bytes and raw base64 strings are nilled after import to reduce peak memory.
+- **Combobox option safety** (`sddj_output.lua`): All combobox `option=` sets wrapped in `pcall` to handle stale/missing values gracefully.
+
 ## [0.9.70] — 2026-03
 ### Random Prompt Schedule Generator
 Generate complete prompt schedules — structure and content — with a single click. Seven built-in profiles control keyframe placement, transition types, blend windows, parameter overrides, and prompt variety.
