@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.9.72] — 2026-03
+### Prompt Schedule DSL Hardening & Exhaustive Testing
+Deep audit of the entire Prompt Schedule DSL pipeline — parser, engine integration, embedding blending, presets, and protocol — with critical bug fixes, full Lua/Python parity, and 77 new tests.
+
+#### Fixed
+- **Audio-reactive keyframe resolution (CRITICAL)**: `audio_reactive.py` used time-based `get_prompt()` instead of keyframe-based `get_blend_info_for_frame()`, ignoring the entire prompt schedule during audio-reactive generation. Full keyframe resolution with SLERP blending and per-keyframe parameter overrides now applied.
+- **Negative prompt SLERP blending**: Transitions between keyframes with different negative prompts now SLERP-blend negative embeddings in `embedding_blend.py`, matching positive prompt behavior. Previously the outgoing negative was used without blending.
+- **`weight_end` validation leak**: Invalid `weight_end` values (e.g. `weight: 1.5->6.0`) leaked into keyframes despite E006 validation. Assignment now occurs only after range check passes.
+- **Protocol weight floor**: `PromptKeyframeSpec.weight` and `weight_end` minimum changed from `0.0` to `0.1` — matches DSL spec range `[0.1, 5.0]`.
+- **Animated weight fallback in `_compute_weight`**: Last keyframe with `weight_end` used hardcoded `kf.frame + 100` as fallback range. Now uses `PromptSchedule.total_frames` for correct interpolation.
+- **Dead `default_prompt` parameter**: Removed unused parameter from `_KeyframeBuilder.build()`.
+
+#### Improved
+- **DSL safety limits**: E013 (input > 100 KB) and E014 (> 500 keyframes) prevent stack overflow / memory exhaustion from adversarial schedules.
+- **Separated E002 / E003**: Duplicate frame (E002) and out-of-order frame (E003) are now distinct validation errors in both Python and Lua parsers.
+- **W006 warning**: `blend:` directive with `hard_cut` transition now emits a warning (no effect).
+- **W007 warning**: Lines matching `word: value` that aren't recognized directives emit an unrecognized-directive warning.
+- **Lua parser parity**: `{auto}` case-insensitive, E002/E003 split, W004 for animated weight > 2.0, W006 for blend+hard_cut — all aligned with Python parser.
+- **Presets v2 (ratio-based)**: All builtin presets converted to `keyframe_ratios` format with `ratio` and `blend_ratio` — frame-count independent, resolves correctly for any `total_frames`.
+- **`schedule_to_dsl()` round-trip**: Added `include_auto` parameter, reordered output (directives before prompt text).
+
+#### Docs
+- Fixed `ease_in_out` description: "cubic" → "quadratic" (matching actual implementation).
+- Added E013, E014 to errors table; W006, W007 to warnings table.
+- Fixed E012 description and per-keyframe parameter interpolation notes.
+
+#### Tests
+- **77 new tests** (`test_dsl_parser.py`): empty inputs, all time formats, all directives, prompt parsing, auto directive, validation (E002/E003/W001/W006/E004/W007), safety limits (E013/E014), file references (E010/E011), DSL round-trip, comments/whitespace, blend resolution, edge cases (single KF, 1 frame, low FPS, CRLF), 1000-schedule stress test, presets v2.
+- Rewrote `test_sddj_dsl_parser.py` (Lua parser) — removed invalid `w:` shortcut test, added `pytest.importorskip`.
+- Fixed `test_prompt_schedule_keyframes.py` for v2 preset format.
+- **675 tests passing, 0 failures.**
+
 ## [0.9.71] — 2026-03
 ### Systemic Hardening & DRY Refactoring
 14-file cross-stack audit: security hardening, performance optimization, DRY refactoring, and edge-case elimination.

@@ -215,6 +215,7 @@ class AnimationMixin:
                                 blend_info.prompt_b,
                                 blend_info.blend_weight,
                                 negative_prompt=frame_neg,
+                                negative_prompt_b=blend_info.negative_prompt_b,
                                 clip_skip=req.clip_skip,
                             )
                             log.debug(

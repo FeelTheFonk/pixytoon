@@ -145,8 +145,8 @@ class PromptKeyframeSpec(BaseModel):
     frame: int = Field(0, ge=0)
     prompt: str = ""
     negative_prompt: str = ""
-    weight: float = Field(1.0, ge=0.0, le=5.0)
-    weight_end: Optional[float] = Field(None, ge=0.0, le=5.0)
+    weight: float = Field(1.0, ge=0.1, le=5.0)
+    weight_end: Optional[float] = Field(None, ge=0.1, le=5.0)
     transition: str = "hard_cut"
     transition_frames: int = Field(0, ge=0, le=120)
     # Per-keyframe parameter overrides (None = inherit base)
@@ -158,7 +158,7 @@ class PromptKeyframeSpec(BaseModel):
     @classmethod
     def _clamp_weight(cls, v: Any) -> float:
         try:
-            return max(0.0, min(5.0, float(v)))
+            return max(0.1, min(5.0, float(v)))
         except (ValueError, TypeError):
             return 1.0
 

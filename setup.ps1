@@ -8,18 +8,17 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$Host.UI.RawUI.WindowTitle = "SDDj - Setup"
 $PSStyle.OutputRendering = "Ansi"
 
-# --- UI Helpers (Minimalist Stealth) ---
+# --- UI ---
 $e = [char]27
-$R  = "$e[0m"; $D = "$e[90m"; $W = "$e[97m"; $B = "$e[1m"
+$R  = "$e[0m";  $D = "$e[90m"; $W = "$e[97m"; $B = "$e[1m"
 $G  = "$e[92m"; $Re = "$e[91m"; $Y = "$e[93m"; $C = "$e[96m"
-
 function Step($n, $total, $msg) { Write-Host "  ${D}[$n/$total]${R} $msg${D}...${R}" }
 function Ok($msg)   { Write-Host "  ${G}OK${R}  $D$msg$R" }
 function Fail($msg) { Write-Host "  ${Re}FAIL${R}  $msg"; Read-Host "`n  Press Enter to exit"; exit 1 }
 function Warn($msg) { Write-Host "  ${Y}!${R}  $msg" }
+try { $Host.UI.RawUI.WindowTitle = "SDDj - Setup" } catch {}
 
 $Root = [System.IO.Path]::GetFullPath($PSScriptRoot)
 Set-Location -Path $Root
@@ -32,7 +31,7 @@ $ScriptsDir = Join-Path -Path $Root -ChildPath "scripts"
 $VenvPython = Join-Path -Path $ServerDir -ChildPath ".venv\Scripts\python.exe"
 
 # --- 1. Check uv ---
-Step 1 6 "Checking uv package manager"
+Step 1 7 "Checking uv package manager"
 if (-not (Get-Command -Name "uv" -ErrorAction Ignore)) {
     Fail "uv not found - install from https://docs.astral.sh/uv/"
 }
@@ -40,14 +39,16 @@ $uvVer = (uv --version 2>$null) -join ""
 Ok $uvVer
 
 # --- 2. Install dependencies ---
-Step 2 6 "Installing dependencies"
+Step 2 7 "Installing dependencies"
 Push-Location -Path $ServerDir
 try {
-    uv sync --locked 2>&1 | Out-Null
+    $null = uv sync --locked 2>&1
     if ($LASTEXITCODE -ne 0) {
-        Warn "uv sync --locked failed. Retrying without strict lock..."
-        uv sync 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { Fail "Dependency install failed" }
+        Warn "Lockfile mismatch, syncing with resolution..."
+        $uvOut = uv sync 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Fail "Dependency install failed:`n$($uvOut | Out-String)"
+        }
     }
 } finally {
     Pop-Location
@@ -60,7 +61,7 @@ if (-not (Test-Path -Path $VenvPython)) {
 }
 
 # --- 4. Download models ---
-Step 3 6 "Provisioning models"
+Step 3 7 "Provisioning models"
 if ($SkipModels) {
     Ok "Skipped (--SkipModels)"
 } else {
@@ -77,14 +78,15 @@ if ($SkipModels) {
 }
 
 # --- 5. Build extension ---
-Step 4 6 "Building Aseprite extension"
+Step 4 7 "Building Aseprite extension"
 $buildScript = Join-Path -Path $ScriptsDir -ChildPath "build_extension.py"
-$null = & $VenvPython $buildScript 2>&1
-if ($LASTEXITCODE -ne 0) { Fail "Extension build failed" }
+$buildOut = & $VenvPython $buildScript 2>&1
+if ($LASTEXITCODE -ne 0) { Fail "Extension build failed:`n$($buildOut | Out-String)" }
 Ok "Extension built"
 
 # --- 6. Install extension ---
-Step 5 6 "Deploying extension"
+Step 5 7 "Deploying extension"
+if (-not $env:APPDATA) { Fail "APPDATA not set (required for Aseprite extension deploy)" }
 $AseData = Join-Path -Path $env:APPDATA -ChildPath "Aseprite"
 $AseExt = Join-Path -Path $AseData -ChildPath "extensions\sddj"
 $AseScripts = Join-Path -Path $AseData -ChildPath "scripts"
@@ -103,11 +105,12 @@ Copy-Item -Path (Join-Path -Path $ExtSrc -ChildPath "package.json") -Destination
 Copy-Item -Path (Join-Path -Path (Join-Path -Path $ExtSrc -ChildPath "scripts") -ChildPath "*.lua") -Destination (Join-Path -Path $AseExt -ChildPath "scripts") -Force
 Copy-Item -Path (Join-Path -Path (Join-Path -Path $ExtSrc -ChildPath "keys") -ChildPath "*") -Destination (Join-Path -Path $AseExt -ChildPath "keys") -Force
 
-$count = (Get-ChildItem -Path (Join-Path -Path $AseExt -ChildPath "scripts\*.lua")).Count
+$luaFiles = @(Get-ChildItem -Path (Join-Path -Path $AseExt -ChildPath "scripts") -Filter "*.lua" -ErrorAction SilentlyContinue)
+$count = $luaFiles.Count
 Ok "$count Lua files deployed"
 
 # --- 7. Environment config ---
-Step 6 6 "Checking environment config"
+Step 6 7 "Checking environment config"
 $EnvFile = Join-Path -Path $ServerDir -ChildPath ".env"
 $EnvExample = Join-Path -Path $ServerDir -ChildPath ".env.example"
 
@@ -123,7 +126,7 @@ if (-not (Test-Path -Path $EnvFile)) {
 }
 
 # --- Verify ---
-Write-Host "`n  ${D}Verifying...${R}"
+Step 7 7 "Verifying installation"
 try {
     $ver = & $VenvPython -c "import sddj; print(sddj.__version__)" 2>$null
     if ($LASTEXITCODE -eq 0) { Ok "SDDj v$ver" } else { Warn "Package import check failed" }

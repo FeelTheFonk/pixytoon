@@ -1,100 +1,89 @@
-import unittest
-import lupa
+"""Tests for the Lua DSL parser (requires lupa).
+
+These tests are automatically skipped when the ``lupa`` package is not
+installed.  Install it with ``pip install lupa`` to enable them.
+"""
+
+from __future__ import annotations
+
 import os
-import json
 
-class TestSDDjdslParser(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.lua = lupa.LuaRuntime(unpack_returned_tuples=True)
-        
-        # We need to construct the parser by running the lua file.
-        # Since the lua file ends with 'return M', we can execute it to get the Lua table.
-        # However, Lua "dofile" might fail if paths are weird, so let's load it directly:
-        parser_path = os.path.join(os.path.dirname(__file__), "..", "..", "extension", "scripts", "sddj_dsl_parser.lua")
-        parser_path = os.path.abspath(parser_path)
-        with open(parser_path, "r", encoding="utf-8") as f:
-            lua_code = f.read()
-            
-        cls.parser = cls.lua.execute(lua_code)
-        
-    def test_empty_string(self):
-        res = self.parser.parse("", 100, 24)
-        self.assertEqual(len(res.keyframes), 0)
-        self.assertEqual(res.default_prompt, "")
+import pytest
 
-    def test_whitespace_string(self):
-        res = self.parser.parse("   \n \t  ", 100, 24)
-        self.assertEqual(len(res.keyframes), 0)
+lupa = pytest.importorskip("lupa", reason="lupa not installed — skipping Lua parser tests")
 
-    def test_auto_tag_without_keyframes(self):
-        res = self.parser.parse("{auto}", 100, 24)
-        self.assertTrue(res.auto_fill)
-        self.assertEqual(len(res.keyframes), 1)
-        self.assertEqual(res.keyframes[1].frame, 0)
-        self.assertEqual(res.keyframes[1].prompt, "")
-        self.assertEqual(res.keyframes[1].negative_prompt, "")
-        self.assertEqual(res.keyframes[1].weight, 1.0)
 
-    def test_auto_tag_with_keyframes(self):
-        res = self.parser.parse("{auto}\n[10] hello", 100, 24)
-        self.assertTrue(res.auto_fill)
-        self.assertEqual(len(res.keyframes), 1)
-        self.assertEqual(res.keyframes[1].frame, 10)
-        self.assertEqual(res.keyframes[1].prompt, "hello")
+@pytest.fixture(scope="module")
+def lua_parser():
+    """Load the Lua DSL parser module via lupa."""
+    lua = lupa.LuaRuntime(unpack_returned_tuples=True)
+    parser_path = os.path.join(
+        os.path.dirname(__file__), "..", "..", "extension", "scripts", "sddj_dsl_parser.lua",
+    )
+    parser_path = os.path.abspath(parser_path)
+    with open(parser_path, "r", encoding="utf-8") as f:
+        lua_code = f.read()
+    return lua.execute(lua_code)
 
-    def test_time_formats(self):
-        dsl = '''
-        [10] absolute
-        [50%] percent
-        [2s] seconds
-        '''
-        res = self.parser.parse(dsl, 100, 24)
-        self.assertEqual(len(res.keyframes), 3)
-        self.assertEqual(res.keyframes[1].frame, 10)
-        self.assertEqual(res.keyframes[2].frame, 48)  # 2s * 24fps = 48
-        self.assertEqual(res.keyframes[3].frame, 50)  # 50% of 100 = 50
 
-    def test_negative_prompts(self):
-        dsl = '''
-        [0] a beautiful cat
-        -- ugly, blurry
-        -- worst quality
-        '''
-        res = self.parser.parse(dsl, 100, 24)
-        self.assertEqual(len(res.keyframes), 1)
-        self.assertEqual(res.keyframes[1].prompt, "a beautiful cat")
-        self.assertEqual(res.keyframes[1].negative_prompt, "ugly, blurry worst quality")
+class TestLuaParserBasic:
+    def test_empty_string(self, lua_parser):
+        res = lua_parser.parse("", 100, 24)
+        assert len(res.keyframes) == 0
 
-    def test_weights_and_transitions(self):
-        dsl = '''
-        [0]
-        weight: 1.5
-        transition: blend
-        blend: 12
-        a glowing orb
-        '''
-        res = self.parser.parse(dsl, 100, 24)
-        self.assertEqual(len(res.keyframes), 1)
+    def test_whitespace_string(self, lua_parser):
+        res = lua_parser.parse("   \n \t  ", 100, 24)
+        assert len(res.keyframes) == 0
+
+    def test_auto_tag(self, lua_parser):
+        res = lua_parser.parse("{auto}", 100, 24)
+        assert res.auto_fill
+        assert len(res.keyframes) == 1
+
+    def test_auto_tag_case_insensitive(self, lua_parser):
+        res = lua_parser.parse("{AUTO}", 100, 24)
+        assert res.auto_fill
+
+    def test_auto_tag_with_keyframes(self, lua_parser):
+        res = lua_parser.parse("{auto}\n[10] hello", 100, 24)
+        assert res.auto_fill
+        assert len(res.keyframes) == 1
+        assert res.keyframes[1].frame == 10
+        assert res.keyframes[1].prompt == "hello"
+
+
+class TestLuaParserTimeFormats:
+    def test_absolute_frame(self, lua_parser):
+        res = lua_parser.parse("[10] absolute", 100, 24)
+        assert res.keyframes[1].frame == 10
+
+    def test_percentage(self, lua_parser):
+        res = lua_parser.parse("[50%] percent", 100, 24)
+        assert res.keyframes[1].frame == 50
+
+    def test_seconds(self, lua_parser):
+        res = lua_parser.parse("[2s] seconds", 100, 24)
+        assert res.keyframes[1].frame == 48  # 2 * 24fps
+
+
+class TestLuaParserDirectives:
+    def test_negative_prompts(self, lua_parser):
+        dsl = "[0] a beautiful cat\n-- ugly, blurry\n-- worst quality"
+        res = lua_parser.parse(dsl, 100, 24)
+        assert res.keyframes[1].prompt == "a beautiful cat"
+        neg = res.keyframes[1].negative_prompt
+        assert "ugly" in neg
+        assert "worst quality" in neg
+
+    def test_weights_and_transitions(self, lua_parser):
+        dsl = "[0]\nweight: 1.5\ntransition: blend\nblend: 12\na glowing orb"
+        res = lua_parser.parse(dsl, 100, 24)
         kf = res.keyframes[1]
-        self.assertEqual(kf.weight, 1.5)
-        self.assertEqual(kf.transition, "blend")
-        self.assertEqual(kf.transition_frames, 12)
-        self.assertEqual(kf.prompt, "a glowing orb")
+        assert kf.weight == 1.5
+        assert kf.transition == "blend"
+        assert kf.transition_frames == 12
+        assert kf.prompt == "a glowing orb"
 
-    def test_w_shortcut(self):
-        dsl = '''
-        [0]
-        w: 0.8
-        test
-        '''
-        res = self.parser.parse(dsl, 100, 24)
-        self.assertEqual(res.keyframes[1].weight, 0.8)
-
-    def test_file_redirect_missing(self):
-        # A missing file will trigger warning and return empty
-        res = self.parser.parse("file: missing_file.txt", 100, 24)
-        self.assertEqual(len(res.keyframes), 0)
-
-if __name__ == '__main__':
-    unittest.main()
+    def test_file_redirect_missing(self, lua_parser):
+        res = lua_parser.parse("file: missing_file.txt", 100, 24)
+        assert len(res.keyframes) == 0

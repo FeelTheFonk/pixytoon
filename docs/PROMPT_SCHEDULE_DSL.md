@@ -101,7 +101,7 @@ A keyframe consists of:
 | `blend` / `linear_blend` | Linear SLERP interpolation between prompt embeddings over `blend:` frames. |
 | `ease_in` | Slow start, accelerating crossfade (quadratic ease-in). |
 | `ease_out` | Fast start, decelerating crossfade (quadratic ease-out). |
-| `ease_in_out` | S-curve crossfade (cubic ease-in-out). |
+| `ease_in_out` | S-curve crossfade (quadratic ease-in-out). |
 | `cubic` | Cubic Bézier crossfade (smooth, balanced). |
 | `slerp` | Spherical linear interpolation in embedding space (alias for `blend`). |
 
@@ -126,9 +126,9 @@ final_embedding = slerp(embed_outgoing, embed_incoming, blend_weight)
 ### Per-Keyframe Parameter Overrides
 
 When `denoise:`, `cfg:`, or `steps:` directives are present, they override the
-base parameters for frames within that keyframe's region. Parameters are
-interpolated between keyframes using the same easing curve as the prompt
-transition, unless the next keyframe specifies a different value.
+base parameters for frames within that keyframe's region. `denoise:` and `cfg:`
+are linearly interpolated between adjacent keyframes. `steps:` is not
+interpolated (integer value from the active keyframe is used directly).
 
 ### The `{auto}` Directive
 
@@ -163,7 +163,9 @@ are preserved.
 | `E009` | Steps out of range (< 1 or > 150) |
 | `E010` | File reference path traversal rejected |
 | `E011` | File reference not found |
-| `E012` | Unrecognized directive syntax |
+| `E012` | Content before first time marker, or `file:` not sole content |
+| `E013` | DSL text exceeds size limit (100 KB) |
+| `E014` | Too many keyframes (max 500) — schedule truncated |
 
 ### Warnings (generation proceeds)
 
@@ -174,6 +176,8 @@ are preserved.
 | `W003` | Very short transition window (< 2 frames) may be visually imperceptible |
 | `W004` | Very high weight (> 2.0) may cause artifacts |
 | `W005` | `{auto}` with all prompts already filled (auto-fill has nothing to do) |
+| `W006` | `blend:` value has no effect with `hard_cut` transition |
+| `W007` | Line looks like an unrecognized directive (e.g. `foo: bar`) |
 
 ---
 

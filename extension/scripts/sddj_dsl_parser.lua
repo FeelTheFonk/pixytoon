@@ -252,7 +252,7 @@ function M.parse(dsl_text, total_frames, fps, base_dir)
     end
 
     -- Auto directive
-    if line:match("^%s*{auto}%s*$") then
+    if line:lower():match("^%s*{auto}%s*$") then
       has_auto = true
       goto continue
     end
@@ -346,6 +346,16 @@ function M.parse(dsl_text, total_frames, fps, base_dir)
         if valid then
           current.weight = w1
           current.weight_end = w2
+          if w1 > 2.0 then
+            warnings[#warnings + 1] = { line = line_num, code = "W004",
+              message = string.format("Weight %.2f > 2.0 may cause artifacts", w1),
+              severity = "warning" }
+          end
+          if w2 > 2.0 then
+            warnings[#warnings + 1] = { line = line_num, code = "W004",
+              message = string.format("Weight end %.2f > 2.0 may cause artifacts", w2),
+              severity = "warning" }
+          end
         end
       elseif dir_type == "denoise" then
         if dir_value < 0.0 or dir_value > 1.0 then
@@ -406,9 +416,14 @@ function M.parse(dsl_text, total_frames, fps, base_dir)
     for i = #keyframes, _MAX_KEYFRAMES + 1, -1 do keyframes[i] = nil end
   end
 
-  -- Validate chronological order
+  -- Validate chronological order and duplicates
   for i = 2, #keyframes do
-    if keyframes[i].frame <= keyframes[i - 1].frame then
+    if keyframes[i].frame == keyframes[i - 1].frame then
+      errors[#errors + 1] = {
+        line = builders[i].line, code = "E002",
+        message = string.format("Duplicate time marker: frame %d", keyframes[i].frame),
+      }
+    elseif keyframes[i].frame < keyframes[i - 1].frame then
       errors[#errors + 1] = {
         line = builders[i].line, code = "E003",
         message = string.format("Keyframe at frame %d is not after previous frame %d",
@@ -427,16 +442,26 @@ function M.parse(dsl_text, total_frames, fps, base_dir)
   end
 
   -- Validate transition windows
-  for i = 2, #keyframes do
+  for i = 1, #keyframes do
     local kf = keyframes[i]
     if kf.transition_frames > 0 then
-      local gap = kf.frame - keyframes[i - 1].frame
-      if kf.transition_frames > gap then
-        errors[#errors + 1] = {
-          line = builders[i].line, code = "E004",
-          message = string.format("Transition frames (%d) exceeds gap to previous keyframe (%d frames)",
-            kf.transition_frames, gap),
+      if kf.transition == "hard_cut" then
+        warnings[#warnings + 1] = {
+          line = builders[i].line, code = "W006",
+          message = string.format("blend: %d has no effect with hard_cut transition",
+            kf.transition_frames),
+          severity = "warning",
         }
+      end
+      if i > 1 then
+        local gap = kf.frame - keyframes[i - 1].frame
+        if kf.transition_frames > gap then
+          errors[#errors + 1] = {
+            line = builders[i].line, code = "E004",
+            message = string.format("Transition frames (%d) exceeds gap to previous keyframe (%d frames)",
+              kf.transition_frames, gap),
+          }
+        end
       end
     end
   end

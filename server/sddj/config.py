@@ -159,6 +159,7 @@ class Settings(BaseSettings):
         "env_prefix": "SDDJ_",
         "env_file": str(_SERVER_ROOT / ".env"),
         "env_file_encoding": "utf-8",
+        "extra": "ignore",
     }
 
     @cached_property

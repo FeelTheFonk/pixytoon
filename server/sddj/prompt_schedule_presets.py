@@ -18,61 +18,94 @@ _BUILTIN_PRESETS: dict[str, dict] = {
     "evolving_3act": {
         "name": "evolving_3act",
         "description": "3-act structure: intro, development, climax",
-        "version": 1,
-        "keyframes": [
-            {"frame": 0, "prompt": "", "transition": "hard_cut"},
-            {"frame": 3, "prompt": "", "transition": "hard_cut"},
-            {"frame": 6, "prompt": "", "transition": "hard_cut"},
+        "version": 2,
+        "keyframe_ratios": [
+            {"ratio": 0.0, "prompt": "", "transition": "hard_cut"},
+            {"ratio": 0.33, "prompt": "", "transition": "ease_in_out",
+             "blend_ratio": 0.08},
+            {"ratio": 0.66, "prompt": "", "transition": "ease_in_out",
+             "blend_ratio": 0.08},
         ],
-        "auto_fill": {"enabled": True, "randomness": 5, "locked_fields": {}},
+        "auto_fill": True,
+        "auto_fill_randomness": 5,
     },
     "style_morph_4": {
         "name": "style_morph_4",
         "description": "4-phase style evolution with blend transitions",
-        "version": 1,
-        "keyframes": [
-            {"frame": 0, "prompt": "", "transition": "hard_cut"},
-            {"frame": 2, "prompt": "", "transition": "blend", "transition_frames": 2},
-            {"frame": 5, "prompt": "", "transition": "blend", "transition_frames": 2},
-            {"frame": 8, "prompt": "", "transition": "blend", "transition_frames": 2},
+        "version": 2,
+        "keyframe_ratios": [
+            {"ratio": 0.0, "prompt": "", "transition": "hard_cut"},
+            {"ratio": 0.25, "prompt": "", "transition": "blend",
+             "blend_ratio": 0.10},
+            {"ratio": 0.50, "prompt": "", "transition": "blend",
+             "blend_ratio": 0.10},
+            {"ratio": 0.75, "prompt": "", "transition": "blend",
+             "blend_ratio": 0.10},
         ],
-        "auto_fill": {"enabled": True, "randomness": 8, "locked_fields": {}},
+        "auto_fill": True,
+        "auto_fill_randomness": 8,
     },
     "beat_alternating": {
         "name": "beat_alternating",
         "description": "Rapid A-B alternation (ideal for audio beat sync)",
-        "version": 1,
-        "keyframes": [
-            {"frame": 0, "prompt": "", "transition": "hard_cut"},
-            {"frame": 4, "prompt": "", "transition": "hard_cut"},
+        "version": 2,
+        "keyframe_ratios": [
+            {"ratio": 0.0, "prompt": "", "transition": "hard_cut"},
+            {"ratio": 0.50, "prompt": "", "transition": "hard_cut"},
         ],
-        "auto_fill": {"enabled": True, "randomness": 10, "locked_fields": {}},
+        "auto_fill": True,
+        "auto_fill_randomness": 10,
     },
     "slow_drift": {
         "name": "slow_drift",
         "description": "Gentle prompt evolution with long blend window",
-        "version": 1,
-        "keyframes": [
-            {"frame": 0, "prompt": "", "transition": "hard_cut"},
-            {"frame": 4, "prompt": "", "transition": "blend", "transition_frames": 4},
+        "version": 2,
+        "keyframe_ratios": [
+            {"ratio": 0.0, "prompt": "", "transition": "hard_cut"},
+            {"ratio": 0.50, "prompt": "", "transition": "blend",
+             "blend_ratio": 0.25},
         ],
-        "auto_fill": {"enabled": True, "randomness": 3, "locked_fields": {}},
+        "auto_fill": True,
+        "auto_fill_randomness": 3,
     },
     "rapid_cuts_6": {
         "name": "rapid_cuts_6",
         "description": "6 rapid hard-cut scene changes",
-        "version": 1,
-        "keyframes": [
-            {"frame": 0, "prompt": "", "transition": "hard_cut"},
-            {"frame": 2, "prompt": "", "transition": "hard_cut"},
-            {"frame": 4, "prompt": "", "transition": "hard_cut"},
-            {"frame": 6, "prompt": "", "transition": "hard_cut"},
-            {"frame": 8, "prompt": "", "transition": "hard_cut"},
-            {"frame": 10, "prompt": "", "transition": "hard_cut"},
+        "version": 2,
+        "keyframe_ratios": [
+            {"ratio": 0.0, "prompt": "", "transition": "hard_cut"},
+            {"ratio": 0.17, "prompt": "", "transition": "hard_cut"},
+            {"ratio": 0.33, "prompt": "", "transition": "hard_cut"},
+            {"ratio": 0.50, "prompt": "", "transition": "hard_cut"},
+            {"ratio": 0.67, "prompt": "", "transition": "hard_cut"},
+            {"ratio": 0.83, "prompt": "", "transition": "hard_cut"},
         ],
-        "auto_fill": {"enabled": True, "randomness": 15, "locked_fields": {}},
+        "auto_fill": True,
+        "auto_fill_randomness": 15,
     },
 }
+
+
+def resolve_preset_keyframes(
+    preset: dict, total_frames: int,
+) -> list[dict]:
+    """Resolve ratio-based preset keyframes to absolute frame indices.
+
+    Handles both v2 (keyframe_ratios) and legacy v1 (keyframes) formats.
+    """
+    if "keyframe_ratios" in preset:
+        keyframes = []
+        for kr in preset["keyframe_ratios"]:
+            kf = dict(kr)
+            ratio = kf.pop("ratio", 0.0)
+            blend_ratio = kf.pop("blend_ratio", None)
+            kf["frame"] = min(total_frames - 1, max(0, round(ratio * total_frames)))
+            if blend_ratio is not None:
+                kf["transition_frames"] = max(1, round(blend_ratio * total_frames))
+            keyframes.append(kf)
+        return keyframes
+    # Legacy v1: return as-is
+    return list(preset.get("keyframes", []))
 
 
 class PromptSchedulePresetsManager:
@@ -111,6 +144,12 @@ class PromptSchedulePresetsManager:
         if not path.is_file():
             raise FileNotFoundError(f"Preset not found: {name!r}")
         return json.loads(path.read_text(encoding="utf-8"))
+
+    def get_preset_resolved(self, name: str, total_frames: int) -> dict:
+        """Load a preset and resolve ratio-based keyframes to absolute frames."""
+        preset = self.get_preset(name)
+        preset["keyframes"] = resolve_preset_keyframes(preset, total_frames)
+        return preset
 
     def save_preset(self, name: str, data: dict) -> None:
         """Save a user preset. Cannot overwrite builtins."""

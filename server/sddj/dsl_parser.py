@@ -25,6 +25,10 @@ from .prompt_schedule import (
 
 log = logging.getLogger("sddj.dsl_parser")
 
+# ─── Safety Limits (aligned with Lua parser) ────────────────
+
+_MAX_DSL_LENGTH = 100_000   # 100 KB max DSL text
+_MAX_KEYFRAMES = 500        # max keyframes in a schedule
 
 # ─── Token Patterns ─────────────────────────────────────────
 
@@ -55,6 +59,8 @@ _RE_DENOISE = re.compile(r"^\s*denoise:\s*(\d+(?:\.\d+)?)\s*$", re.IGNORECASE)
 _RE_CFG = re.compile(r"^\s*cfg:\s*(\d+(?:\.\d+)?)\s*$", re.IGNORECASE)
 _RE_STEPS = re.compile(r"^\s*steps:\s*(\d+)\s*$", re.IGNORECASE)
 _RE_NEGATIVE = re.compile(r"^\s*--\s*(.*)$")
+# Detect directive-like lines that aren't recognized (e.g. "foo: bar")
+_RE_DIRECTIVE_LIKE = re.compile(r"^\s*[a-zA-Z_]\w*\s*:\s*\S", re.IGNORECASE)
 
 
 @dataclass
@@ -72,7 +78,7 @@ class _KeyframeBuilder:
     cfg_scale: float | None = None
     steps: int | None = None
 
-    def build(self, default_prompt: str) -> PromptKeyframe:
+    def build(self) -> PromptKeyframe:
         prompt = ", ".join(self.prompt_lines).strip()
         negative = ", ".join(self.negative_lines).strip()
         return PromptKeyframe(
@@ -129,6 +135,17 @@ def parse(
             validation=ValidationResult(valid=True, errors=[], warnings=[
                 ValidationError(None, None, "W002", "Empty schedule", "warning"),
             ]),
+        )
+
+    # Safety: reject oversized DSL text
+    if len(dsl_text) > _MAX_DSL_LENGTH:
+        return ParseResult(
+            schedule=None,
+            validation=ValidationResult(valid=False, errors=[
+                ValidationError(None, None, "E013",
+                                f"DSL text too long ({len(dsl_text)} bytes, "
+                                f"max {_MAX_DSL_LENGTH})"),
+            ], warnings=[]),
         )
 
     # Handle file reference
@@ -236,20 +253,28 @@ def parse(
                     line_num, None, "E006",
                     f"Weight {w} out of range [0.1, 5.0]",
                 ))
-            elif w > 2.0:
-                warnings.append(ValidationError(
-                    line_num, None, "W004",
-                    f"Weight {w} > 2.0 may cause artifacts",
-                    "warning",
-                ))
             else:
                 current.weight = w
-                current.weight_end = w_end
-            if w_end is not None and (w_end < 0.1 or w_end > 5.0):
-                errors.append(ValidationError(
-                    line_num, None, "E006",
-                    f"Weight end {w_end} out of range [0.1, 5.0]",
-                ))
+                if w > 2.0:
+                    warnings.append(ValidationError(
+                        line_num, None, "W004",
+                        f"Weight {w} > 2.0 may cause artifacts",
+                        "warning",
+                    ))
+            if w_end is not None:
+                if w_end < 0.1 or w_end > 5.0:
+                    errors.append(ValidationError(
+                        line_num, None, "E006",
+                        f"Weight end {w_end} out of range [0.1, 5.0]",
+                    ))
+                else:
+                    current.weight_end = w_end
+                    if w_end > 2.0:
+                        warnings.append(ValidationError(
+                            line_num, None, "W004",
+                            f"Weight end {w_end} > 2.0 may cause artifacts",
+                            "warning",
+                        ))
             continue
 
         # Denoise
@@ -301,6 +326,13 @@ def parse(
 
         # Prompt text (anything else)
         stripped = line.strip()
+        if stripped and _RE_DIRECTIVE_LIKE.match(line):
+            warnings.append(ValidationError(
+                line_num, None, "W007",
+                f"Line looks like an unrecognized directive: "
+                f"{stripped[:40]}",
+                "warning",
+            ))
         if stripped:
             current.prompt_lines.append(stripped)
 
@@ -319,14 +351,28 @@ def parse(
             file_ref=file_ref,
         )
 
+    # Enforce keyframe count limit
+    if len(builders) > _MAX_KEYFRAMES:
+        errors.append(ValidationError(
+            None, None, "E014",
+            f"Too many keyframes ({len(builders)}, max {_MAX_KEYFRAMES}) "
+            "— truncated",
+        ))
+        builders = builders[:_MAX_KEYFRAMES]
+
     # Build keyframes
     keyframes: list[PromptKeyframe] = []
     for b in builders:
-        keyframes.append(b.build(default_prompt))
+        keyframes.append(b.build())
 
-    # Validate chronological order
+    # Validate chronological order and duplicates
     for i in range(1, len(keyframes)):
-        if keyframes[i].frame <= keyframes[i - 1].frame:
+        if keyframes[i].frame == keyframes[i - 1].frame:
+            errors.append(ValidationError(
+                builders[i].line, None, "E002",
+                f"Duplicate time marker: frame {keyframes[i].frame}",
+            ))
+        elif keyframes[i].frame < keyframes[i - 1].frame:
             errors.append(ValidationError(
                 builders[i].line, None, "E003",
                 f"Keyframe at frame {keyframes[i].frame} is not after "
@@ -343,16 +389,25 @@ def parse(
 
     # Validate transition windows
     for i, kf in enumerate(keyframes):
-        if kf.transition_frames > 0 and i > 0:
-            gap = kf.frame - keyframes[i - 1].frame
-            if kf.transition_frames > gap:
-                errors.append(ValidationError(
-                    builders[i].line, None, "E004",
-                    f"Transition frames ({kf.transition_frames}) exceeds "
-                    f"gap to previous keyframe ({gap} frames)",
+        if kf.transition_frames > 0:
+            if kf.transition == "hard_cut":
+                warnings.append(ValidationError(
+                    builders[i].line, None, "W006",
+                    f"blend: {kf.transition_frames} has no effect with "
+                    "hard_cut transition",
+                    "warning",
                 ))
+            if i > 0:
+                gap = kf.frame - keyframes[i - 1].frame
+                if kf.transition_frames > gap:
+                    errors.append(ValidationError(
+                        builders[i].line, None, "E004",
+                        f"Transition frames ({kf.transition_frames}) exceeds "
+                        f"gap to previous keyframe ({gap} frames)",
+                    ))
 
-    schedule = PromptSchedule([], default_prompt, keyframes=keyframes)
+    schedule = PromptSchedule([], default_prompt, keyframes=keyframes,
+                                  total_frames=total_frames)
 
     return ParseResult(
         schedule=schedule,

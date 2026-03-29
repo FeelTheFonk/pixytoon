@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import sys
 import zipfile
 from pathlib import Path
 
 
 def build() -> None:
-    ext_dir = Path(__file__).resolve().parent.parent / "extension"
-    out = Path(__file__).resolve().parent.parent / "dist"
+    root = Path(__file__).resolve().parent.parent
+    ext_dir = root / "extension"
+    out = root / "dist"
+
+    if not ext_dir.is_dir():
+        print(f"[FAIL] Extension source not found: {ext_dir}", file=sys.stderr)
+        sys.exit(1)
+
     out.mkdir(exist_ok=True)
     target = out / "sddj.aseprite-extension"
 
@@ -22,6 +29,12 @@ def build() -> None:
                     arcname = item.relative_to(ext_dir)
                     zf.write(item, arcname)
                     print(f"  + {arcname}")
+
+    # Validate non-empty ZIP
+    with zipfile.ZipFile(target, "r") as zf:
+        if not zf.namelist():
+            print("[FAIL] Extension ZIP is empty — no files matched", file=sys.stderr)
+            sys.exit(1)
 
     print(f"\n[OK] Built: {target}")
     print(f"  Size: {target.stat().st_size / 1024:.1f} KB")

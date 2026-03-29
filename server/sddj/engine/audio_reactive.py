@@ -31,7 +31,7 @@ from ..image_codec import (
     resize_to_target,
     round8,
 )
-from .helpers import GenerationCancelled, _apply_hue_shift, apply_frame_motion, apply_noise_injection, apply_temporal_coherence, compute_effective_denoise, make_step_callback
+from .helpers import GenerationCancelled, _apply_hue_shift, apply_frame_motion, apply_noise_injection, apply_temporal_coherence, build_prompt_schedule, compute_effective_denoise, make_step_callback, scale_steps_for_denoise
 
 log = logging.getLogger("sddj.engine")
 
@@ -235,7 +235,6 @@ class AudioReactiveMixin:
             _control_img = resize_to_target(_control_img, target_w, target_h)
 
         # Build prompt schedule (if segments or spec provided)
-        from .helpers import build_prompt_schedule
         prompt_sched = build_prompt_schedule(req)
 
         log.info("Audio-reactive chain: %d frames, mode=%s, steps=%d, seed_base=%d",
@@ -287,11 +286,54 @@ class AudioReactiveMixin:
 
                 generator = torch.Generator("cuda").manual_seed(frame_seed)
 
-                # Resolve prompt for this frame (may vary with prompt schedule)
-                frame_prompt = (
-                    prompt_sched.get_prompt(frame_idx / audio_fps)
-                    if prompt_sched else req.prompt
-                )
+                # Resolve prompt for this frame (keyframe-based with SLERP blending)
+                frame_prompt = req.prompt
+                frame_neg = effective_neg
+                blend_embeds = None  # (prompt_embeds, neg_embeds) when blending
+                if prompt_sched and prompt_sched.keyframes:
+                    blend_info = prompt_sched.get_blend_info_for_frame(frame_idx)
+                    frame_prompt = blend_info.effective_prompt or frame_prompt
+                    if blend_info.negative_prompt:
+                        frame_neg = self._build_effective_negative(
+                            blend_info.negative_prompt, req.negative_ti)
+                    # SLERP embedding blend during transitions
+                    if blend_info.is_blending:
+                        try:
+                            from ..embedding_blend import blend_prompt_embeds
+                            pipe_for_embed = (
+                                self._pipe if frame_idx == 0
+                                else self._img2img_pipe
+                            )
+                            blend_embeds = blend_prompt_embeds(
+                                pipe_for_embed,
+                                blend_info.prompt_a,
+                                blend_info.prompt_b,
+                                blend_info.blend_weight,
+                                negative_prompt=frame_neg,
+                                negative_prompt_b=blend_info.negative_prompt_b,
+                                clip_skip=req.clip_skip,
+                            )
+                            log.debug(
+                                "Audio frame %d: SLERP blend %.2f (%s → %s)",
+                                frame_idx, blend_info.blend_weight,
+                                blend_info.prompt_a[:30],
+                                blend_info.prompt_b[:30],
+                            )
+                        except Exception as e:
+                            log.warning("SLERP blend failed audio frame %d: %s", frame_idx, e)
+                    # Per-keyframe parameter overrides
+                    if blend_info.denoise_strength is not None:
+                        eff_denoise, eff_scaled_steps, _sub_floor_alpha = compute_effective_denoise(
+                            req.steps, blend_info.denoise_strength)
+                        _raw_denoise = blend_info.denoise_strength
+                    if blend_info.cfg_scale is not None:
+                        eff_cfg = blend_info.cfg_scale
+                    if blend_info.steps is not None:
+                        eff_scaled_steps = scale_steps_for_denoise(blend_info.steps, eff_denoise)
+                elif prompt_sched and prompt_sched.segments:
+                    # Legacy time-based fallback for old-style segments
+                    frame_prompt = prompt_sched.get_prompt(frame_idx / audio_fps)
+                    frame_neg = effective_neg
 
                 # Progress callback
                 step_callback = make_step_callback(
@@ -310,9 +352,7 @@ class AudioReactiveMixin:
                 # Frame 0: initial generation
                 if frame_idx == 0:
                     if req.mode == GenerationMode.TXT2IMG:
-                        image = self._pipe(
-                            prompt=frame_prompt,
-                            negative_prompt=effective_neg,
+                        gen_kwargs = dict(
                             num_inference_steps=req.steps,
                             guidance_scale=eff_cfg,
                             width=target_w,
@@ -321,13 +361,18 @@ class AudioReactiveMixin:
                             clip_skip=req.clip_skip,
                             callback_on_step_end=step_callback,
                             output_type="pil",
-                        ).images[0]
+                        )
+                        if blend_embeds is not None:
+                            gen_kwargs["prompt_embeds"] = blend_embeds[0]
+                            gen_kwargs["negative_prompt_embeds"] = blend_embeds[1]
+                        else:
+                            gen_kwargs["prompt"] = frame_prompt
+                            gen_kwargs["negative_prompt"] = frame_neg
+                        image = self._pipe(**gen_kwargs).images[0]
                     elif req.mode == GenerationMode.IMG2IMG:
                         if _source_img is None:
                             raise ValueError("img2img requires source_image")
-                        image = self._img2img_pipe(
-                            prompt=frame_prompt,
-                            negative_prompt=effective_neg,
+                        gen_kwargs = dict(
                             image=_source_img,
                             num_inference_steps=eff_scaled_steps,
                             guidance_scale=eff_cfg,
@@ -336,15 +381,20 @@ class AudioReactiveMixin:
                             clip_skip=req.clip_skip,
                             callback_on_step_end=step_callback,
                             output_type="pil",
-                        ).images[0]
+                        )
+                        if blend_embeds is not None:
+                            gen_kwargs["prompt_embeds"] = blend_embeds[0]
+                            gen_kwargs["negative_prompt_embeds"] = blend_embeds[1]
+                        else:
+                            gen_kwargs["prompt"] = frame_prompt
+                            gen_kwargs["negative_prompt"] = frame_neg
+                        image = self._img2img_pipe(**gen_kwargs).images[0]
                         if _sub_floor_alpha < 1.0:
                             image = Image.blend(_source_img, image, _sub_floor_alpha)
                     elif req.mode == GenerationMode.INPAINT:
                         if _source_img is None or _mask_img is None:
                             raise ValueError("inpaint requires source_image and mask_image")
-                        inpainted = self._img2img_pipe(
-                            prompt=frame_prompt,
-                            negative_prompt=effective_neg,
+                        gen_kwargs = dict(
                             image=_source_img,
                             num_inference_steps=eff_scaled_steps,
                             guidance_scale=eff_cfg,
@@ -353,7 +403,14 @@ class AudioReactiveMixin:
                             clip_skip=req.clip_skip,
                             callback_on_step_end=step_callback,
                             output_type="pil",
-                        ).images[0]
+                        )
+                        if blend_embeds is not None:
+                            gen_kwargs["prompt_embeds"] = blend_embeds[0]
+                            gen_kwargs["negative_prompt_embeds"] = blend_embeds[1]
+                        else:
+                            gen_kwargs["prompt"] = frame_prompt
+                            gen_kwargs["negative_prompt"] = frame_neg
+                        inpainted = self._img2img_pipe(**gen_kwargs).images[0]
                         if _sub_floor_alpha < 1.0:
                             inpainted = Image.blend(_source_img, inpainted, _sub_floor_alpha)
                         image = composite_with_mask(_source_img, inpainted, _mask_img)
@@ -362,9 +419,7 @@ class AudioReactiveMixin:
                             raise ValueError("controlnet requires control_image")
                         self._ensure_controlnet(req.mode)
                         cn_scale = max(0.0, min(2.0, frame_params.get("controlnet_scale", 1.0)))
-                        image = self._controlnet_pipe(
-                            prompt=frame_prompt,
-                            negative_prompt=effective_neg,
+                        gen_kwargs = dict(
                             image=_control_img,
                             num_inference_steps=req.steps,
                             guidance_scale=eff_cfg,
@@ -375,7 +430,14 @@ class AudioReactiveMixin:
                             controlnet_conditioning_scale=cn_scale,
                             callback_on_step_end=step_callback,
                             output_type="pil",
-                        ).images[0]
+                        )
+                        if blend_embeds is not None:
+                            gen_kwargs["prompt_embeds"] = blend_embeds[0]
+                            gen_kwargs["negative_prompt_embeds"] = blend_embeds[1]
+                        else:
+                            gen_kwargs["prompt"] = frame_prompt
+                            gen_kwargs["negative_prompt"] = frame_neg
+                        image = self._controlnet_pipe(**gen_kwargs).images[0]
                     else:
                         raise ValueError(f"Unknown mode: {req.mode}")
                 else:
@@ -393,9 +455,7 @@ class AudioReactiveMixin:
                     if req.mode.value.startswith("controlnet_") and _control_img is not None:
                         log.info("Audio frame %d: ControlNet mode uses img2img for frame coherence", frame_idx)
 
-                    image = self._img2img_pipe(
-                        prompt=frame_prompt,
-                        negative_prompt=effective_neg,
+                    gen_kwargs = dict(
                         image=source,
                         num_inference_steps=eff_scaled_steps,
                         guidance_scale=eff_cfg,
@@ -404,7 +464,14 @@ class AudioReactiveMixin:
                         clip_skip=req.clip_skip,
                         callback_on_step_end=step_callback,
                         output_type="pil",
-                    ).images[0]
+                    )
+                    if blend_embeds is not None:
+                        gen_kwargs["prompt_embeds"] = blend_embeds[0]
+                        gen_kwargs["negative_prompt_embeds"] = blend_embeds[1]
+                    else:
+                        gen_kwargs["prompt"] = frame_prompt
+                        gen_kwargs["negative_prompt"] = frame_neg
+                    image = self._img2img_pipe(**gen_kwargs).images[0]
                     if _sub_floor_alpha < 1.0:
                         image = Image.blend(source, image, _sub_floor_alpha)
 
@@ -586,7 +653,6 @@ class AudioReactiveMixin:
             raise ValueError("AnimateDiff audio img2img requires source_image")
 
         # Prompt schedule (if segments or spec provided)
-        from .helpers import build_prompt_schedule
         prompt_sched = build_prompt_schedule(req)
 
         # Results indexed by frame
@@ -610,12 +676,15 @@ class AudioReactiveMixin:
             chunk_seed = (base_seed + seed_offset) % (2**32)
             generator = torch.Generator("cuda").manual_seed(chunk_seed)
 
-            # Resolve prompt for chunk midpoint
+            # Resolve prompt for chunk midpoint (keyframe-based with fallback)
             mid_frame = c_start + num_frames // 2
-            chunk_prompt = (
-                prompt_sched.get_prompt(mid_frame / analysis.fps)
-                if prompt_sched else req.prompt
-            )
+            if prompt_sched and prompt_sched.keyframes:
+                blend_info = prompt_sched.get_blend_info_for_frame(mid_frame)
+                chunk_prompt = blend_info.effective_prompt or req.prompt
+            elif prompt_sched and prompt_sched.segments:
+                chunk_prompt = prompt_sched.get_prompt(mid_frame / analysis.fps)
+            else:
+                chunk_prompt = req.prompt
 
             # FreeInit: only first chunk
             if freeinit_enabled and chunk_idx == 0:

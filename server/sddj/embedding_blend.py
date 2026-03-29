@@ -99,6 +99,7 @@ def blend_prompt_embeds(
     prompt_b: str,
     blend_weight: float,
     negative_prompt: str = "",
+    negative_prompt_b: str = "",
     clip_skip: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Encode two prompts and blend their embeddings via SLERP.
@@ -108,7 +109,8 @@ def blend_prompt_embeds(
         prompt_a: Outgoing prompt (weight = 1 - blend_weight).
         prompt_b: Incoming prompt (weight = blend_weight).
         blend_weight: 0.0 = fully A, 1.0 = fully B.
-        negative_prompt: Negative prompt (shared, not interpolated).
+        negative_prompt: Outgoing negative prompt.
+        negative_prompt_b: Incoming negative prompt (blended with outgoing).
         clip_skip: Number of CLIP layers to skip.
 
     Returns:
@@ -118,16 +120,24 @@ def blend_prompt_embeds(
     if blend_weight <= 0.0:
         return _encode_prompt(pipe, prompt_a, negative_prompt, clip_skip)
     if blend_weight >= 1.0:
-        return _encode_prompt(pipe, prompt_b, negative_prompt, clip_skip)
+        neg = negative_prompt_b or negative_prompt
+        return _encode_prompt(pipe, prompt_b, neg, clip_skip)
 
     # Encode both prompts
-    embed_a, neg_embeds = _encode_prompt(pipe, prompt_a, negative_prompt, clip_skip)
-    embed_b, _ = _encode_prompt(pipe, prompt_b, negative_prompt, clip_skip)
+    embed_a, neg_embeds_a = _encode_prompt(pipe, prompt_a, negative_prompt, clip_skip)
+    neg_b = negative_prompt_b or negative_prompt
+    embed_b, neg_embeds_b = _encode_prompt(pipe, prompt_b, neg_b, clip_skip)
 
     # SLERP the positive embeddings
     blended = slerp(embed_a, embed_b, blend_weight)
 
-    return blended, neg_embeds
+    # SLERP the negative embeddings when both negatives differ
+    if negative_prompt_b and negative_prompt_b != negative_prompt:
+        neg_blended = slerp(neg_embeds_a, neg_embeds_b, blend_weight)
+    else:
+        neg_blended = neg_embeds_a
+
+    return blended, neg_blended
 
 
 def _encode_prompt(

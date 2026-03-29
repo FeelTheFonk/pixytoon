@@ -121,6 +121,36 @@ class TestPromptScheduleSerialization:
         assert restored.get_prompt_for_frame(0) == "A"
         assert restored.get_prompt_for_frame(5) == "B"
 
+    def test_to_dict_from_dict_all_fields(self):
+        """Roundtrip verifying ALL keyframe fields survive serialization."""
+        original = PromptSchedule.from_keyframe_dicts([
+            {
+                "frame": 0, "prompt": "A", "negative_prompt": "ugly",
+                "weight": 1.3, "weight_end": 1.8,
+                "transition": "ease_in_out", "transition_frames": 5,
+                "denoise_strength": 0.45, "cfg_scale": 7.0, "steps": 20,
+            },
+            {
+                "frame": 10, "prompt": "B", "negative_prompt": "blurry",
+                "weight": 0.9, "transition": "blend", "transition_frames": 3,
+                "denoise_strength": 0.6, "cfg_scale": 5.5,
+            },
+        ], default_prompt="default")
+        d = original.to_dict()
+        restored = PromptSchedule.from_dict(d)
+        assert restored is not None
+        for orig_kf, rest_kf in zip(original.keyframes, restored.keyframes):
+            assert rest_kf.frame == orig_kf.frame
+            assert rest_kf.prompt == orig_kf.prompt
+            assert rest_kf.negative_prompt == orig_kf.negative_prompt
+            assert rest_kf.weight == orig_kf.weight
+            assert rest_kf.weight_end == orig_kf.weight_end
+            assert rest_kf.transition == orig_kf.transition
+            assert rest_kf.transition_frames == orig_kf.transition_frames
+            assert rest_kf.denoise_strength == orig_kf.denoise_strength
+            assert rest_kf.cfg_scale == orig_kf.cfg_scale
+            assert rest_kf.steps == orig_kf.steps
+
     def test_to_dict_contains_keyframes(self):
         s = PromptSchedule.from_keyframe_dicts([
             {"frame": 0, "prompt": "X"},
@@ -163,7 +193,7 @@ class TestPromptSchedulePresetsManager:
     def test_get_builtin(self, mgr):
         data = mgr.get_preset("evolving_3act")
         assert data["name"] == "evolving_3act"
-        assert "keyframes" in data
+        assert "keyframe_ratios" in data  # v2 ratio-based format
 
     def test_save_and_get_user_preset(self, mgr):
         mgr.save_preset("my_sched", {

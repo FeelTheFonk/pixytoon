@@ -150,6 +150,7 @@ class PromptBlendInfo:
     prompt_b: str
     blend_weight: float         # 0.0 = fully A, 1.0 = fully B
     negative_prompt: str = ""
+    negative_prompt_b: str = "" # outgoing negative (for SLERP blending)
     weight: float = 1.0         # effective prompt embedding weight
     # Per-frame parameter overrides (None = use base)
     denoise_strength: float | None = None
@@ -202,9 +203,11 @@ class PromptSchedule:
         default_prompt: str,
         *,
         keyframes: list[PromptKeyframe] | None = None,
+        total_frames: int | None = None,
     ) -> None:
         self.segments = sorted(segments, key=lambda s: s.start_second)
         self.default_prompt = default_prompt
+        self.total_frames = total_frames
         # Keyframes: sorted by frame, deduplicated (last wins per frame)
         if keyframes:
             seen: dict[int, PromptKeyframe] = {}
@@ -321,7 +324,8 @@ class PromptSchedule:
         easing = get_easing(tr_type)
         blend_weight = max(0.0, min(1.0, easing(t)))
 
-        # Negative: use incoming negative prompt during blend
+        # Expose both negatives for smooth blending in embedding space
+        # effective_neg: dominant negative for display/fallback (hard switch at 0.5)
         effective_neg = neg_active if blend_weight >= 0.5 else neg_outgoing
 
         return PromptBlendInfo(
@@ -329,6 +333,7 @@ class PromptSchedule:
             prompt_b=prompt_active,
             blend_weight=blend_weight,
             negative_prompt=effective_neg,
+            negative_prompt_b=neg_active if neg_outgoing else "",
             weight=weight,
             denoise_strength=denoise,
             cfg_scale=cfg,
@@ -346,8 +351,10 @@ class PromptSchedule:
         next_frame: int
         if kf_idx + 1 < len(self.keyframes):
             next_frame = self.keyframes[kf_idx + 1].frame
+        elif self.total_frames is not None:
+            next_frame = self.total_frames
         else:
-            next_frame = kf.frame + 100  # default region length for last kf
+            next_frame = kf.frame + 100  # fallback when total_frames unknown
 
         region = next_frame - kf.frame
         if region <= 0:
@@ -441,8 +448,14 @@ class PromptSchedule:
 
             prev_frame = -1
             for i, kf in enumerate(self.keyframes):
-                # Chronological order
-                if kf.frame <= prev_frame:
+                # Duplicate / chronological order
+                if kf.frame == prev_frame:
+                    errors.append(ValidationError(
+                        line=None, column=None, code="E002",
+                        message=f"Keyframe {i}: duplicate time marker at "
+                                f"frame {kf.frame}",
+                    ))
+                elif kf.frame < prev_frame:
                     errors.append(ValidationError(
                         line=None, column=None, code="E003",
                         message=f"Keyframe {i} at frame {kf.frame} is not after "
@@ -489,6 +502,22 @@ class PromptSchedule:
                                 "cause artifacts",
                         severity="warning",
                     ))
+
+                # Weight end (animated weight)
+                if kf.weight_end is not None:
+                    if kf.weight_end < 0.1 or kf.weight_end > 5.0:
+                        errors.append(ValidationError(
+                            line=None, column=None, code="E006",
+                            message=f"Keyframe {i}: weight_end {kf.weight_end} "
+                                    "out of range [0.1, 5.0]",
+                        ))
+                    elif kf.weight_end > 2.0:
+                        warnings.append(ValidationError(
+                            line=None, column=None, code="W004",
+                            message=f"Keyframe {i}: weight_end {kf.weight_end} "
+                                    "> 2.0 may cause artifacts",
+                            severity="warning",
+                        ))
 
                 # Denoise
                 if kf.denoise_strength is not None:
@@ -732,6 +761,7 @@ def auto_fill_prompts(
              len(filled))
     return PromptSchedule(
         schedule.segments, schedule.default_prompt, keyframes=filled,
+        total_frames=schedule.total_frames,
     )
 
 
@@ -1105,8 +1135,15 @@ def _generate_positions(
     else:
         # "random" — sample with min_gap enforcement
         positions = [0]
-        candidates = list(range(min_gap, last + 1))
-        random.shuffle(candidates)
+        # Sample a bounded set of candidates instead of materialising entire range
+        n_candidates = min(last + 1 - min_gap, max(200, kf_count * 20))
+        if n_candidates > 0 and last >= min_gap:
+            candidates = random.sample(
+                range(min_gap, last + 1),
+                min(n_candidates, last + 1 - min_gap),
+            )
+        else:
+            candidates = []
         for c in candidates:
             if all(abs(c - p) >= min_gap for p in positions):
                 positions.append(c)
@@ -1271,7 +1308,11 @@ def randomize_schedule(
     return {"keyframes": keyframes, "default_prompt": base_prompt}
 
 
-def schedule_to_dsl(keyframes: list[dict]) -> str:
+def schedule_to_dsl(
+    keyframes: list[dict],
+    *,
+    include_auto: bool = False,
+) -> str:
     """Convert a list of keyframe dicts to DSL text.
 
     Output is compatible with both the Python ``dsl_parser`` and the
@@ -1280,14 +1321,12 @@ def schedule_to_dsl(keyframes: list[dict]) -> str:
     if not keyframes:
         return ""
     lines: list[str] = []
+    if include_auto:
+        lines.append("{auto}")
+        lines.append("")
     for kf in keyframes:
         lines.append(f"[{kf.get('frame', 0)}]")
-        prompt = kf.get("prompt", "")
-        if prompt:
-            lines.append(prompt)
-        neg = kf.get("negative_prompt", "")
-        if neg:
-            lines.append(f"-- {neg}")
+        # Directives first (conventional order)
         tr = kf.get("transition", "hard_cut")
         if tr != "hard_cut":
             lines.append(f"transition: {tr}")
@@ -1309,5 +1348,12 @@ def schedule_to_dsl(keyframes: list[dict]) -> str:
         steps = kf.get("steps")
         if steps is not None:
             lines.append(f"steps: {steps}")
+        # Prompt text after directives
+        prompt = kf.get("prompt", "")
+        if prompt:
+            lines.append(prompt)
+        neg = kf.get("negative_prompt", "")
+        if neg:
+            lines.append(f"-- {neg}")
         lines.append("")
     return "\n".join(lines)
