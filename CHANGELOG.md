@@ -1,4 +1,14 @@
 # Changelog
+## [0.9.75] — 2026-03
+### Provisioning Velocity & Animation Stability
+Four surgical fixes across the provisioning script, WebSocket protocol, and Lua runtime.
+
+#### Fixed
+- **Setup script multi-minute hang**: Removed the massive 1.8GB legacy AnimateDiff adapter (`guoyww/...`) from the default `--all` provisioning checklist. By default, setup now only provisions precisely what's needed for the ultra-fast AnimateDiff-Lightning pipeline, reducing fresh install duration by minutes and eliminating an unconditional background download.
+- **HuggingFace Cache False Negatives**: Corrected the cache probe sentinel for `QR Code Monster v2` to target `v2/config.json`. Previously, a missing root config triggered an aggressive ETags network scan on every run, padding setup times. The cache check is now fully local and instantaneous.
+- **WebSocket concurrent drain assertion**: Added graceful handling for `AssertionError` in the WebSocket `_send` handler. Prevents the server from crashing when fire-and-forget Animation callbacks attempt concurrent writes with final metadata responses during high-speed AnimateDiff-Lightning chunk generation.
+- **Lua `_pow2` upvalue leak**: Reordered lexical scoping in `sddj_base64.lua` to ensure codec lookup tables are declared before function closures. Resolves the `attempt to index a nil value (global '_pow2')` error that crashed `img2img`, `inpaint`, and `controlnet` extensions in Aseprite via binary base64-fallback logic.
+
 ## [0.9.74] — 2026-03
 ### Binary WebSocket Frames, CLIP Embedding Cache & SOTA Performance Hardening
 Eliminates base64 encode/decode overhead via binary WebSocket frames (-33% payload, ~25ms/frame saved), adds CLIP embedding LRU cache, bfloat16 weight snapshots, transaction batching, and 20 systemic performance fixes across the full pipeline.

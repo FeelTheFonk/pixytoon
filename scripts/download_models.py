@@ -388,7 +388,7 @@ def download_controlnets() -> None:
 def download_qrcode_monster() -> None:
     label = "ControlNet QR Code Monster v2"
     print(f"    [DL] {label} ...")
-    if _hf_snapshot_cached("monster-labs/control_v1p_sd15_qrcode_monster"):
+    if _hf_snapshot_cached("monster-labs/control_v1p_sd15_qrcode_monster", "v2/config.json"):
         print(f"      [SKIP] {label} already cached.")
         _record(label, True, "cached")
         return
@@ -411,7 +411,7 @@ def download_qrcode_monster() -> None:
 def download_animatediff() -> None:
     label = "AnimateDiff motion adapter"
     print(f"    [DL] {label} ...")
-    if _hf_snapshot_cached("ByteDance/AnimateDiff-Lightning"):
+    if _hf_snapshot_cached("guoyww/animatediff-motion-adapter-v1-5-2"):
         print(f"      [SKIP] {label} already cached.")
         _record(label, True, "cached")
         return
@@ -420,7 +420,7 @@ def download_animatediff() -> None:
 
         with temporary_online_mode():
             snapshot_download(
-                "ByteDance/AnimateDiff-Lightning",
+                "guoyww/animatediff-motion-adapter-v1-5-2",
                 ignore_patterns=["*.bin"],
             )
         print(f"      [OK] {label} cached.")
@@ -508,7 +508,7 @@ def main() -> None:
         parallel_tasks.append(("ControlNets", download_controlnets))
     if args.all or args.controlnets or args.qrcode_monster:
         parallel_tasks.append(("QR Monster", download_qrcode_monster))
-    if args.all or args.animatediff:
+    if args.animatediff:
         parallel_tasks.append(("AnimateDiff", download_animatediff))
     if args.all or args.animatediff_lightning:
         parallel_tasks.append(("AnimateDiff Lightning", download_animatediff_lightning))

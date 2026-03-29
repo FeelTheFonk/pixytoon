@@ -6,6 +6,17 @@ return function(PT)
 
 local b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
+-- ─── Lookup Tables (O(1) encode/decode) ────────────────────
+
+local _b64_lut = {}
+for i = 1, #b64chars do
+  _b64_lut[b64chars:byte(i)] = i - 1
+end
+
+-- Pre-computed power-of-two table to avoid repeated 2^n calls
+local _pow2 = {}
+for i = 0, 24 do _pow2[i] = 2 ^ i end
+
 -- ─── Encode (O(n) via table.concat + LUT) ──────────────────
 
 function PT.base64_encode(data)
@@ -36,15 +47,6 @@ end
 -- Now: byte-indexed lookup table = O(1) per lookup
 -- + table.concat instead of string concatenation (reduces GC pressure)
 -- + math.floor(acc / 2^bits) for O(1) byte extraction (no inner loop)
-
-local _b64_lut = {}
-for i = 1, #b64chars do
-  _b64_lut[b64chars:byte(i)] = i - 1
-end
-
--- Pre-computed power-of-two table to avoid repeated 2^n calls
-local _pow2 = {}
-for i = 0, 24 do _pow2[i] = 2 ^ i end
 
 function PT.base64_decode(data)
   if #data > (PT.cfg and PT.cfg.MAX_BASE64_SIZE or 104857600) then

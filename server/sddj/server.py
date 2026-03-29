@@ -1163,7 +1163,7 @@ async def _send(websocket: WebSocket, response) -> None:
             )
         else:
             await websocket.send_text(response.model_dump_json())
-    except (WebSocketDisconnect, RuntimeError):
+    except (WebSocketDisconnect, RuntimeError, AssertionError):
         pass  # Client already disconnected or connection closing
 
 
