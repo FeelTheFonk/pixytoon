@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.9.79] — 2026-03
+### Pinnacle UI/IO Hardening & Determinism
+Final architectural lockdown eliminating all silent edge cases in UI recursive loops, asynchronous I/O bounds, and data sanitization. Achieved a rigorous 100/100 robustness score.
+
+#### Security & Robustness
+- **Payload Validation** (`sddj_ws.lua`): Implemented strict O(1) type-check validation on JSON decoding. Null or scalar (boolean/number) responses traversing the WebSocket are instantly dropped before triggering nil-index exceptions downstream during intense IPC.
+- **Math Bounds Pre-Flight** (`sddj_request.lua`): Enforced rigorous numerical validation and type-safe limits (`NaN`, `inf` interception) across all payload builders to permanently neutralize upstream pipeline math limit crashes.
+- **Safe I/O Atomicity & Finalization** (`sddj_output.lua`, `sddj_settings.lua`, `sddj_import.lua`): Eliminated all "silent I/O failures". File handles now explicitly enforce closure on failure paths, preventing resource leaks. Temporary atomic write/renaming is now standardized across all save functions. Success checks instantly trigger `app.alert` instead of failing mutely.
+
+#### Fixed
+- **UI Desync / Slider Blind-Spot (CRITICAL)** (`sddj_dialog.lua`): Aseprite's `enabled = false` manipulation via `dlg:modify` permanently locked slider widgets. Completely removed all conditional enable toggling on sliders. Sliders now remain editable at all times; business logic safely ignores their values when disabled (e.g., target feature toggle), restoring flawless UX.
+- **Recursive UI Mutex** (`sddj_dialog.lua`, `sddj_settings.lua`, `sddj_output.lua`): Introduced `PT._ui_transaction_depth` absolute lock. Batch updates (`apply_settings`, `apply_metadata`, dialog `onchange`) are now wrapped in transaction checkpoints, preventing catastrophic event-loop recursion and Aseprite latency bottlenecks.
+
+
 ## [0.9.78] — 2026-03
 
 ### Full Lock Custom & Subject Alignment

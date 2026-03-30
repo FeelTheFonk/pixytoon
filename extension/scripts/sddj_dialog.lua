@@ -105,6 +105,9 @@ local TAB_PENDING = {
 
 function PT.sync_ui_conditional_states()
   if not PT.dlg then return end
+  if PT._ui_transaction_depth and PT._ui_transaction_depth > 0 then return end
+  PT._ui_transaction_depth = (PT._ui_transaction_depth or 0) + 1
+
   local dlg = PT.dlg
   local d = dlg.data
 
@@ -132,10 +135,10 @@ function PT.sync_ui_conditional_states()
   end
 
   -- Post Process
-  pcall(dlg.modify, dlg, { id = "pixel_size", enabled = (d.pixelate == true) })
+  -- pcall(dlg.modify, dlg, { id = "pixel_size", enabled = (d.pixelate == true) }) -- Aseprite slider disabled bug
   
   local qen = (d.quantize_enabled == true)
-  pcall(dlg.modify, dlg, { id = "colors", enabled = qen })
+  -- pcall(dlg.modify, dlg, { id = "colors", enabled = qen }) -- Aseprite slider disabled bug
   pcall(dlg.modify, dlg, { id = "quantize_method", enabled = qen })
   pcall(dlg.modify, dlg, { id = "dither", enabled = qen })
   
@@ -145,10 +148,10 @@ function PT.sync_ui_conditional_states()
 
   -- Animation / Audio
   if d.anim_freeinit ~= nil then
-    pcall(dlg.modify, dlg, { id = "anim_freeinit_iters", enabled = (d.anim_freeinit == true) })
+    -- pcall(dlg.modify, dlg, { id = "anim_freeinit_iters", enabled = (d.anim_freeinit == true) })
   end
   if d.audio_freeinit ~= nil then
-    pcall(dlg.modify, dlg, { id = "audio_freeinit_iters", enabled = (d.audio_freeinit == true) })
+    -- pcall(dlg.modify, dlg, { id = "audio_freeinit_iters", enabled = (d.audio_freeinit == true) })
   end
   
   if d.audio_use_expressions ~= nil then
@@ -168,10 +171,10 @@ function PT.sync_ui_conditional_states()
       dlg:modify{ id = p .. "invert", enabled = en }
       dlg:modify{ id = p .. "source", enabled = en }
       dlg:modify{ id = p .. "target", enabled = en }
-      dlg:modify{ id = p .. "min", enabled = en }
-      dlg:modify{ id = p .. "max", enabled = en }
-      dlg:modify{ id = p .. "attack", enabled = en }
-      dlg:modify{ id = p .. "release", enabled = en }
+      -- dlg:modify{ id = p .. "min", enabled = en } -- sliders disable bug
+      -- dlg:modify{ id = p .. "max", enabled = en }
+      -- dlg:modify{ id = p .. "attack", enabled = en }
+      -- dlg:modify{ id = p .. "release", enabled = en }
     end)
   end
   
@@ -180,6 +183,8 @@ function PT.sync_ui_conditional_states()
     pcall(dlg.modify, dlg, { id = "audio_max_frames",
       label = d.audio_max_frames == 0 and "Max Frames (0=all)" or ("Max Frames (" .. d.audio_max_frames .. ")") })
   end
+
+  PT._ui_transaction_depth = PT._ui_transaction_depth - 1
 end
 
 -- ─── Connection Section ─────────────────────────────────────
@@ -600,9 +605,9 @@ local function build_tab_postprocess()
     id = "pixelate",
     label = "Pixelate",
     selected = false,
-    onchange = function()
-      dlg:modify{ id = "pixel_size", enabled = dlg.data.pixelate }
-    end,
+    -- onchange = function()
+    --   dlg:modify{ id = "pixel_size", enabled = dlg.data.pixelate }
+    -- end,
   }
 
   dlg:slider{
@@ -618,7 +623,7 @@ local function build_tab_postprocess()
     selected = false,
     onchange = function()
       local en = dlg.data.quantize_enabled
-      dlg:modify{ id = "colors", enabled = en }
+      -- dlg:modify{ id = "colors", enabled = en }
       dlg:modify{ id = "quantize_method", enabled = en }
       dlg:modify{ id = "dither", enabled = en }
     end,
@@ -781,9 +786,9 @@ local function build_tab_animation()
     id = "anim_freeinit",
     label = "FreeInit",
     selected = false,
-    onchange = function()
-      dlg:modify{ id = "anim_freeinit_iters", enabled = dlg.data.anim_freeinit }
-    end,
+    -- onchange = function()
+    --   dlg:modify{ id = "anim_freeinit_iters", enabled = dlg.data.anim_freeinit }
+    -- end,
   }
 
   dlg:slider{
@@ -888,9 +893,9 @@ local function build_tab_audio()
     id = "audio_freeinit",
     text = "FreeInit (1st chunk)",
     selected = false,
-    onchange = function()
-      dlg:modify{ id = "audio_freeinit_iters", enabled = dlg.data.audio_freeinit }
-    end,
+    -- onchange = function()
+    --   dlg:modify{ id = "audio_freeinit_iters", enabled = dlg.data.audio_freeinit }
+    -- end,
   }
   dlg:slider{
     id = "audio_freeinit_iters",
@@ -962,7 +967,7 @@ local function build_tab_audio()
       for i = 1, 6 do
         local en = (i <= count)
         local p = "mod" .. i .. "_"
-        for _, s in ipairs({ "enable", "invert", "source", "target", "min", "max", "attack", "release" }) do
+        for _, s in ipairs({ "enable", "invert", "source", "target" }) do -- sliders disable bug
           dlg:modify{ id = p .. s, enabled = en }
         end
       end
@@ -1036,7 +1041,7 @@ local function build_tab_audio()
   -- Initial: disable slots beyond default count (2)
   for i = 3, 6 do
     local p = "mod" .. i .. "_"
-    for _, s in ipairs({ "enable", "invert", "source", "target", "min", "max", "attack", "release" }) do
+    for _, s in ipairs({ "enable", "invert", "source", "target" }) do -- sliders disable bug
       dlg:modify{ id = p .. s, enabled = false }
     end
   end

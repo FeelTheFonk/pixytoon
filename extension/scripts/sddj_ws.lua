@@ -194,6 +194,10 @@ function PT.connect()
         if #data < 4 + json_len then return end
         local json_str = data:sub(5, 4 + json_len)
         local ok, response = pcall(PT.json.decode, json_str)
+        if ok and type(response) ~= "table" then
+          ok = false
+          response = "Invalid binary JSON structure (not a table)"
+        end
         if not ok then
           PT.update_status("Binary JSON error: " .. tostring(response))
           return
@@ -216,6 +220,10 @@ function PT.connect()
           return
         end
         local ok, response = pcall(PT.json.decode, data)
+        if ok and type(response) ~= "table" then
+          ok = false
+          response = "Invalid JSON structure (not a table)"
+        end
         if not ok then
           PT.update_status("JSON error: " .. tostring(response))
           return

@@ -5,17 +5,24 @@
 return function(PT)
 
 -- Clamp a numeric value to [lo, hi]
-local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v or lo)) end
+local function clamp(v, lo, hi)
+  if type(v) ~= "number" or v ~= v then v = lo end
+  return math.max(lo, math.min(hi, v))
+end
 
 function PT.parse_size()
-  local s = PT.dlg.data.output_size
+  local s = tostring(PT.dlg.data.output_size or "512x512")
   local w, h = s:match("(%d+)x(%d+)")
-  return tonumber(w) or 512, tonumber(h) or 512
+  w = tonumber(w) or 512
+  h = tonumber(h) or 512
+  if w <= 0 or w ~= w then w = 512 end
+  if h <= 0 or h ~= h then h = 512 end
+  return w, h
 end
 
 function PT.parse_seed()
-  local v = tonumber(PT.dlg.data.seed) or -1
-  if v ~= math.floor(v) then v = -1 end
+  local v = tonumber(PT.dlg.data.seed)
+  if type(v) ~= "number" or v ~= v or v ~= math.floor(v) then v = -1 end
   return v
 end
 

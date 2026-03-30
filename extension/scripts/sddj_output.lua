@@ -41,12 +41,18 @@ end
 function PT.ensure_date_dir()
   local root = PT.get_output_root()
   if not app.fs.isDirectory(root) then
-    if not app.fs.makeDirectory(root) then return nil end
+    if not app.fs.makeDirectory(root) then
+      PT.update_status("Cannot create output root: " .. tostring(root))
+      return nil
+    end
   end
   local date_str = os.date("%Y-%m-%d")
   local date_dir = app.fs.joinPath(root, date_str)
   if not app.fs.isDirectory(date_dir) then
-    if not app.fs.makeDirectory(date_dir) then return nil end
+    if not app.fs.makeDirectory(date_dir) then
+      PT.update_status("Cannot create output folder: " .. tostring(date_dir))
+      return nil
+    end
   end
   return date_dir
 end
@@ -80,6 +86,8 @@ function PT.save_to_output(resp, meta)
       if f then
         f:write(img_data)
         f:close()
+      else
+        PT.update_status("Save I/O Error: Cannot write to " .. tostring(png_path))
       end
     end
 
@@ -91,6 +99,8 @@ function PT.save_to_output(resp, meta)
       if jf then
         jf:write(PT.json.encode(meta))
         jf:close()
+      else
+        PT.update_status("Save I/O Error: Cannot write to " .. tostring(json_path))
       end
     end
   end)
@@ -149,6 +159,8 @@ function PT.save_animation_frame(resp)
         if f then
           f:write(img_data)
           f:close()
+        else
+          PT.update_status("Anim I/O Error: Cannot write frame to " .. tostring(frame_path))
         end
       end
       PT.anim.last_saved_frame = frame_path
@@ -164,6 +176,8 @@ function PT.save_animation_frame(resp)
           dst:write(data)
           dst:close()
           PT.anim.output_count = PT.anim.output_count + 1
+        else
+          PT.update_status("Anim I/O Error: Cannot copy fallback frame")
         end
       end
     end
@@ -184,6 +198,8 @@ function PT.save_animation_meta(resp)
     if jf then
       jf:write(PT.json.encode(meta))
       jf:close()
+    else
+      PT.update_status("Anim Meta I/O Error: Cannot write to " .. tostring(json_path))
     end
   end)
   if not ok then
@@ -235,6 +251,9 @@ end
 
 function PT.apply_metadata(meta)
   if not meta or not PT.dlg then return end
+  
+  PT._ui_transaction_depth = (PT._ui_transaction_depth or 0) + 1
+
   -- Text fields
   if meta.prompt then PT.dlg:modify{ id = "prompt", text = meta.prompt } end
   if meta.negative_prompt then PT.dlg:modify{ id = "negative_prompt", text = meta.negative_prompt } end
@@ -323,6 +342,8 @@ function PT.apply_metadata(meta)
   if meta.custom_position then
     pcall(PT.dlg.modify, PT.dlg, { id = "custom_position", option = meta.custom_position })
   end
+
+  PT._ui_transaction_depth = PT._ui_transaction_depth - 1
 
   -- Centralized sync of all conditional widget states after data injection
   PT.sync_ui_conditional_states()

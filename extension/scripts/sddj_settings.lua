@@ -200,6 +200,9 @@ end
 function PT.apply_settings(s)
   if not s or not PT.dlg then return end
   local dlg = PT.dlg
+
+  PT._ui_transaction_depth = (PT._ui_transaction_depth or 0) + 1
+
   -- Core fields from schema (type-validated + pcall for comboboxes)
   for _, field in ipairs(_FIELD_SCHEMA) do
     _apply_field(dlg, field[1], field[2], s[field[1]])
@@ -217,6 +220,8 @@ function PT.apply_settings(s)
   end
   -- Sync output state
   if s.save_output ~= nil then PT.output.enabled = s.save_output end
+
+  PT._ui_transaction_depth = PT._ui_transaction_depth - 1
 
   -- Centralized sync of all conditional widget states, labels, and mode hints
   PT.sync_ui_conditional_states()
