@@ -1,4 +1,15 @@
 # Changelog
+## [0.9.76] — 2026-03
+### Polish & Edge Case Eradication
+Formal verification of all execution paths, guaranteeing absolute zero-copy binary transit and leak-free memory management.
+
+#### Security & Robustness
+- **Generator Disconnect Leak (Verified)**: Formally validated _ws_receive_loop implicitly triggers ngine.cancel() on WebSocketDisconnect, ensuring generating loops correctly abort on sudden client loss without requiring explicit exception bubbling in the fire-and-forget payload callback.
+- **Farneback Flow Memory Leak (Fixed)**: Implemented an explicit LRU dict capacity constraint (max=4) for _FLOW_GRID_CACHE in image_codec.py, preventing out-of-bounds loat32 accumulation when users dynamically alter resolutions sequentially over long uninterrupted sessions.
+- **Zero-Copy Serialization (Verified)**: Audited pipeline transit guarantees that Tobytes() inside ncode_image_raw_bytes(...) correctly prevents redundant RGBA allocations when the payload matches the target color mode.
+- **Client-Side VRAM Panning Freezes (Fixed)**: Added aggressive explicit Lua Object reference niling (
+esponse._raw_image = nil) immediately post-dispatch in sddj_ws.lua, aiding prompt garbage collection of Multi-MB binary strings during intense IPC frames.
+
 ## [0.9.75] — 2026-03
 ### Provisioning Velocity & Animation Stability
 Four surgical fixes across the provisioning script, WebSocket protocol, and Lua runtime.

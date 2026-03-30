@@ -424,6 +424,23 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
             effective = f"{effective}, {ti_str}" if effective else ti_str
         return effective
 
+    def _build_ti_suffix(self, ti_specs: list | None) -> str:
+        """Build just the TI embedding token suffix string (no base negative).
+
+        Used by animation loops to pre-compute the suffix once and concatenate
+        it directly in per-frame blend paths, avoiding repeated _build_effective_negative calls.
+        """
+        if not ti_specs:
+            return ""
+        ti_parts = []
+        for ti_spec in ti_specs:
+            if ti_spec.name in self._loaded_ti_tokens:
+                if abs(ti_spec.weight - 1.0) < 0.01:
+                    ti_parts.append(ti_spec.name)
+                else:
+                    ti_parts.append(f"({ti_spec.name}:{ti_spec.weight:.2f})")
+        return ", ".join(ti_parts)
+
     def generate(
         self,
         req: GenerateRequest,

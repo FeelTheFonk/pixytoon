@@ -149,11 +149,12 @@ function PT.import_result_as_frame(resp)
       end
 
       -- Validate layer exists before creating cel
+      -- Use cached check: if layer was created by us and sprite hasn't changed layers,
+      -- skip the O(n) iteration. pcall guards against deleted/invalid layer refs.
       local layer_valid = false
       if img and PT.seq.layer and spr.frames[frame_num] then
-        for _, layer in ipairs(spr.layers) do
-          if layer == PT.seq.layer then layer_valid = true; break end
-        end
+        local ok, _ = pcall(function() return PT.seq.layer.name end)
+        layer_valid = ok and PT.seq.layer.sprite == spr
       end
       if layer_valid then
         spr:newCel(PT.seq.layer, spr.frames[frame_num], img, Point(0, 0))

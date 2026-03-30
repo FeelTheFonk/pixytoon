@@ -9,7 +9,6 @@ import json as _json_module
 import logging
 import os
 import struct
-import sys
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -1155,7 +1154,27 @@ async def _send(websocket: WebSocket, response) -> None:
         raw_bytes = getattr(response, '_raw_bytes', None)
         if raw_bytes is not None:
             # Binary frame: [uint32 LE meta_len][JSON metadata][raw image bytes]
-            meta = response.model_dump(exclude={"image"})
+            # Bypass Pydantic model_dump() — build metadata dict directly from attrs.
+            # All 3 binary response types (ResultResponse, AnimationFrameResponse,
+            # AudioReactiveFrameResponse) share: type, image, seed, time_ms, width,
+            # height, encoding.  AnimationFrame/AudioReactiveFrame add frame_index,
+            # total_frames.  AudioReactiveFrame adds params_used.
+            meta = {
+                "type": response.type,
+                "image": "",
+                "seed": response.seed,
+                "time_ms": response.time_ms,
+                "width": response.width,
+                "height": response.height,
+                "encoding": response.encoding,
+            }
+            fi = getattr(response, "frame_index", None)
+            if fi is not None:
+                meta["frame_index"] = fi
+                meta["total_frames"] = response.total_frames
+            pu = getattr(response, "params_used", None)
+            if pu is not None:
+                meta["params_used"] = pu
             meta_json = _json_dumps_compact(meta)
             meta_bytes = meta_json.encode("utf-8")
             await websocket.send_bytes(

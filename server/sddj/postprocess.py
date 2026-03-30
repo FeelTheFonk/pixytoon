@@ -46,6 +46,10 @@ def _any_processing_active(spec: PostProcessSpec) -> bool:
     return False
 
 
+# Public alias for use by animation loops (pre-compute outside frame loop)
+is_processing_active = _any_processing_active
+
+
 def apply(image: Image.Image, spec: PostProcessSpec) -> Image.Image:
     """Apply the full post-processing pipeline.
 

@@ -13,6 +13,7 @@ from PIL import Image
 # ── Cached matrices (computed once, reused across frames) ─────
 _K_INV_CACHE: dict[tuple[int, int, float], np.ndarray] = {}
 _REF_LAB_CACHE: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+_FLOW_GRID_CACHE: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]] = {}
 
 
 def round8(v: int) -> int:
@@ -316,33 +317,36 @@ def match_color_lab(
     elif ref_arr.shape[2] == 4:
         ref_arr = ref_arr[:, :, :3]
 
-    img_lab = cv2.cvtColor(img_arr, cv2.COLOR_RGB2LAB).astype(np.float32)
+    img_lab = cv2.cvtColor(img_arr, cv2.COLOR_RGB2LAB)
+    img_means, img_stds = cv2.meanStdDev(img_lab)
+    img_means = img_means.flatten()
+    img_stds = img_stds.flatten()
 
     # Cache reference frame LAB stats (same reference across animation frames)
     ref_key = id(reference)
     if ref_key in _REF_LAB_CACHE:
         ref_means, ref_stds = _REF_LAB_CACHE[ref_key]
     else:
-        ref_lab = cv2.cvtColor(ref_arr, cv2.COLOR_RGB2LAB).astype(np.float32)
-        ref_means = np.array([ref_lab[:, :, ch].mean() for ch in range(3)])
-        ref_stds = np.array([ref_lab[:, :, ch].std() for ch in range(3)])
+        ref_lab = cv2.cvtColor(ref_arr, cv2.COLOR_RGB2LAB)
+        ref_means, ref_stds = cv2.meanStdDev(ref_lab)
+        ref_means = ref_means.flatten()
+        ref_stds = ref_stds.flatten()
         _REF_LAB_CACHE[ref_key] = (ref_means, ref_stds)
         if len(_REF_LAB_CACHE) > 8:
             oldest = next(iter(_REF_LAB_CACHE))
             del _REF_LAB_CACHE[oldest]
 
+    img_lab_f = img_lab.astype(np.float32)
     for ch in range(3):
-        img_mean = img_lab[:, :, ch].mean()
-        img_std = img_lab[:, :, ch].std()
-        ref_mean = ref_means[ch]
-        ref_std = ref_stds[ch]
-        if img_std < 1e-6 or ref_std < 1e-6:
+        if img_stds[ch] < 1e-6 or ref_stds[ch] < 1e-6:
             continue
-        img_lab[:, :, ch] = (
-            (img_lab[:, :, ch] - img_mean) * (ref_std / img_std) + ref_mean
-        )
+        # Use inplace operations to minimize further allocation
+        view = img_lab_f[:, :, ch]
+        view -= img_means[ch]
+        view *= (ref_stds[ch] / img_stds[ch])
+        view += ref_means[ch]
 
-    img_lab = np.clip(img_lab, 0, 255).astype(np.uint8)
+    img_lab = np.clip(img_lab_f, 0, 255).astype(np.uint8)
     matched = cv2.cvtColor(img_lab, cv2.COLOR_LAB2RGB)
 
     if strength < 1.0:
@@ -396,9 +400,15 @@ def apply_optical_flow_blend(
     )
 
     h, w = curr_gray.shape
-    map_y, map_x = np.mgrid[:h, :w].astype(np.float32)
-    map_x += flow[..., 0]
-    map_y += flow[..., 1]
+    if (h, w) not in _FLOW_GRID_CACHE:
+        _FLOW_GRID_CACHE[(h, w)] = np.mgrid[:h, :w].astype(np.float32)
+        if len(_FLOW_GRID_CACHE) > 4:
+            oldest = next(iter(_FLOW_GRID_CACHE))
+            del _FLOW_GRID_CACHE[oldest]
+    grid_y, grid_x = _FLOW_GRID_CACHE[(h, w)]
+    
+    map_x = grid_x + flow[..., 0]
+    map_y = grid_y + flow[..., 1]
 
     warped = cv2.remap(
         prev_arr, map_x, map_y,

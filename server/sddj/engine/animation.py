@@ -16,7 +16,8 @@ import torch.compiler
 from PIL import Image
 
 from ..config import settings
-from ..postprocess import apply as postprocess_apply
+from ..embedding_blend import blend_prompt_embeds
+from ..postprocess import apply as postprocess_apply, is_processing_active
 from ..protocol import (
     AnimationFrameResponse,
     AnimationMethod,
@@ -127,6 +128,12 @@ class AnimationMixin:
         effective_neg = self._build_effective_negative(req.negative_prompt, req.negative_ti)
         target_w, target_h = round8(req.width), round8(req.height)
 
+        # Pre-compute loop-invariant flags
+        _pp_active = is_processing_active(req.post_process)
+
+        # Pre-compute TI suffix once (avoids per-frame TI token iteration in blend path)
+        _ti_suffix = self._build_ti_suffix(req.negative_ti)
+
         # Pre-decode base64 images once (avoid re-decoding per frame)
         _source_img = None
         if req.source_image is not None:
@@ -151,6 +158,9 @@ class AnimationMixin:
         # Build prompt schedule (resolved per-frame inside loop)
         schedule = build_prompt_schedule(req)
 
+        # Reuse a single CUDA generator (reseed per frame — avoids per-frame allocation)
+        _generator = torch.Generator("cuda")
+
         with torch.inference_mode():
             for frame_idx in range(req.frame_count):
                 if self._cancel_event.is_set():
@@ -166,7 +176,8 @@ class AnimationMixin:
                 else:  # RANDOM
                     frame_seed = random.randint(0, 2**32 - 1)
 
-                generator = torch.Generator("cuda").manual_seed(frame_seed)
+                generator = _generator
+                generator.manual_seed(frame_seed)
 
                 # Progress callback with frame context
                 step_callback = make_step_callback(
@@ -180,12 +191,15 @@ class AnimationMixin:
                 # Reset img2img scheduler before each frame to prevent
                 # stale state accumulation (timesteps, _step_index).
                 # This is the root fix for the chain animation infinite loop.
+                # TODO(Performance Phase C): diffusers `__call__` already calls `set_timesteps()`.
+                # This explicitly clears scheduler state arrays, but may be completely redundant.
+                # Must be empirically validated with verify_optimizations.py before removing.
                 if frame_idx > 0:
                     self._img2img_pipe.scheduler = pipeline_factory.fresh_scheduler(self._pipe)
                     log.debug("Chain frame %d: scheduler reset", frame_idx)
 
-                log.info("Chain frame %d/%d: seed=%d, mode=%s",
-                         frame_idx, req.frame_count, frame_seed, req.mode.value)
+                log.debug("Chain frame %d/%d: seed=%d, mode=%s",
+                          frame_idx, req.frame_count, frame_seed, req.mode.value)
 
                 # Resolve per-frame prompt from schedule (with SLERP blending)
                 frame_prompt = req.prompt
@@ -199,12 +213,10 @@ class AnimationMixin:
                     blend_info = schedule.get_blend_info_for_frame(frame_idx)
                     frame_prompt = blend_info.effective_prompt or frame_prompt
                     if blend_info.negative_prompt:
-                        frame_neg = self._build_effective_negative(
-                            blend_info.negative_prompt, req.negative_ti)
+                        frame_neg = (blend_info.negative_prompt + ", " + _ti_suffix) if _ti_suffix else blend_info.negative_prompt
                     # SLERP embedding blend during transitions
                     if blend_info.is_blending:
                         try:
-                            from ..embedding_blend import blend_prompt_embeds
                             pipe_for_embed = (
                                 self._pipe if frame_idx == 0
                                 else self._img2img_pipe
@@ -325,7 +337,7 @@ class AnimationMixin:
                     # Frame 1+: img2img from previous frame at denoise_strength
                     if chain_source is None:
                         raise RuntimeError("Chain animation failed: previous frame did not produce output")
-                    source = resize_to_target(chain_source, target_w, target_h)
+                    source = chain_source  # pipeline output already matches target dims
 
                     if req.mode.value.startswith("controlnet_") and _control_img is not None:
                         # ControlNet chain: use img2img from previous frame

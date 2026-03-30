@@ -203,6 +203,10 @@ function PT.connect()
         -- Any valid message from server proves it's alive — reset watchdog
         PT.state.last_pong = os.clock()
         local hok, herr = pcall(PT.handle_response, response)
+        
+        -- Force explicit nullification to aid Lua Garbage Collection of 1MB+ binary strings
+        response._raw_image = nil 
+        
         if not hok then PT.update_status("Error: " .. tostring(herr)) end
         return
       end

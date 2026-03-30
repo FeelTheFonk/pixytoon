@@ -6,6 +6,7 @@ import numpy as np
 from PIL import Image
 
 from ..config import settings
+from ..image_codec import match_color_lab, apply_optical_flow_blend, apply_motion_warp, apply_perspective_tilt
 from ..protocol import ProgressResponse
 
 
@@ -171,7 +172,6 @@ def apply_temporal_coherence(
     Uses ``settings.color_coherence_strength`` and ``settings.optical_flow_blend``
     to control intensity.  Both are no-ops when their setting is 0.
     """
-    from ..image_codec import match_color_lab, apply_optical_flow_blend
     if settings.color_coherence_strength > 0:
         image = match_color_lab(image, prev_image, settings.color_coherence_strength)
     if settings.optical_flow_blend > 0:
@@ -189,8 +189,6 @@ def apply_frame_motion(
     Applies motion_x/y/zoom/rotation (2D affine) first, then
     tilt_x/tilt_y (perspective) — matching Deforum ordering.
     """
-    from ..image_codec import apply_motion_warp, apply_perspective_tilt
-
     mx = frame_params.get("motion_x", 0.0)
     my = frame_params.get("motion_y", 0.0)
     mz = frame_params.get("motion_zoom", 1.0)

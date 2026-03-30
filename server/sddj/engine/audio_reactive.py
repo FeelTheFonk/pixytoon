@@ -12,7 +12,8 @@ import torch.compiler
 from PIL import Image
 
 from ..config import settings
-from ..postprocess import apply as postprocess_apply
+from ..embedding_blend import blend_prompt_embeds
+from ..postprocess import apply as postprocess_apply, is_processing_active
 from ..protocol import (
     AnimationMethod,
     AudioReactiveFrameResponse,
@@ -220,6 +221,12 @@ class AudioReactiveMixin:
         effective_neg = self._build_effective_negative(req.negative_prompt, req.negative_ti)
         target_w, target_h = round8(req.width), round8(req.height)
 
+        # Pre-compute loop-invariant flags
+        _pp_active = is_processing_active(req.post_process)
+
+        # Pre-compute TI suffix once (avoids per-frame TI token iteration in blend path)
+        _ti_suffix = self._build_ti_suffix(req.negative_ti)
+
         # Pre-decode base64 images
         _source_img = None
         if req.source_image is not None:
@@ -236,6 +243,9 @@ class AudioReactiveMixin:
 
         # Build prompt schedule (if segments or spec provided)
         prompt_sched = build_prompt_schedule(req)
+
+        # Reuse a single CUDA generator (reseed per frame — avoids per-frame allocation)
+        _generator = torch.Generator("cuda")
 
         log.info("Audio-reactive chain: %d frames, mode=%s, steps=%d, seed_base=%d",
                  total_frames, req.mode.value, req.steps, base_seed)
@@ -255,11 +265,15 @@ class AudioReactiveMixin:
                 if cadence > 1 and frame_idx > 0 and (frame_idx % cadence) != 0:
                     # Reuse the last generated image (chain_source already set)
                     if chain_source is not None:
-                        image = chain_source.copy()
-                        image = postprocess_apply(image, req.post_process)
                         hue_shift = frame_params.get("palette_shift", 0.0)
-                        if hue_shift > 0.01:
-                            image = _apply_hue_shift(image, hue_shift)
+                        if _pp_active or hue_shift > 0.01:
+                            image = chain_source.copy()
+                            if _pp_active:
+                                image = postprocess_apply(image, req.post_process)
+                            if hue_shift > 0.01:
+                                image = _apply_hue_shift(image, hue_shift)
+                        else:
+                            image = chain_source  # zero-copy: tobytes() is non-mutating
                         raw_bytes = encode_image_raw_bytes(image)
                         w, h = image.size
                         elapsed_ms = int((time.perf_counter() - t0_frame) * 1000)
@@ -285,7 +299,8 @@ class AudioReactiveMixin:
                 seed_offset = int(frame_params.get("seed_offset", frame_idx))
                 frame_seed = (base_seed + seed_offset) % (2**32)
 
-                generator = torch.Generator("cuda").manual_seed(frame_seed)
+                generator = _generator
+                generator.manual_seed(frame_seed)
 
                 # Resolve prompt for this frame (keyframe-based with SLERP blending)
                 frame_prompt = req.prompt
@@ -295,12 +310,10 @@ class AudioReactiveMixin:
                     blend_info = prompt_sched.get_blend_info_for_frame(frame_idx)
                     frame_prompt = blend_info.effective_prompt or frame_prompt
                     if blend_info.negative_prompt:
-                        frame_neg = self._build_effective_negative(
-                            blend_info.negative_prompt, req.negative_ti)
+                        frame_neg = (blend_info.negative_prompt + ", " + _ti_suffix) if _ti_suffix else blend_info.negative_prompt
                     # SLERP embedding blend during transitions
                     if blend_info.is_blending:
                         try:
-                            from ..embedding_blend import blend_prompt_embeds
                             pipe_for_embed = (
                                 self._pipe if frame_idx == 0
                                 else self._img2img_pipe
@@ -343,12 +356,15 @@ class AudioReactiveMixin:
                 )
 
                 # Reset scheduler for frame 1+
+                # TODO(Performance Phase C): diffusers `__call__` already calls `set_timesteps()`.
+                # This explicitly clears scheduler state arrays, but may be completely redundant.
+                # Must be empirically validated with verify_optimizations.py before removing.
                 if frame_idx > 0:
                     self._img2img_pipe.scheduler = pipeline_factory.fresh_scheduler(self._pipe)
 
-                log.info("Audio frame %d/%d: seed=%d, denoise=%.3f, cfg=%.2f, steps=%d (scaled=%d)%s",
-                         frame_idx, total_frames, frame_seed, eff_denoise, eff_cfg, req.steps, eff_scaled_steps,
-                         f", blend={_sub_floor_alpha:.2f}" if _sub_floor_alpha < 1.0 else "")
+                log.debug("Audio frame %d/%d: seed=%d, denoise=%.3f, cfg=%.2f, steps=%d (scaled=%d)%s",
+                          frame_idx, total_frames, frame_seed, eff_denoise, eff_cfg, req.steps, eff_scaled_steps,
+                          f", blend={_sub_floor_alpha:.2f}" if _sub_floor_alpha < 1.0 else "")
 
                 # Frame 0: initial generation
                 if frame_idx == 0:
@@ -445,7 +461,7 @@ class AudioReactiveMixin:
                     # Frame 1+: img2img from previous frame
                     if chain_source is None:
                         raise RuntimeError("Audio chain failed: no previous frame")
-                    source = resize_to_target(chain_source, target_w, target_h)
+                    source = chain_source  # pipeline output already matches target dims
 
                     # Motion warp: Deforum-like smooth camera (applied BEFORE img2img)
                     source = apply_frame_motion(source, frame_params, _raw_denoise)
@@ -484,7 +500,8 @@ class AudioReactiveMixin:
                 chain_source = image
 
                 # Post-process
-                image = postprocess_apply(image, req.post_process)
+                if _pp_active:
+                    image = postprocess_apply(image, req.post_process)
 
                 # Audio-driven palette shift (hue rotation)
                 hue_shift = frame_params.get("palette_shift", 0.0)
