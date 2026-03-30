@@ -570,11 +570,6 @@ handlers.preset = function(resp)
   -- Randomness / Lock Subject / Randomize
   if d.randomness then
     PT.dlg:modify{ id = "randomness", value = d.randomness }
-    local v = d.randomness
-    local names = { [0]="Off", [5]="Subtle", [10]="Moderate", [15]="Wild", [20]="Chaos" }
-    local name = names[v] or ""
-    local suffix = name ~= "" and (" — " .. name) or ""
-    PT.dlg:modify{ id = "randomness", label = "Randomness (" .. v .. suffix .. ")" }
   end
   if d.lock_subject ~= nil then PT.dlg:modify{ id = "lock_subject", selected = d.lock_subject } end
   if d.fixed_subject then PT.dlg:modify{ id = "fixed_subject", text = d.fixed_subject } end
@@ -583,6 +578,8 @@ handlers.preset = function(resp)
   if d.fixed_custom then PT.dlg:modify{ id = "fixed_custom", text = d.fixed_custom } end
   if d.custom_position then pcall(PT.dlg.modify, PT.dlg, { id = "custom_position", option = d.custom_position }) end
   if d.randomize_before ~= nil then PT.dlg:modify{ id = "randomize_before", selected = d.randomize_before } end
+  -- Centralized sync of all conditional widget states after preset data injection
+  PT.sync_ui_conditional_states()
   PT.update_status("Preset '" .. tostring(resp.name or "?") .. "' loaded")
 end
 

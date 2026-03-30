@@ -1,4 +1,20 @@
 # Changelog
+## [0.9.77] — 2026-03
+### Centralized UI Synchronization
+Single source of truth for all conditional widget states, eliminating desync after programmatic updates.
+
+#### Added
+- **`PT.sync_ui_conditional_states()`** — centralized function that reads `dlg.data` and enforces all enabled/disabled states and dynamic labels across Post Process, Animation, Audio, and Generate tabs. Wrapped in `pcall` for crash safety against unbuilt tabs.
+
+#### Fixed
+- **Post Process / Animation / Audio tabs desynchronized after preset load, metadata load, or settings restore (CRITICAL)**: Aseprite's `dlg:modify{}` does not fire `onchange` callbacks, so programmatic data injection left dependent widgets (sliders, comboboxes) in stale enabled/disabled states. Centralized sync called at 4 critical points: dialog build, `apply_settings()`, `apply_metadata()`, `handlers.preset()`.
+
+#### Cleanup
+- Removed 3 hardcoded init blocks (`enabled = false` after widget creation) in Animation and Audio tabs — now handled by centralized sync.
+- Removed duplicated randomness label computation from `handlers.preset()` (5 lines) — handled by centralized sync.
+- Removed ~50 lines of duplicated conditional UI logic from `apply_settings()` — replaced with single sync call.
+- Removed inline mode-label logic from `apply_metadata()` — replaced with single sync call.
+
 ## [0.9.76] — 2026-03
 ### Polish & Edge Case Eradication
 Formal verification of all execution paths, guaranteeing absolute zero-copy binary transit and leak-free memory management.

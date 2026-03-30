@@ -258,18 +258,6 @@ function PT.apply_metadata(meta)
     PT.sync_slider_label("denoise")
   end
 
-  -- Mode-dependent visibility + label (mirror dialog onchange logic)
-  if meta.mode then
-    local m = meta.mode
-    if m == "inpaint" then
-      PT.dlg:modify{ id = "mode", label = "Mode (needs mask)" }
-    elseif m == "img2img" or (m:find("controlnet_") ~= nil) then
-      PT.dlg:modify{ id = "mode", label = "Mode (needs layer)" }
-    else
-      PT.dlg:modify{ id = "mode", label = "Mode" }
-    end
-  end
-
   -- LoRA
   if meta.lora and meta.lora.name then
     pcall(PT.dlg.modify, PT.dlg, { id = "lora_name", option = meta.lora.name })
@@ -335,6 +323,9 @@ function PT.apply_metadata(meta)
   if meta.custom_position then
     pcall(PT.dlg.modify, PT.dlg, { id = "custom_position", option = meta.custom_position })
   end
+
+  -- Centralized sync of all conditional widget states after data injection
+  PT.sync_ui_conditional_states()
 
   PT.update_status("Metadata loaded (seed=" .. tostring(meta.seed or "?") .. ")")
 end

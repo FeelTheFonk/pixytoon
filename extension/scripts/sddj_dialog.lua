@@ -101,6 +101,87 @@ local TAB_PENDING = {
   tab_audio = "audio",
 }
 
+-- ─── UI Sync ────────────────────────────────────────────────
+
+function PT.sync_ui_conditional_states()
+  if not PT.dlg then return end
+  local dlg = PT.dlg
+  local d = dlg.data
+
+  -- Mode label hint
+  local m = d.mode
+  if m then
+    if m == "inpaint" then
+      pcall(dlg.modify, dlg, { id = "mode", label = "Mode (needs mask)" })
+    elseif m == "controlnet_qrcode" then
+      pcall(dlg.modify, dlg, { id = "mode", label = "Mode (QR)" })
+    elseif m == "img2img" or m:find("controlnet_") then
+      pcall(dlg.modify, dlg, { id = "mode", label = "Mode (needs layer)" })
+    else
+      pcall(dlg.modify, dlg, { id = "mode", label = "Mode" })
+    end
+  end
+
+  -- Randomness label
+  local v = d.randomness
+  if v then
+    local names = { [0]="Off", [5]="Subtle", [10]="Moderate", [15]="Wild", [20]="Chaos" }
+    local name = names[v] or ""
+    local suffix = name ~= "" and (" — " .. name) or ""
+    pcall(dlg.modify, dlg, { id = "randomness", label = "Randomness (" .. v .. suffix .. ")" })
+  end
+
+  -- Post Process
+  pcall(dlg.modify, dlg, { id = "pixel_size", enabled = (d.pixelate == true) })
+  
+  local qen = (d.quantize_enabled == true)
+  pcall(dlg.modify, dlg, { id = "colors", enabled = qen })
+  pcall(dlg.modify, dlg, { id = "quantize_method", enabled = qen })
+  pcall(dlg.modify, dlg, { id = "dither", enabled = qen })
+  
+  local pm = d.palette_mode or "auto"
+  pcall(dlg.modify, dlg, { id = "palette_name", enabled = (pm == "preset") })
+  pcall(dlg.modify, dlg, { id = "palette_custom_colors", enabled = (pm == "custom") })
+
+  -- Animation / Audio
+  if d.anim_freeinit ~= nil then
+    pcall(dlg.modify, dlg, { id = "anim_freeinit_iters", enabled = (d.anim_freeinit == true) })
+  end
+  if d.audio_freeinit ~= nil then
+    pcall(dlg.modify, dlg, { id = "audio_freeinit_iters", enabled = (d.audio_freeinit == true) })
+  end
+  
+  if d.audio_use_expressions ~= nil then
+    local expr_en = (d.audio_use_expressions == true)
+    pcall(dlg.modify, dlg, { id = "audio_expr_preset", enabled = expr_en })
+    for _, field in ipairs(EXPR_FIELDS) do
+      pcall(dlg.modify, dlg, { id = field[1], enabled = expr_en })
+    end
+  end
+
+  local count = d.mod_slot_count or 2
+  for i = 1, 6 do
+    local en = (i <= count)
+    local p = "mod" .. i .. "_"
+    pcall(function()
+      dlg:modify{ id = p .. "enable", enabled = en }
+      dlg:modify{ id = p .. "invert", enabled = en }
+      dlg:modify{ id = p .. "source", enabled = en }
+      dlg:modify{ id = p .. "target", enabled = en }
+      dlg:modify{ id = p .. "min", enabled = en }
+      dlg:modify{ id = p .. "max", enabled = en }
+      dlg:modify{ id = p .. "attack", enabled = en }
+      dlg:modify{ id = p .. "release", enabled = en }
+    end)
+  end
+  
+  -- Audio max frames label
+  if d.audio_max_frames ~= nil then
+    pcall(dlg.modify, dlg, { id = "audio_max_frames",
+      label = d.audio_max_frames == 0 and "Max Frames (0=all)" or ("Max Frames (" .. d.audio_max_frames .. ")") })
+  end
+end
+
 -- ─── Connection Section ─────────────────────────────────────
 
 local function build_connection_section()
@@ -633,13 +714,7 @@ local function build_tab_postprocess()
     selected = false,
   }
 
-  -- Initial disabled state (must be set AFTER widget creation — Aseprite bug)
-  dlg:modify{ id = "pixel_size", enabled = false }
-  dlg:modify{ id = "colors", enabled = false }
-  dlg:modify{ id = "quantize_method", enabled = false }
-  dlg:modify{ id = "dither", enabled = false }
-  dlg:modify{ id = "palette_name", enabled = false }
-  dlg:modify{ id = "palette_custom_colors", enabled = false }
+  -- Initial conditional states will be set by PT.sync_ui_conditional_states() at dialogue build complete
 end
 
 -- ─── Tab: Animation ─────────────────────────────────────────
@@ -717,8 +792,7 @@ local function build_tab_animation()
     min = 1, max = 3, value = 2,
   }
 
-  -- Initial disabled state (must be set AFTER widget creation — Aseprite bug)
-  dlg:modify{ id = "anim_freeinit_iters", enabled = false }
+  -- Conditional states handled by PT.sync_ui_conditional_states() at dialog build complete
 end
 
 -- ─── Tab: Audio ───────────────────────────────────────────
@@ -1049,12 +1123,8 @@ local function build_tab_audio()
     end,
   }
 
-  -- Initial disabled state (must be set AFTER widget creation — Aseprite bug)
-  dlg:modify{ id = "audio_freeinit_iters", enabled = false }
-  dlg:modify{ id = "audio_expr_preset", enabled = false }
-  for _, e in ipairs(EXPR_FIELDS) do
-    dlg:modify{ id = e[1], enabled = false }
-  end
+  -- Conditional states handled by PT.sync_ui_conditional_states() at dialog build complete
+  -- Action button: must start disabled (not a conditional state)
   dlg:modify{ id = "export_mp4_btn", enabled = false }
 end
 
@@ -1492,6 +1562,7 @@ function PT.build_dialog()
     end,
   }
 
+  PT.sync_ui_conditional_states()
   PT.dlg:show{ wait = false, autoscrollbars = true }
 end
 

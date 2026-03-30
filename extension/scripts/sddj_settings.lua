@@ -215,59 +215,11 @@ function PT.apply_settings(s)
   for id in pairs(PT.SLIDER_LABELS) do
     PT.sync_slider_label(id)
   end
-  -- Special display cases not in slider registry
-  local d = dlg.data
-  dlg:modify{ id = "audio_max_frames",
-    label = d.audio_max_frames == 0 and "Max Frames (0=all)" or ("Max Frames (" .. d.audio_max_frames .. ")") }
-  -- Mode label hint
-  if s.mode then
-    if s.mode == "inpaint" then
-      dlg:modify{ id = "mode", label = "Mode (needs mask)" }
-    elseif s.mode == "controlnet_qrcode" then
-      dlg:modify{ id = "mode", label = "Mode (QR)" }
-    elseif s.mode == "img2img" or (s.mode and s.mode:find("controlnet_")) then
-      dlg:modify{ id = "mode", label = "Mode (needs layer)" }
-    else
-      dlg:modify{ id = "mode", label = "Mode" }
-    end
-  end
-  -- Sync randomness label
-  if s.randomness then
-    local v = s.randomness
-    local names = { [0]="Off", [5]="Subtle", [10]="Moderate", [15]="Wild", [20]="Chaos" }
-    local name = names[v] or ""
-    local suffix = name ~= "" and (" — " .. name) or ""
-    dlg:modify{ id = "randomness", label = "Randomness (" .. v .. suffix .. ")" }
-  end
   -- Sync output state
   if s.save_output ~= nil then PT.output.enabled = s.save_output end
 
-  -- Sync conditional widget states (onchange not fired by modify)
-  dlg:modify{ id = "pixel_size", enabled = d.pixelate == true }
-  local qen = d.quantize_enabled == true
-  dlg:modify{ id = "colors", enabled = qen }
-  dlg:modify{ id = "quantize_method", enabled = qen }
-  dlg:modify{ id = "dither", enabled = qen }
-  local pm = d.palette_mode or "auto"
-  dlg:modify{ id = "palette_name", enabled = (pm == "preset") }
-  dlg:modify{ id = "palette_custom_colors", enabled = (pm == "custom") }
-  dlg:modify{ id = "anim_freeinit_iters", enabled = d.anim_freeinit == true }
-  dlg:modify{ id = "audio_freeinit_iters", enabled = d.audio_freeinit == true }
-  local expr_en = d.audio_use_expressions == true
-  dlg:modify{ id = "audio_expr_preset", enabled = expr_en }
-  for _, field in ipairs(_FIELD_SCHEMA) do
-    if field[1]:sub(1, 5) == "expr_" then
-      dlg:modify{ id = field[1], enabled = expr_en }
-    end
-  end
-  local count = d.mod_slot_count or 2
-  for i = 1, 6 do
-    local en = (i <= count)
-    local p = "mod" .. i .. "_"
-    for _, sf in ipairs(_MOD_FIELDS) do
-      dlg:modify{ id = p .. sf, enabled = en }
-    end
-  end
+  -- Centralized sync of all conditional widget states, labels, and mode hints
+  PT.sync_ui_conditional_states()
 
   -- Migration v0.7.5→v0.7.7: copy shared sliders to dedicated pipeline sliders
   if s.anim_steps == nil and s.steps then
