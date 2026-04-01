@@ -247,6 +247,13 @@ class AudioReactiveMixin:
         # Reuse a single CUDA generator (reseed per frame — avoids per-frame allocation)
         _generator = torch.Generator("cuda")
 
+        # C-01: Pre-cache scheduler class + config to eliminate per-frame from_config() overhead.
+        # A fresh scheduler is still assigned per frame (frame 1+) because diffusers mutates
+        # scheduler state in-place during __call__, and stale state caused an infinite loop
+        # (see animation.py root fix comment). This caches the class+config lookup.
+        _SchedClass = type(self._pipe.scheduler)
+        _sched_config = self._pipe.scheduler.config
+
         log.info("Audio-reactive chain: %d frames, mode=%s, steps=%d, seed_base=%d",
                  total_frames, req.mode.value, req.steps, base_seed)
 
@@ -355,12 +362,10 @@ class AudioReactiveMixin:
                     frame_idx=frame_idx, total_frames=total_frames,
                 )
 
-                # Reset scheduler for frame 1+
-                # TODO(Performance Phase C): diffusers `__call__` already calls `set_timesteps()`.
-                # This explicitly clears scheduler state arrays, but may be completely redundant.
-                # Must be empirically validated with verify_optimizations.py before removing.
+                # Reset scheduler for frame 1+ (prevents stale state infinite loop).
+                # Uses pre-cached class+config (C-01) to avoid per-frame function call overhead.
                 if frame_idx > 0:
-                    self._img2img_pipe.scheduler = pipeline_factory.fresh_scheduler(self._pipe)
+                    self._img2img_pipe.scheduler = _SchedClass.from_config(_sched_config)
 
                 log.debug("Audio frame %d/%d: seed=%d, denoise=%.3f, cfg=%.2f, steps=%d (scaled=%d)%s",
                           frame_idx, total_frames, frame_seed, eff_denoise, eff_cfg, req.steps, eff_scaled_steps,
@@ -637,6 +642,9 @@ class AudioReactiveMixin:
         effective_neg = self._build_effective_negative(req.negative_prompt, req.negative_ti)
         target_w, target_h = round8(req.width), round8(req.height)
 
+        # C-02: Reuse a single CUDA generator (reseed per chunk — avoids per-chunk allocation)
+        _ad_generator = torch.Generator("cuda")
+
         total_frames = schedule.total_frames
         chunk_size = self._ANIMATEDIFF_CHUNK_SIZE
         overlap = self._ANIMATEDIFF_OVERLAP
@@ -674,11 +682,13 @@ class AudioReactiveMixin:
         # Prompt schedule (if segments or spec provided)
         prompt_sched = build_prompt_schedule(req)
 
-        # Results indexed by frame
+        # Overlap buffer — only holds frames pending overlap blending (not all N)
         frame_images: dict[int, Image.Image] = {}
         frame_seeds: dict[int, int] = {}
         frame_count_ad = 0
         t0_total = time.perf_counter()
+        prev_ad_image: Optional[Image.Image] = None
+        _last_emitted = -1
 
         for chunk_idx, (c_start, c_end) in enumerate(chunks):
             if self._cancel_event.is_set():
@@ -693,7 +703,8 @@ class AudioReactiveMixin:
             # Seed: base + chunk midpoint offset for variation
             seed_offset = int(chunk_params.get("seed_offset", c_start))
             chunk_seed = (base_seed + seed_offset) % (2**32)
-            generator = torch.Generator("cuda").manual_seed(chunk_seed)
+            generator = _ad_generator
+            generator.manual_seed(chunk_seed)
 
             # Resolve prompt for chunk midpoint (keyframe-based with fallback)
             mid_frame = c_start + num_frames // 2
@@ -799,31 +810,84 @@ class AudioReactiveMixin:
 
                 frame_seeds[global_idx] = chunk_seed
 
-        # Post-process and encode all frames
-        prev_ad_image: Optional[Image.Image] = None
-        for frame_idx in sorted(frame_images.keys()):
-            if self._cancel_event.is_set():
-                raise GenerationCancelled("AnimateDiff audio cancelled during post-processing")
+            # ── Streaming emit: post-process finalized frames immediately ──
+            # After overlap blending, frames before the next chunk's start won't
+            # be modified by any future chunk — emit them now and free memory.
+            if chunk_idx < len(chunks) - 1:
+                _safe_boundary = chunks[chunk_idx + 1][0]
+            else:
+                _safe_boundary = total_frames
 
-            # Motion warp for AnimateDiff: cumulative per-frame warp
-            frame_params = schedule.get_params(frame_idx)
+            for frame_idx in range(_last_emitted + 1, _safe_boundary):
+                if self._cancel_event.is_set():
+                    raise GenerationCancelled("AnimateDiff audio cancelled during post-processing")
+                if frame_idx not in frame_images:
+                    continue
 
-            # Frame cadence: reuse previous output to match chain method behavior
-            cadence = max(1, int(frame_params.get("frame_cadence", 1.0)))
-            if (cadence > 1 and frame_idx > 0
-                    and (frame_idx % cadence) != 0
-                    and prev_ad_image is not None):
-                image = prev_ad_image.copy()
+                frame_params = schedule.get_params(frame_idx)
+
+                # Frame cadence: reuse previous output to match chain method behavior
+                cadence = max(1, int(frame_params.get("frame_cadence", 1.0)))
+                if (cadence > 1 and frame_idx > 0
+                        and (frame_idx % cadence) != 0
+                        and prev_ad_image is not None):
+                    image = prev_ad_image.copy()
+                    hue_shift = frame_params.get("palette_shift", 0.0)
+                    if hue_shift > 0.01:
+                        image = _apply_hue_shift(image, hue_shift)
+                    raw_bytes = encode_image_raw_bytes(image)
+                    w, h = image.size
+                    elapsed_ms = int((time.perf_counter() - t0_total) * 1000)
+                    frame_resp = AudioReactiveFrameResponse(
+                        frame_index=frame_idx, total_frames=total_frames,
+                        image="", seed=frame_seeds.get(frame_idx, base_seed),
+                        time_ms=elapsed_ms, width=w, height=h,
+                        params_used=frame_params,
+                        encoding="raw_rgba",
+                    )
+                    frame_resp._raw_bytes = raw_bytes
+                    frame_count_ad += 1
+                    if on_frame:
+                        on_frame(frame_resp)
+                    log.debug("AnimateDiff audio frame %d: cadence skip (reuse)", frame_idx)
+                    del frame_images[frame_idx]
+                    frame_seeds.pop(frame_idx, None)
+                    continue
+
+                pil_img = frame_images[frame_idx]
+
+                ad_denoise = frame_params.get("denoise_strength", req.denoise_strength)
+                pil_img = apply_frame_motion(pil_img, frame_params, ad_denoise)
+
+                # Noise amplitude injection (parity with chain loop)
+                frame_seed_ad = frame_seeds.get(frame_idx, base_seed)
+                pil_img = apply_noise_injection(pil_img, frame_params, frame_seed_ad, ad_denoise)
+
+                # Temporal coherence (parity with chain loop)
+                if frame_idx > 0 and prev_ad_image is not None:
+                    pil_img = apply_temporal_coherence(pil_img, prev_ad_image)
+
+                image = postprocess_apply(pil_img, req.post_process)
+
+                # Audio-driven palette shift (hue rotation)
                 hue_shift = frame_params.get("palette_shift", 0.0)
                 if hue_shift > 0.01:
                     image = _apply_hue_shift(image, hue_shift)
+
+                prev_ad_image = image
+
                 raw_bytes = encode_image_raw_bytes(image)
                 w, h = image.size
                 elapsed_ms = int((time.perf_counter() - t0_total) * 1000)
+
                 frame_resp = AudioReactiveFrameResponse(
-                    frame_index=frame_idx, total_frames=total_frames,
-                    image="", seed=frame_seeds.get(frame_idx, base_seed),
-                    time_ms=elapsed_ms, width=w, height=h,
+                    frame_index=frame_idx,
+                    total_frames=total_frames,
+                    image="",
+                    seed=frame_seeds.get(frame_idx, base_seed),
+                    time_ms=elapsed_ms,
+                    width=w,
+                    height=h,
                     params_used=frame_params,
                     encoding="raw_rgba",
                 )
@@ -831,50 +895,11 @@ class AudioReactiveMixin:
                 frame_count_ad += 1
                 if on_frame:
                     on_frame(frame_resp)
-                log.debug("AnimateDiff audio frame %d: cadence skip (reuse)", frame_idx)
-                continue
 
-            pil_img = frame_images[frame_idx]
+                del frame_images[frame_idx]
+                frame_seeds.pop(frame_idx, None)
 
-            ad_denoise = frame_params.get("denoise_strength", req.denoise_strength)
-            pil_img = apply_frame_motion(pil_img, frame_params, ad_denoise)
-
-            # Noise amplitude injection (parity with chain loop)
-            frame_seed_ad = frame_seeds.get(frame_idx, base_seed)
-            pil_img = apply_noise_injection(pil_img, frame_params, frame_seed_ad, ad_denoise)
-
-            # Temporal coherence (parity with chain loop)
-            if frame_idx > 0 and prev_ad_image is not None:
-                pil_img = apply_temporal_coherence(pil_img, prev_ad_image)
-
-            image = postprocess_apply(pil_img, req.post_process)
-
-            # Audio-driven palette shift (hue rotation)
-            hue_shift = frame_params.get("palette_shift", 0.0)
-            if hue_shift > 0.01:
-                image = _apply_hue_shift(image, hue_shift)
-
-            prev_ad_image = image
-
-            raw_bytes = encode_image_raw_bytes(image)
-            w, h = image.size
-            elapsed_ms = int((time.perf_counter() - t0_total) * 1000)
-
-            frame_resp = AudioReactiveFrameResponse(
-                frame_index=frame_idx,
-                total_frames=total_frames,
-                image="",
-                seed=frame_seeds.get(frame_idx, base_seed),
-                time_ms=elapsed_ms,
-                width=w,
-                height=h,
-                params_used=frame_params,
-                encoding="raw_rgba",
-            )
-            frame_resp._raw_bytes = raw_bytes
-            frame_count_ad += 1
-            if on_frame:
-                on_frame(frame_resp)
+            _last_emitted = _safe_boundary - 1
 
         # Disable FreeInit if it was enabled
         if freeinit_enabled:

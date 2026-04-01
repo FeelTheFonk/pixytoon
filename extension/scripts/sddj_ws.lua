@@ -191,7 +191,15 @@ function PT.connect()
         if #data < 4 then return end
         local b1, b2, b3, b4 = string.byte(data, 1, 4)
         local json_len = b1 + b2 * 256 + b3 * 65536 + b4 * 16777216
-        if #data < 4 + json_len then return end
+        -- C-04: Bounds validation — reject truncated frames and absurd json_len
+        if json_len < 2 or json_len > 1048576 then
+          PT.update_status("Binary frame rejected: invalid metadata length " .. json_len)
+          return
+        end
+        if #data < 4 + json_len then
+          PT.update_status("Binary frame truncated: expected " .. (4 + json_len) .. " got " .. #data)
+          return
+        end
         local json_str = data:sub(5, 4 + json_len)
         local ok, response = pcall(PT.json.decode, json_str)
         if ok and type(response) ~= "table" then

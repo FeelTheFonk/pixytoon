@@ -28,7 +28,8 @@ function PT.base64_encode(data)
     while bits >= 6 do
       bits = bits - 6
       n = n + 1
-      t[n] = b64chars:sub(math.floor(acc / _pow2[bits]) % 64 + 1, math.floor(acc / _pow2[bits]) % 64 + 1)
+      local idx = math.floor(acc / _pow2[bits]) % 64 + 1
+      t[n] = b64chars:sub(idx, idx)
       acc = acc % _pow2[bits]
     end
   end

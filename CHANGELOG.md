@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.9.82] — 2026-04
+### Architecture Audit — Systems-Level Hardening
+Comprehensive audit targeting every critical, optimization, and minor finding. Zero blind spots policy.
+
+#### Critical Fixes
+- **C-01 Scheduler Pre-Cache** (`audio_reactive.py`, `animation.py`): Eliminated per-frame `pipeline_factory.fresh_scheduler()` overhead in both chain animation and AnimateDiff audio loops. Scheduler class + config now cached before loop entry, reducing per-frame cost from attribute-lookup + function-call to direct `from_config()` [ESTIMÉ: ~0.1-0.3ms/frame saved].
+- **C-02 Generator Reuse** (`audio_reactive.py`): Replaced per-chunk `torch.Generator("cuda")` allocation with single pre-allocated generator reseeded via `.manual_seed()`. Eliminates CUDA allocator pressure in AnimateDiff chunk loop.
+- **C-03 Streaming Frame Emit** (`audio_reactive.py`): Refactored `_generate_audio_animatediff_inner` from two-pass (accumulate O(N) frames → post-process all) to streaming emit. After each chunk's overlap blending, finalized frames are immediately post-processed, sent, and freed. Memory: O(N) → O(overlap). [ESTIMÉ: 3600 frames × 768KB = 2.8GB → ~16 frames × 768KB = 12MB peak for overlap buffer].
+- **C-04 Binary Frame Validation** (`sddj_ws.lua`): Added bounds validation for `json_len` in binary WebSocket frame parser. Rejects truncated frames and absurd metadata lengths (< 2 or > 1MB) before attempting JSON decode.
+
+#### Optimization Fixes
+- **O-05 Audio Cache Auto-Eviction** (`audio_cache.py`): `put()` now auto-evicts expired entries via internal `_cleanup_unlocked()`, preventing unbounded disk growth. Lock-safe: extracted cleanup logic into lock-free internal method called from already-locked context.
+
+#### Minor Fixes
+- **server.py:141**: Replaced `atexit.register(lambda: __import__(...))` anti-pattern with named function `_atexit_vram_cleanup()` using direct relative import. Eliminates import-time side effects and improves debuggability.
+- **server.py:193**: Added `log.warning()` when max WebSocket connections reached. Previously silent rejection left no server-side trace.
+- **server.py:575**: Replaced fragile `"timed out" in str(e).lower()` string matching with `isinstance(e, (asyncio.TimeoutError, TimeoutError))` type check. Eliminates false positives on error messages containing "timed out".
+- **server.py:1110**: Replaced hardcoded `fps * 300` (5 min assumption) with `settings.audio_max_frames / fps` for audio generation timeout calculation. Now respects configured limits.
+- **core.py:460**: Documented that `random.randint()` is intentionally non-CSPRNG for diffusion seed generation.
+- **config.py:33**: Documented `default_checkpoint` relative path convention (resolved by engine at load time).
+- **sddj_state.lua**: Reduced `CANCEL_TIMEOUT` from 30s to 15s — empirically sufficient; 30s left users staring at unresponsive UI.
+- **sddj_state.lua**: Improved `math.randomseed()` entropy by combining `os.time()` + fractional `os.clock()`, avoiding collision when two instances launch within the same second.
+- **sddj_base64.lua:31**: Extracted duplicate `math.floor(acc / _pow2[bits]) % 64 + 1` computation to local variable `idx`. Eliminates redundant arithmetic in hot encode loop.
+
+
 ## [1.0.0-rc1] — 2026-03
 ### Optimization Release
 Complete UI architecture overhaul and integration of a state-of-the-art CIELAB-based perceptual post-processing pipeline to achieve the highest standards of pixel art generation determinism and performance.

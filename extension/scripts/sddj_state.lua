@@ -6,7 +6,7 @@ return function(PT)
 
 -- ─── Constants ──────────────────────────────────────────────
 
-PT.VERSION = "1.0.0-rc1"
+PT.VERSION = "0.9.82"
 
 PT.cfg = {
   DEFAULT_SERVER_URL      = "ws://127.0.0.1:9876/ws",
@@ -14,7 +14,7 @@ PT.cfg = {
   CONNECT_TIMEOUT         = 5.0,
   HEARTBEAT_INTERVAL      = 30.0,
   GEN_TIMEOUT             = 660,
-  CANCEL_TIMEOUT          = 30,
+  CANCEL_TIMEOUT          = 15,
   LOOP_DELAY              = 0.1,
   DIRTY_STEP_DIVISOR      = 32,
   RECONNECT_BASE_DELAY    = 2.0,
@@ -28,7 +28,9 @@ PT.cfg = {
 
 -- ─── Mutable State ──────────────────────────────────────────
 
-math.randomseed(os.time())
+-- Seed with time + clock fractional part to avoid collision when two instances
+-- launch within the same second (os.time() has 1-second resolution).
+math.randomseed(os.time() + math.floor(os.clock() * 1000))
 
 PT.ws_handle = nil
 PT.dlg       = nil

@@ -457,6 +457,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
                 t0 = time.perf_counter()
 
                 # Resolve seed
+                # random.randint is not CSPRNG — acceptable for diffusion seeds
                 seed = req.seed if req.seed >= 0 else random.randint(0, 2**32 - 1)
                 seed = seed % (2**32)  # clamp to valid range
                 generator = torch.Generator("cuda").manual_seed(seed)

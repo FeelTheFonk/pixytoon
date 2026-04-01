@@ -106,8 +106,15 @@ class AudioCache:
 
     def put(self, audio_path: str, fps: float, analysis: AudioAnalysis,
             enable_stems: bool = False) -> None:
-        """Store analysis result in cache."""
+        """Store analysis result in cache (auto-evicts expired entries)."""
         with self._lock:
+            # Auto-evict expired entries to prevent unbounded growth
+            try:
+                removed = self._cleanup_unlocked()
+                if removed:
+                    log.debug("Auto-evicted %d expired cache entries", removed)
+            except Exception:
+                pass  # eviction failure must not block writes
             key = _cache_key(audio_path, fps, enable_stems)
             npz_path = self._dir / f"{key}.npz"
             meta_path = self._dir / f"{key}.meta"
@@ -145,16 +152,20 @@ class AudioCache:
             (self._dir / f"{key}.npz").unlink(missing_ok=True)
             (self._dir / f"{key}.meta").unlink(missing_ok=True)
 
+    def _cleanup_unlocked(self) -> int:
+        """Remove expired cache entries (caller must hold self._lock)."""
+        removed = 0
+        now = time.time()
+        max_age = _max_age_seconds()
+        for f in self._dir.glob("*.npz"):
+            if now - f.stat().st_mtime > max_age:
+                f.unlink(missing_ok=True)
+                meta = f.with_suffix(".meta")
+                meta.unlink(missing_ok=True)
+                removed += 1
+        return removed
+
     def cleanup(self) -> int:
         """Remove expired cache entries. Returns number of entries removed."""
         with self._lock:
-            removed = 0
-            now = time.time()
-            max_age = _max_age_seconds()
-            for f in self._dir.glob("*.npz"):
-                if now - f.stat().st_mtime > max_age:
-                    f.unlink(missing_ok=True)
-                    meta = f.with_suffix(".meta")
-                    meta.unlink(missing_ok=True)
-                    removed += 1
-            return removed
+            return self._cleanup_unlocked()

@@ -138,7 +138,11 @@ def _remove_pid() -> None:
 
 # Register atexit as a safety net (covers non-fatal exits)
 atexit.register(_remove_pid)
-atexit.register(lambda: __import__("sddj.vram_utils", fromlist=["vram_cleanup"]).vram_cleanup())
+def _atexit_vram_cleanup() -> None:
+    from .vram_utils import vram_cleanup
+    vram_cleanup()
+
+atexit.register(_atexit_vram_cleanup)
 
 
 @asynccontextmanager
@@ -191,6 +195,7 @@ async def ws_endpoint(websocket: WebSocket) -> None:
     await websocket.accept()
 
     if len(_active_connections) >= _MAX_CONNECTIONS:
+        log.warning("Max connections reached (%d), rejecting new client", _MAX_CONNECTIONS)
         await _send(websocket, ErrorResponse(
             code="MAX_CONNECTIONS", message="Too many connections"
         ))
@@ -572,7 +577,7 @@ async def _handle(websocket: WebSocket, req: Request, ws_id: int) -> None:
             pass
     except Exception as e:
         log.exception("Handler error: %s", e)
-        if "timed out" in str(e).lower():
+        if isinstance(e, (asyncio.TimeoutError, TimeoutError)):
             code = "TIMEOUT"
         else:
             code = "ENGINE_ERROR"
@@ -1106,11 +1111,12 @@ async def _handle_generate_audio_reactive(
     if _generate_lock is None:
         raise RuntimeError("Server not fully initialized")
 
-    # Auto-scale timeout: base + 10s per frame (actual) + analysis overhead
-    actual_frames = audio_req.fps * 300  # 5 min max audio at given fps
+    # Safety timeout: analysis overhead + per-chunk budget (AnimateDiff generates
+    # in 16-frame chunks, so real time scales with chunk count, not frame count).
+    est_chunks = settings.audio_max_frames // 12 + 1  # ~12 unique frames/chunk with overlap
     anim_timeout = max(
         settings.generation_timeout,
-        120 + actual_frames * 10,  # 2 min base + 10s/frame
+        120 + est_chunks * 30,  # 2 min analysis + 30s/chunk safety margin
     )
 
     async with _generate_lock:

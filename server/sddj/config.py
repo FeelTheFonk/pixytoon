@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     prompts_data_dir: Path = _SERVER_ROOT / "data" / "prompts"
 
     # ── Default checkpoint ───────────────────────────────────
+    # Relative to _SERVER_ROOT (resolved by engine at load time)
     default_checkpoint: str = "models/checkpoints/liberteRedmond_v10.safetensors"
 
     # ── Hyper-SD (replaces LCM-LoRA — better color fidelity) ─
