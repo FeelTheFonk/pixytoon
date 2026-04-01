@@ -2,6 +2,8 @@
 
 Local SOTA image generation and animation for Aseprite via Stable Diffusion + AnimateDiff.
 
+<img width="1311" height="776" alt="image" src="https://github.com/user-attachments/assets/0c2820e8-6fb4-4301-b4ed-a6dff6c0f17a" />
+
 ---
 
 ## Quick Start
