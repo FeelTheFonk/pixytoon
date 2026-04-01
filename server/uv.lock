@@ -1831,7 +1831,7 @@ wheels = [
 
 [[package]]
 name = "sddj-server"
-version = "0.9.83"
+version = "0.9.84"
 source = { editable = "." }
 dependencies = [
     { name = "accelerate" },
