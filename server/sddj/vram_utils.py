@@ -20,7 +20,8 @@ log = logging.getLogger("sddj.vram")
 
 _last_gc: float = 0.0
 _gc_lock = threading.Lock()
-_GC_COOLDOWN: float = 2.0  # Minimum seconds between gc.collect() calls
+_GC_COOLDOWN: float = 2.0  # Minimum seconds between gc.collect() to avoid 50-200ms stalls
+_MB = 1024 * 1024  # Bytes per megabyte
 
 
 def vram_cleanup(force: bool = False) -> None:
@@ -48,8 +49,8 @@ def get_vram_info() -> tuple[float, float, float]:
     if not torch.cuda.is_available():
         return (0.0, 0.0, 0.0)
     free, total = torch.cuda.mem_get_info()
-    free_mb = free / (1024 * 1024)
-    total_mb = total / (1024 * 1024)
+    free_mb = free / _MB
+    total_mb = total / _MB
     used_mb = total_mb - free_mb
     return (round(used_mb, 1), round(free_mb, 1), round(total_mb, 1))
 

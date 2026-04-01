@@ -199,6 +199,45 @@ class PromptScheduleSpec(BaseModel):
         return v
 
 
+# ── Exclude sets for Request → typed request conversion ──────
+# Module-level frozensets avoid re-creating identical sets on every call.
+_EXCLUDE_GENERATE = frozenset({
+    "action", "method", "frame_count", "frame_duration_ms",
+    "seed_strategy", "tag_name", "enable_freeinit", "freeinit_iterations",
+    "locked_fields", "prompt_template", "randomness",
+    "subject_type", "prompt_mode", "exclude_terms",
+    "audio_path", "fps", "enable_stems",
+    "modulation_slots", "expressions", "modulation_preset",
+    "prompt_segments",
+    "preset_name", "preset_data", "palette_save_name", "palette_save_colors",
+    "max_frames", "output_dir", "scale_factor", "quality",
+    "prompt_schedule_name", "prompt_schedule_data",
+})
+
+_EXCLUDE_ANIMATION = frozenset({
+    "action",
+    "locked_fields", "prompt_template", "randomness",
+    "subject_type", "prompt_mode", "exclude_terms",
+    "audio_path", "fps", "enable_stems",
+    "modulation_slots", "expressions", "modulation_preset",
+    "prompt_segments",
+    "preset_name", "preset_data", "palette_save_name", "palette_save_colors",
+    "max_frames", "output_dir", "scale_factor", "quality",
+    "controlnet_conditioning_scale", "control_guidance_start", "control_guidance_end",
+    "prompt_schedule_name", "prompt_schedule_data",
+})
+
+_EXCLUDE_AUDIO_REACTIVE = frozenset({
+    "action", "frame_count", "frame_duration_ms", "seed_strategy",
+    "prompt_template",
+    "subject_type", "prompt_mode", "exclude_terms",
+    "preset_name", "preset_data", "palette_save_name", "palette_save_colors",
+    "output_dir", "scale_factor", "quality",
+    "controlnet_conditioning_scale", "control_guidance_start", "control_guidance_end",
+    "prompt_schedule_name", "prompt_schedule_data",
+})
+
+
 _DEFAULT_NEGATIVE = (
     "blurry, antialiased, smooth gradient, photorealistic, 3d render, "
     "soft edges, anti-aliasing, bokeh, depth of field, "
@@ -361,44 +400,11 @@ class Request(BaseModel):
         return v
 
     def to_generate_request(self) -> GenerateRequest:
-        _exclude = {
-            "action", "method", "frame_count", "frame_duration_ms",
-            "seed_strategy", "tag_name", "enable_freeinit", "freeinit_iterations",
-            # Auto-prompt fields
-            "locked_fields", "prompt_template", "randomness",
-            "subject_type", "prompt_mode", "exclude_terms",
-            # Audio reactivity fields
-            "audio_path", "fps", "enable_stems",
-            "modulation_slots", "expressions", "modulation_preset",
-            "prompt_segments",
-            # Resource / export fields
-            "preset_name", "preset_data", "palette_save_name", "palette_save_colors",
-            "max_frames", "output_dir", "scale_factor", "quality",
-            # Prompt schedule CRUD fields (not generation)
-            "prompt_schedule_name", "prompt_schedule_data",
-        }
-        data = self.model_dump(exclude_none=True, exclude=_exclude)
+        data = self.model_dump(exclude_none=True, exclude=_EXCLUDE_GENERATE)
         return GenerateRequest(**data)
 
     def to_animation_request(self) -> AnimationRequest:
-        _exclude = {
-            "action",
-            # Auto-prompt fields
-            "locked_fields", "prompt_template", "randomness",
-            "subject_type", "prompt_mode", "exclude_terms",
-            # Audio reactivity fields
-            "audio_path", "fps", "enable_stems",
-            "modulation_slots", "expressions", "modulation_preset",
-            "prompt_segments",
-            # Resource / export fields
-            "preset_name", "preset_data", "palette_save_name", "palette_save_colors",
-            "max_frames", "output_dir", "scale_factor", "quality",
-            # ControlNet conditioning fields (generate-only)
-            "controlnet_conditioning_scale", "control_guidance_start", "control_guidance_end",
-            # Prompt schedule CRUD fields (not generation)
-            "prompt_schedule_name", "prompt_schedule_data",
-        }
-        data = self.model_dump(exclude_none=True, exclude=_exclude)
+        data = self.model_dump(exclude_none=True, exclude=_EXCLUDE_ANIMATION)
         return AnimationRequest(**data)
 
     def to_analyze_audio_request(self) -> AnalyzeAudioRequest:
@@ -409,19 +415,7 @@ class Request(BaseModel):
         )
 
     def to_audio_reactive_request(self) -> AudioReactiveRequest:
-        _exclude = {
-            "action", "frame_count", "frame_duration_ms", "seed_strategy",
-            "prompt_template",
-            "subject_type", "prompt_mode", "exclude_terms",
-            # Resource / export fields
-            "preset_name", "preset_data", "palette_save_name", "palette_save_colors",
-            "output_dir", "scale_factor", "quality",
-            # ControlNet conditioning fields (generate-only)
-            "controlnet_conditioning_scale", "control_guidance_start", "control_guidance_end",
-            # Prompt schedule CRUD fields (not generation)
-            "prompt_schedule_name", "prompt_schedule_data",
-        }
-        data = self.model_dump(exclude_none=True, exclude=_exclude)
+        data = self.model_dump(exclude_none=True, exclude=_EXCLUDE_AUDIO_REACTIVE)
         return AudioReactiveRequest(**data)
 
 

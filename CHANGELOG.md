@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.9.82] — 2026-04
+## [0.9.83] — 2026-04
 ### Architecture Audit — Systems-Level Hardening
 Comprehensive audit targeting every critical, optimization, and minor finding. Zero blind spots policy.
 
@@ -23,6 +23,15 @@ Comprehensive audit targeting every critical, optimization, and minor finding. Z
 - **sddj_state.lua**: Reduced `CANCEL_TIMEOUT` from 30s to 15s — empirically sufficient; 30s left users staring at unresponsive UI.
 - **sddj_state.lua**: Improved `math.randomseed()` entropy by combining `os.time()` + fractional `os.clock()`, avoiding collision when two instances launch within the same second.
 - **sddj_base64.lua:31**: Extracted duplicate `math.floor(acc / _pow2[bits]) % 64 + 1` computation to local variable `idx`. Eliminates redundant arithmetic in hot encode loop.
+
+#### Code Quality Polish
+- **protocol.py**: Extracted 3 per-call `_exclude` sets (`to_generate_request`, `to_animation_request`, `to_audio_reactive_request`) into module-level `frozenset` constants. Eliminates ~30-element set construction on every protocol conversion.
+- **core.py**: Tightened `list | None` type annotations to `list[EmbeddingSpec] | None` on `_build_effective_negative()` and `_build_ti_suffix()`.
+- **vram_utils.py**: Extracted `_MB = 1024 * 1024` constant, documented `_GC_COOLDOWN` rationale.
+- **audio_cache.py**: Auto-eviction failure now logs `log.warning()` instead of bare `pass`, improving debuggability without blocking writes.
+
+#### Test Suite
+- **test_server_integration.py** (NEW): 21 E2E WebSocket tests covering health endpoint, connection lifecycle, ping/pong, binary frame protocol (structure, bounds validation, truncation detection), 7 resource listing actions, error handling, `_send()` binary/text serialization, and graceful disconnect.
 
 
 ## [1.0.0-rc1] — 2026-03

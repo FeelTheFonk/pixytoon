@@ -113,8 +113,8 @@ class AudioCache:
                 removed = self._cleanup_unlocked()
                 if removed:
                     log.debug("Auto-evicted %d expired cache entries", removed)
-            except Exception:
-                pass  # eviction failure must not block writes
+            except Exception as e:
+                log.warning("Auto-evict failed (non-fatal): %s", e)
             key = _cache_key(audio_path, fps, enable_stems)
             npz_path = self._dir / f"{key}.npz"
             meta_path = self._dir / f"{key}.meta"

@@ -138,9 +138,12 @@ def _remove_pid() -> None:
 
 # Register atexit as a safety net (covers non-fatal exits)
 atexit.register(_remove_pid)
+
+
 def _atexit_vram_cleanup() -> None:
     from .vram_utils import vram_cleanup
     vram_cleanup()
+
 
 atexit.register(_atexit_vram_cleanup)
 

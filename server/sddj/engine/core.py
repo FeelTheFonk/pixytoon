@@ -30,6 +30,7 @@ from ..lora_manager import list_loras
 from ..ti_manager import list_embeddings, resolve_embedding_path
 from ..postprocess import apply as postprocess_apply
 from ..protocol import (
+    EmbeddingSpec,
     GenerateRequest,
     GenerationMode,
     ProgressResponse,
@@ -405,7 +406,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
 
     # ─── GENERATION ──────────────────────────────────────────
 
-    def _build_effective_negative(self, neg: str, ti_specs: list | None) -> str:
+    def _build_effective_negative(self, neg: str, ti_specs: list[EmbeddingSpec] | None) -> str:
         """Build final negative prompt with TI embedding tokens."""
         effective = neg or ""
         if not ti_specs:
@@ -424,7 +425,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
             effective = f"{effective}, {ti_str}" if effective else ti_str
         return effective
 
-    def _build_ti_suffix(self, ti_specs: list | None) -> str:
+    def _build_ti_suffix(self, ti_specs: list[EmbeddingSpec] | None) -> str:
         """Build just the TI embedding token suffix string (no base negative).
 
         Used by animation loops to pre-compute the suffix once and concatenate
