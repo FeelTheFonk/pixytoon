@@ -119,7 +119,7 @@ function PT.save_animation_frame(resp)
   if not PT.dlg or not PT.dlg.data.save_output then return end
   if (not resp._raw_image and not resp.image) or resp.frame_index == nil then return end
 
-  pcall(function()
+  local ok, err = pcall(function()
     -- Create output dir on first frame
     if not PT.anim.output_dir then
       local date_dir = PT.ensure_date_dir()
@@ -182,6 +182,7 @@ function PT.save_animation_frame(resp)
       end
     end
   end)
+  if not ok then PT.update_status("Frame save error: " .. tostring(err)) end
 end
 
 function PT.save_animation_meta(resp)
@@ -283,6 +284,7 @@ function PT.apply_metadata(meta)
     PT.sync_slider_label("cfg_scale")
   end
   if meta.clip_skip then dlg:modify{ id = "clip_skip", value = meta.clip_skip } end
+  if meta.scheduler then pcall(dlg.modify, dlg, { id = "scheduler", option = meta.scheduler }) end
   if meta.denoise_strength then
     local v = math.floor(meta.denoise_strength * 100)
     dlg:modify{ id = "denoise", value = v }
@@ -360,7 +362,7 @@ function PT.apply_metadata(meta)
   PT._ui_transaction_depth = PT._ui_transaction_depth - 1
   if not ok then
     -- Log but don't crash — sync must still run
-    print("[SDDj] apply_metadata error: " .. tostring(err))
+    PT.update_status("Metadata sync error: " .. tostring(err))
   end
 
   -- Centralized sync of all conditional widget states after data injection

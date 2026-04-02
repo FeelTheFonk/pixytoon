@@ -161,10 +161,17 @@ function PT.sync_ui_conditional_states()
 
     local show_expr = show and (d.audio_use_expressions == true)
     pcall(dlg.modify, dlg, { id = "audio_expr_preset", visible = show_expr })
+    -- Show expression variables hint only when expressions are visible
+    pcall(dlg.modify, dlg, { id = "expr_vars_hint", visible = show_expr })
     for _, field in ipairs(EXPR_FIELDS) do
       pcall(dlg.modify, dlg, { id = field[1], visible = show_expr })
     end
   end
+
+  -- Animation guidance sliders visible only in ControlNet modes
+  local anim_cn = d.mode and (d.mode:find("controlnet_") ~= nil)
+  pcall(dlg.modify, dlg, { id = "anim_guidance_start", visible = anim_cn })
+  pcall(dlg.modify, dlg, { id = "anim_guidance_end", visible = anim_cn })
 
   -- Modulation slots (full visibility toggle including slider widgets)
   local count = d.mod_slot_count or 2
@@ -263,6 +270,14 @@ local function build_connection_section()
   }
 end
 
+-- Update prompt preview label with locked fields injected (shared helper)
+local function _update_prompt_preview()
+  if not PT.dlg then return end
+  local preview = PT.inject_locked_prompt(PT.dlg.data.prompt or "")
+  if #preview > 80 then preview = preview:sub(1, 77) .. "..." end
+  pcall(PT.dlg.modify, PT.dlg, { id = "prompt_preview", text = preview ~= "" and preview or "(empty)" })
+end
+
 -- ─── Tab: Generate ──────────────────────────────────────────
 
 local function build_tab_generate()
@@ -285,8 +300,19 @@ local function build_tab_generate()
     id = "preset_save_btn",
     text = "Save",
     onclick = function()
+      -- Build summary of what will be saved
+      local prompt_len = #(dlg.data.prompt or "")
+      local summary = string.format(
+        "Steps: %d | CFG: %.1f | Mode: %s | Scheduler: %s | Prompt: %d chars",
+        dlg.data.steps or 8,
+        (dlg.data.cfg_scale or 50) / 10.0,
+        dlg.data.mode or "txt2img",
+        dlg.data.scheduler or "DPM++ SDE Karras",
+        prompt_len
+      )
       local name_dlg = Dialog{ title = "Save Preset" }
       name_dlg:entry{ id = "pname", label = "Name", text = "", hexpand = true }
+      name_dlg:label{ text = summary }
       name_dlg:button{ id = "ok", text = "Save" }
       name_dlg:button{ id = "cancel", text = "Cancel" }
       name_dlg:show()
@@ -302,6 +328,7 @@ local function build_tab_generate()
         steps = dlg.data.steps,
         cfg_scale = dlg.data.cfg_scale / 10.0,
         clip_skip = dlg.data.clip_skip,
+        scheduler = dlg.data.scheduler,
         denoise_strength = dlg.data.denoise / 100.0,
         post_process = PT.build_post_process(),
         randomness = dlg.data.randomness,
@@ -362,11 +389,50 @@ local function build_tab_generate()
     onchange = onchange_sync("lora_weight"),
   }
 
+  dlg:check{
+    id = "lora2_enabled",
+    text = "LoRA 2",
+    selected = false,
+  }
+  dlg:combobox{
+    id = "lora2_name",
+    label = "",
+    options = { "(default)" },
+    option = "(default)",
+  }
+  dlg:slider{
+    id = "lora2_weight",
+    label = "Weight (1.00)",
+    min = -200, max = 200, value = 100,
+    onchange = onchange_sync("lora2_weight"),
+  }
+
+  -- ── IP-Adapter Reference Image ──────────────────────
+  dlg:separator{ text = "Reference Image" }
+  dlg:check{
+    id = "ip_adapter_enabled",
+    text = "Use Reference Image",
+    selected = false,
+  }
+  dlg:combobox{
+    id = "ip_adapter_mode",
+    label = "Mode",
+    options = { "full", "style", "composition" },
+    option = "full",
+  }
+  dlg:slider{
+    id = "ip_adapter_scale",
+    label = "Scale (0.60)",
+    min = 0, max = 200, value = 60,
+    onchange = onchange_sync("ip_adapter_scale"),
+  }
+
   dlg:entry{
     id = "prompt",
     label = "Prompt",
     text = "",
     hexpand = true,
+    onchange = _update_prompt_preview,
   }
   dlg:button{
     id = "randomize_btn",
@@ -377,40 +443,81 @@ local function build_tab_generate()
       PT.update_status("Generating prompt...")
     end,
   }
+  -- Prompt History button
+  dlg:button{
+    id = "prompt_history_btn",
+    text = "History",
+    onclick = function()
+      if not PT.prompt_history or #PT.prompt_history == 0 then
+        app.alert("No prompt history yet.")
+        return
+      end
+      local hist_dlg = Dialog{ title = "Prompt History" }
+      hist_dlg:combobox{
+        id = "hist_select",
+        label = "Recent",
+        options = PT.prompt_history,
+        option = PT.prompt_history[1],
+      }
+      hist_dlg:button{ id = "ok", text = "Use" }
+      hist_dlg:button{ id = "cancel", text = "Cancel" }
+      hist_dlg:show()
+      if hist_dlg.data.ok then
+        local sel = hist_dlg.data.hist_select
+        if sel and sel ~= "" then
+          dlg:modify{ id = "prompt", text = sel }
+          _update_prompt_preview()
+        end
+      end
+    end,
+  }
   dlg:check{
     id = "lock_subject",
     label = "Lock Subject",
     selected = false,
+    onchange = _update_prompt_preview,
   }
   dlg:entry{
     id = "fixed_subject",
     label = "Subject",
     text = "",
     hexpand = true,
+    onchange = _update_prompt_preview,
   }
   dlg:combobox{
     id = "subject_position",
     label = "Position",
     options = { "prefix", "suffix", "off" },
     option = "prefix",
+    onchange = _update_prompt_preview,
   }
 
   dlg:check{
     id = "lock_custom",
     label = "Lock Custom",
     selected = false,
+    onchange = _update_prompt_preview,
   }
   dlg:entry{
     id = "fixed_custom",
     label = "Custom",
     text = "",
     hexpand = true,
+    onchange = _update_prompt_preview,
   }
   dlg:combobox{
     id = "custom_position",
     label = "Position",
     options = { "prefix", "suffix", "off" },
     option = "suffix",
+    onchange = _update_prompt_preview,
+  }
+
+  -- Prompt preview label (shows final prompt with locks injected)
+  dlg:label{
+    id = "prompt_preview",
+    label = "Preview",
+    text = "(empty)",
   }
 
   dlg:entry{
@@ -432,6 +539,8 @@ local function build_tab_generate()
     min = 10, max = 200, value = 100,
     onchange = onchange_sync("neg_ti_weight"),
   }
+  -- All negative TI embeddings share this weight
+  dlg:label{ text = "Shared weight for all embeddings" }
 
   dlg:combobox{
     id = "output_size",
@@ -479,6 +588,13 @@ local function build_tab_generate()
     onchange = onchange_sync("cfg_scale"),
   }
 
+  dlg:combobox{
+    id = "scheduler",
+    label = "Scheduler",
+    options = { "DPM++ SDE Karras", "DPM++ 2M Karras", "DDIM", "Euler Ancestral", "Euler", "UniPC", "LMS" },
+    option = "DPM++ SDE Karras",
+  }
+
   dlg:slider{
     id = "clip_skip",
     label = "CLIP Skip (2)",
@@ -491,6 +607,19 @@ end
 
 local function build_tab_postprocess()
   local dlg = PT.dlg
+
+  dlg:separator{ text = "Upscale" }
+  dlg:check{
+    id = "upscale_enabled",
+    text = "Upscale before pixelate",
+    selected = false,
+  }
+  dlg:combobox{
+    id = "upscale_factor",
+    label = "Factor",
+    options = { "2x", "4x" },
+    option = "4x",
+  }
 
   dlg:check{
     id = "pixelate",
@@ -511,7 +640,7 @@ local function build_tab_postprocess()
   dlg:combobox{
     id = "pixelate_method",
     label = "Pixel Mode",
-    options = { "nearest", "box" },
+    options = { "nearest", "box", "pixeloe" },
     option = "nearest",
   }
 
@@ -691,6 +820,27 @@ local function build_tab_animation()
     min = 1, max = 3, value = 2,
   }
 
+  dlg:combobox{
+    id = "frame_interpolation",
+    label = "Frame Interpolation",
+    options = { "None", "2x", "3x", "4x" },
+    option = "None",
+  }
+
+  -- Guidance Start/End for Animation ControlNet modes
+  dlg:slider{
+    id = "anim_guidance_start",
+    label = "Guide Start (0.00)",
+    min = 0, max = 100, value = 0,
+    onchange = onchange_sync("anim_guidance_start"),
+  }
+  dlg:slider{
+    id = "anim_guidance_end",
+    label = "Guide End (0.80)",
+    min = 0, max = 100, value = 80,
+    onchange = onchange_sync("anim_guidance_end"),
+  }
+
   -- ─── Prompt Schedule (frame-based prompt evolution) ────────
 
   dlg:separator{ text = "Prompt Schedule" }
@@ -742,6 +892,44 @@ local function build_tab_animation()
       if PT.open_schedule_editor then
         PT.open_schedule_editor()
       end
+    end,
+  }
+  -- Keyframe Preview — generate a single image from first keyframe's prompt
+  dlg:button{
+    id = "schedule_preview_btn",
+    text = "Preview",
+    onclick = function()
+      if PT.state.generating or PT.state.animating then return end
+      local dsl = dlg.data.generate_prompt_schedule_dsl or ""
+      if dsl == "" or dsl:match("^%s*$") then
+        app.alert("No prompt schedule to preview.")
+        return
+      end
+      -- Parse first keyframe prompt (simple: find first [N]\n<prompt>)
+      local first_prompt = nil
+      local in_kf = false
+      for line in dsl:gmatch("[^\n]+") do
+        local stripped = line:match("^%s*(.-)%s*$")
+        if stripped:match("^%[%d+%]") then
+          in_kf = true
+        elseif in_kf and stripped ~= "" and not stripped:match("^%-%-") and not stripped:match("^transition:") and not stripped:match("^blend:") and not stripped:match("^weight:") and not stripped:match("^denoise:") and not stripped:match("^cfg:") and not stripped:match("^steps:") then
+          first_prompt = stripped
+          break
+        end
+      end
+      if not first_prompt or first_prompt == "" then
+        first_prompt = dlg.data.prompt or ""
+      end
+      if first_prompt == "" then
+        app.alert("No prompt found in first keyframe.")
+        return
+      end
+      -- Trigger a normal generate with the keyframe prompt
+      local saved_prompt = dlg.data.prompt
+      dlg:modify{ id = "prompt", text = first_prompt }
+      PT.trigger_generate()
+      -- Restore original prompt after request is built
+      dlg:modify{ id = "prompt", text = saved_prompt }
     end,
   }
   dlg:button{
@@ -953,6 +1141,11 @@ local function build_tab_audio()
       PT.sync_ui_conditional_states()
     end,
   }
+  -- Modulation slots discovery hint
+  dlg:label{
+    id = "mod_slot_hint",
+    text = "Increase slot count to add more audio mappings",
+  }
 
   -- Auto-switch to (custom) when any mod slot field is changed by the user
   local function mod_slot_changed()
@@ -1043,6 +1236,11 @@ local function build_tab_audio()
       PT.sync_ui_conditional_states()
     end,
   }
+  -- Expression variables tooltip
+  dlg:label{
+    id = "expr_vars_hint",
+    text = "Variables: t, frame, global_rms, global_onset, bass, mid, treble, sub_bass, low_mid, upper_mid, presence, brilliance, air, centroid, flux, sin, cos, sqrt, abs, min, max, pow",
+  }
   dlg:combobox{
     id = "audio_expr_preset",
     label = "Expr Preset",
@@ -1114,6 +1312,7 @@ local function build_tab_audio()
   -- Initial: hide advanced sections (expressions, choreography)
   pcall(function() dlg:modify{ id = "audio_use_expressions", visible = false } end)
   pcall(function() dlg:modify{ id = "audio_expr_preset", visible = false } end)
+  pcall(function() dlg:modify{ id = "expr_vars_hint", visible = false } end)
   for _, e in ipairs(EXPR_FIELDS) do
     pcall(function() dlg:modify{ id = e[1], visible = false } end)
   end
@@ -1488,6 +1687,12 @@ local function build_actions_panel()
   dlg:check{
     id = "randomize_before",
     text = "Randomize",
+    selected = false,
+  }
+  -- A/B Comparison Mode
+  dlg:check{
+    id = "ab_compare",
+    text = "A/B Compare",
     selected = false,
   }
   dlg:check{

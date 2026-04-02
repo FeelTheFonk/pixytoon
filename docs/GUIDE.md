@@ -148,6 +148,22 @@ The mask is auto-detected in this order:
 > [!WARNING]
 > SD 1.5 was trained on 512×512. Going above 768 often produces duplicated compositions. Generate at 512 and upscale in Aseprite.
 
+### Scheduler
+
+Per-request scheduler override — pick the noise sampler that best fits your generation.
+
+| Scheduler | Best For | Notes |
+|-----------|----------|-------|
+| **DPM++ SDE Karras** (default) | General purpose, pixel art | Excellent convergence at 6–8 steps with Hyper-SD |
+| DPM++ 2M Karras | Smooth gradients, illustration | Slightly faster, less stochastic |
+| DDIM | Deterministic results | Legacy default, replaced by DPM++ SDE |
+| Euler Ancestral | Creative variation | More diverse outputs, less deterministic |
+| Euler | Fast inference | Good baseline, deterministic |
+| UniPC | Speed-critical workflows | Fast multi-step solver |
+| LMS | Smooth textures | Linear multi-step, niche use |
+
+All schedulers use `timestep_spacing="trailing"` for Hyper-SD compatibility.
+
 ### Seed Techniques
 
 - **Same seed, different prompt**: keeps composition, changes subject/style
@@ -277,7 +293,7 @@ Setup: set `SDDJ_ANIMATEDIFF_MODEL=ByteDance/AnimateDiff-Lightning` in `.env` an
 
 | Setting | Standard AnimateDiff | Lightning |
 |---------|---------------------|-----------|
-| Scheduler | DDIM | EulerDiscrete (trailing, linear) |
+| Scheduler | DPM++ SDE Karras (default) | EulerDiscrete (trailing) |
 | Default CFG | 5.0 | 2.0 |
 | Steps | 8 | 4 |
 | FreeInit | Optional | Force-disabled (incompatible) |

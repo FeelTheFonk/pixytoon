@@ -35,6 +35,8 @@ TARGET_RANGES: dict[str, tuple[float, float]] = {
     # Perspective tilt (faux 3D via homography)
     "motion_tilt_x": (-3.0, 3.0),     # degrees, perspective pitch
     "motion_tilt_y": (-3.0, 3.0),     # degrees, perspective yaw
+    # LoRA weight (per-frame modulation, applied between pipeline calls)
+    "lora_weight": (0.0, 2.0),
 }
 
 # Max allowed frame-to-frame delta per motion parameter.

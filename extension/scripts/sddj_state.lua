@@ -6,7 +6,7 @@ return function(PT)
 
 -- ─── Constants ──────────────────────────────────────────────
 
-PT.VERSION = "0.9.88"
+PT.VERSION = "0.9.89"
 
 PT.cfg = {
   DEFAULT_SERVER_URL      = "ws://127.0.0.1:9876/ws",
@@ -127,6 +127,9 @@ PT.audio = {
 PT.last_request            = nil   -- last generation request (deep copy, no images)
 PT.last_result_meta        = nil   -- metadata built from last_request + response
 PT._last_encoded_settings  = nil   -- cached JSON for exit() fallback save
+
+-- ─── Prompt History (LRU 30) ─────────────────────────────────
+PT.prompt_history = {}
 
 -- ─── Output Config ────────────────────────────────────────────
 

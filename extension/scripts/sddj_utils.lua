@@ -50,36 +50,6 @@ function PT.cleanup_session_temp_files(all_sessions)
   end
 end
 
--- ─── Deep Copy (metadata tracking) ────────────────────────────
-
--- Deep-copy a request table, excluding heavy base64 image fields.
--- Depth-limited (max 32) with cycle detection to prevent stack overflow.
-local _IMAGE_KEYS = { source_image = true, mask_image = true, control_image = true, image = true }
-local _MAX_COPY_DEPTH = 32
-
-local function _deep_copy(src, depth, seen)
-  if type(src) ~= "table" then return src end
-  if depth > _MAX_COPY_DEPTH then return nil end
-  if seen[src] then return nil end
-  seen[src] = true
-  local dst = {}
-  for k, v in pairs(src) do
-    if _IMAGE_KEYS[k] then
-      -- skip (don't store multi-MB base64 blobs)
-    elseif type(v) == "table" then
-      dst[k] = _deep_copy(v, depth + 1, seen)
-    else
-      dst[k] = v
-    end
-  end
-  seen[src] = nil  -- DAG-safe: allow same table in sibling branches
-  return dst
-end
-
-function PT.deep_copy_request(src)
-  return _deep_copy(src, 0, {})
-end
-
 -- Shallow copy: only metadata-relevant fields (skips heavy binary blobs).
 -- Single-level deep for nested tables — avoids full recursive traversal.
 function PT.shallow_copy_request(req)
@@ -129,6 +99,8 @@ PT.SLIDER_LABELS = {
   cfg_scale             = { "CFG (%.1f)",        10.0 },
   denoise               = { "Strength (%.2f)",   100.0 },
   lora_weight           = { "LoRA (%.2f)",       100.0 },
+  lora2_weight          = { "Weight (%.2f)",     100.0 },
+  ip_adapter_scale      = { "Scale (%.2f)",      100.0 },
   neg_ti_weight         = { "Emb. (%.2f)",       100.0 },
   anim_cfg              = { "CFG (%.1f)",        10.0 },
   anim_denoise          = { "Strength (%.2f)",   100.0 },
@@ -139,6 +111,8 @@ PT.SLIDER_LABELS = {
   qr_guidance_start     = { "Guide Start (%.2f)", 100.0 },
   qr_guidance_end       = { "Guide End (%.2f)",  100.0 },
   qr_cfg                = { "CFG (%.1f)",        10.0 },
+  anim_guidance_start   = { "Guide Start (%.2f)", 100.0 },
+  anim_guidance_end     = { "Guide End (%.2f)",  100.0 },
   -- Integer sliders
   steps                 = { "Steps (%d)" },
   clip_skip             = { "CLIP Skip (%d)" },

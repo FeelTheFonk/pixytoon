@@ -22,15 +22,20 @@ local _FIELD_SCHEMA = {
   { "output_size",         "option" },
   { "output_mode",         "option" },
   { "lora_name",           "option" },
+  { "lora2_name",          "option" },
   { "preset_name",         "option" },
+  { "scheduler",           "option" },
   { "loop_seed_combo",     "option" },
+  { "ip_adapter_mode",     "option" },
   { "steps",               "value" },
   { "cfg_scale",           "value" },
   { "clip_skip",           "value" },
   { "denoise",             "value" },
   { "lora_weight",         "value" },
+  { "lora2_weight",        "value" },
   { "neg_ti_weight",       "value" },
   { "randomness",          "value" },
+  { "ip_adapter_scale",    "value" },
   { "use_neg_ti",          "bool" },
   { "lock_subject",        "bool" },
   { "lock_custom",         "bool" },
@@ -38,6 +43,8 @@ local _FIELD_SCHEMA = {
   { "loop_check",          "bool" },
   { "random_loop_check",   "bool" },
   { "save_output",         "bool" },
+  { "lora2_enabled",       "bool" },
+  { "ip_adapter_enabled",  "bool" },
   -- Post-Process tab
   { "pixel_size",          "value" },
   { "colors",              "value" },
@@ -50,6 +57,8 @@ local _FIELD_SCHEMA = {
   { "pixelate_method",     "option" },
   { "quantize_enabled",    "bool" },
   { "remove_bg",           "bool" },
+  { "upscale_enabled",     "bool" },
+  { "upscale_factor",      "option" },
   -- Animation tab
   { "anim_method",         "option" },
   { "anim_seed_strategy",  "option" },
@@ -61,6 +70,11 @@ local _FIELD_SCHEMA = {
   { "anim_denoise",        "value" },
   { "anim_freeinit_iters", "value" },
   { "anim_freeinit",       "bool" },
+  { "anim_guidance_start", "value" },
+  { "anim_guidance_end",   "value" },
+  { "frame_interpolation", "option" },
+  -- Actions panel
+  { "ab_compare",          "bool" },
   -- Audio tab
   { "audio_file",          "text" },
   { "audio_tag",           "text" },
@@ -149,6 +163,10 @@ function PT.save_settings()
   end
   -- Non-dialog state
   s.schedule_last_profile = PT.schedule_last_profile
+  -- Prompt history (table, not a dialog field)
+  if PT.prompt_history and #PT.prompt_history > 0 then
+    s.prompt_history = PT.prompt_history
+  end
 
   local ok, encoded = pcall(PT.json.encode, s)
   if not ok then
@@ -233,6 +251,10 @@ function PT.apply_settings(s)
 
   -- Restore non-dialog state
   PT.schedule_last_profile = s.schedule_last_profile or "dynamic"
+  -- Restore prompt history
+  if s.prompt_history and type(s.prompt_history) == "table" then
+    PT.prompt_history = s.prompt_history
+  end
   -- Initialize prompt schedule state from restored DSL
   if PT.update_schedule_state then
     local restored_dsl = dlg.data.generate_prompt_schedule_dsl or ""

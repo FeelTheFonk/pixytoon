@@ -10,6 +10,24 @@ local function clamp(v, lo, hi)
   return math.max(lo, math.min(hi, v))
 end
 
+-- Map UI display name to backend scheduler identifier
+local SCHEDULER_MAP = {
+  ["DPM++ SDE Karras"] = "dpm++_sde_karras",
+  ["DPM++ 2M Karras"] = "dpm++_2m_karras",
+  ["DDIM"] = "ddim",
+  ["Euler Ancestral"] = "euler_a",
+  ["Euler"] = "euler",
+  ["UniPC"] = "unipc",
+  ["LMS"] = "lms",
+}
+
+function PT.attach_scheduler(req)
+  local sched = PT.dlg.data.scheduler
+  if sched and SCHEDULER_MAP[sched] then
+    req.scheduler = SCHEDULER_MAP[sched]
+  end
+end
+
 function PT.parse_size()
   local s = tostring(PT.dlg.data.output_size or "512x512")
   local w, h = s:match("(%d+)x(%d+)")
@@ -27,10 +45,32 @@ function PT.parse_seed()
 end
 
 function PT.attach_lora(req)
-  local sel = PT.dlg.data.lora_name
+  local d = PT.dlg.data
+  local sel = d.lora_name
   if sel and sel ~= "(default)" then
-    req.lora = { name = sel, weight = PT.dlg.data.lora_weight / 100.0 }
+    req.lora = { name = sel, weight = d.lora_weight / 100.0 }
   end
+  -- LoRA 2 (multi-LoRA stacking)
+  if d.lora2_enabled then
+    local sel2 = d.lora2_name
+    if sel2 and sel2 ~= "(default)" then
+      local w2 = (d.lora2_weight or 100) / 100.0
+      req.lora2 = { name = sel2, weight = w2 }
+    end
+  end
+end
+
+function PT.attach_ip_adapter(req)
+  local d = PT.dlg.data
+  if not d.ip_adapter_enabled then return end
+  local scale = (d.ip_adapter_scale or 60) / 100.0
+  if scale <= 0 then return end
+  -- Capture active layer as reference
+  local img_b64 = PT.capture_active_layer()
+  if not img_b64 then return end
+  req.ip_adapter_image = img_b64
+  req.ip_adapter_scale = scale
+  req.ip_adapter_mode = d.ip_adapter_mode or "full"
 end
 
 function PT.attach_neg_ti(req)
@@ -74,6 +114,11 @@ end
 
 function PT.build_post_process()
   local d = PT.dlg.data
+  -- Parse upscale factor from "2x"/"4x" string
+  local upscale_factor = 4
+  local uf_str = d.upscale_factor or "4x"
+  local uf_num = tonumber(uf_str:match("(%d+)"))
+  if uf_num then upscale_factor = uf_num end
   local pp = {
     pixelate = {
       enabled = d.pixelate,
@@ -86,6 +131,8 @@ function PT.build_post_process()
     dither = d.dither,
     palette = { mode = d.palette_mode },
     remove_bg = d.remove_bg,
+    upscale_enabled = d.upscale_enabled or false,
+    upscale_factor = upscale_factor,
   }
   if d.palette_mode == "preset" then
     pp.palette.name = d.palette_name
@@ -329,6 +376,8 @@ function PT.build_audio_reactive_request()
   }
   PT.attach_lora(req)
   PT.attach_neg_ti(req)
+  PT.attach_scheduler(req)
+  PT.attach_ip_adapter(req)
   PT.last_request = PT.shallow_copy_request(req)
   return req
 end
@@ -354,6 +403,8 @@ function PT.build_generate_request()
   }
   PT.attach_lora(req)
   PT.attach_neg_ti(req)
+  PT.attach_scheduler(req)
+  PT.attach_ip_adapter(req)
   PT.last_request = PT.shallow_copy_request(req)
   return req
 end
@@ -376,6 +427,13 @@ function PT.build_animation_request()
   end
   local prompt_schedule = PT.extract_prompt_schedule(d.anim_frames or 100, fps)
 
+  -- AnimateDiff Lightning frame cap warning (max 32 frames)
+  local frame_count = clamp(d.anim_frames, 2, 256)
+  if d.anim_method == "animatediff" and frame_count > 32 then
+    frame_count = 32
+    PT.update_status("AnimateDiff Lightning: max 32 frames — clamped")
+  end
+
   local req = {
     action = "generate_animation",
     method = d.anim_method,
@@ -388,7 +446,7 @@ function PT.build_animation_request()
     cfg_scale = clamp(d.anim_cfg / 10.0, 0, 30),
     clip_skip = clamp(d.clip_skip, 1, 12),
     denoise_strength = clamp(d.anim_denoise / 100.0, 0, 1),
-    frame_count = clamp(d.anim_frames, 2, 256),
+    frame_count = frame_count,
     frame_duration_ms = d.anim_duration,
     seed_strategy = d.anim_seed_strategy,
     tag_name = tag_name,
@@ -397,8 +455,21 @@ function PT.build_animation_request()
     prompt_schedule = prompt_schedule,
     post_process = PT.build_post_process(),
   }
+  -- Frame interpolation
+  local interp = d.frame_interpolation
+  if interp and interp ~= "None" then
+    local match = interp:match("%d+")
+    if match then req.interpolation_factor = tonumber(match) end
+  end
   PT.attach_lora(req)
   PT.attach_neg_ti(req)
+  PT.attach_scheduler(req)
+  PT.attach_ip_adapter(req)
+  -- Attach guidance start/end for ControlNet animation modes
+  if d.mode and d.mode:find("controlnet_") then
+    req.control_guidance_start = clamp((d.anim_guidance_start or 0) / 100.0, 0, 1)
+    req.control_guidance_end   = clamp((d.anim_guidance_end or 80) / 100.0, 0, 1)
+  end
   PT.last_request = PT.shallow_copy_request(req)
   return req
 end
@@ -429,6 +500,8 @@ function PT.build_qr_request()
   }
   PT.attach_lora(req)
   PT.attach_neg_ti(req)
+  PT.attach_scheduler(req)
+  PT.attach_ip_adapter(req)
   PT.last_request = PT.shallow_copy_request(req)
   return req, use_source
 end

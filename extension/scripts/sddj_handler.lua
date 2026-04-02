@@ -79,6 +79,22 @@ handlers.result = function(resp)
     PT.import_result(resp)
   end
 
+  -- Add prompt to history (LRU 30, dedup)
+  if PT.dlg then
+    local cur_prompt = PT.dlg.data.prompt or ""
+    if cur_prompt ~= "" then
+      -- Remove duplicates
+      local new_hist = { cur_prompt }
+      for _, p in ipairs(PT.prompt_history or {}) do
+        if p ~= cur_prompt then
+          new_hist[#new_hist + 1] = p
+        end
+        if #new_hist >= 30 then break end
+      end
+      PT.prompt_history = new_hist
+    end
+  end
+
   -- Save to output directory + metadata
   local meta = PT.build_generation_meta(resp)
   PT.last_result_meta = meta
@@ -88,6 +104,47 @@ handlers.result = function(resp)
   resp._decoded_bytes = nil  -- release decoded bytes for GC
   resp._raw_image = nil      -- release binary frame data for GC
   resp.image = nil           -- release base64 string for GC
+
+  -- A/B Comparison Mode — trigger second generation with seed+1
+  if PT.dlg and PT.dlg.data.ab_compare and not PT.loop.mode and not PT._ab_second_pass then
+    local seed_a = resp.seed or 0
+    PT._ab_first_seed = seed_a
+    PT._ab_second_pass = true
+    -- Set seed to seed+1 for the B generation
+    PT.dlg:modify{ id = "seed", text = tostring(seed_a + 1) }
+    PT.update_status("A/B Compare: generating B (seed=" .. tostring(seed_a + 1) .. ")...")
+    -- Trigger second generation after a small delay
+    PT.timers.loop = PT.stop_timer(PT.timers.loop)
+    PT.timers.loop = Timer{
+      interval = PT.cfg.LOOP_DELAY,
+      ontick = function()
+        PT.timers.loop = PT.stop_timer(PT.timers.loop)
+        if not PT.dlg or not PT.state.connected or PT.state.generating then return end
+        local req = PT.build_generate_request()
+        if not req then PT._ab_second_pass = false; PT.reset_ui_buttons(); return end
+        if not PT.attach_source_image(req) then PT._ab_second_pass = false; PT.reset_ui_buttons(); return end
+        PT.state.generating = true
+        PT.state.gen_step_start = os.clock()
+        PT.start_gen_timeout()
+        PT.dlg:modify{ id = "action_btn", enabled = false }
+        PT.dlg:modify{ id = "cancel_btn", enabled = true }
+        PT.send(req)
+      end,
+    }
+    PT.timers.loop:start()
+    return
+  end
+  -- A/B second pass complete: reset state and restore seed
+  if PT._ab_second_pass then
+    PT._ab_second_pass = false
+    local seed_b = resp.seed or 0
+    PT.dlg:modify{ id = "seed", text = "-1" }
+    PT.finalize_sequence()
+    PT.update_status("A/B done (A=" .. tostring(PT._ab_first_seed or "?") .. ", B=" .. tostring(seed_b) .. ")")
+    PT._ab_first_seed = nil
+    PT.reset_ui_buttons()
+    return
+  end
 
   -- Loop mode: schedule next generation
   if PT.loop.mode and PT.dlg then
@@ -445,6 +502,10 @@ handlers.list = function(resp)
       if cfg.default or #items > 0 then
         _update_resource_combobox(cfg.widget, items, cfg.default, cfg.label)
       end
+      -- Populate LoRA 2 combobox with same options as LoRA 1
+      if lt == "loras" then
+        _update_resource_combobox("lora2_name", items, "(default)", "LoRA 2")
+      end
     end
   end
 
@@ -558,6 +619,9 @@ handlers.preset = function(resp)
   if d.clip_skip then
     PT.dlg:modify{ id = "clip_skip", value = d.clip_skip }
     PT.sync_slider_label("clip_skip")
+  end
+  if d.scheduler then
+    pcall(PT.dlg.modify, PT.dlg, { id = "scheduler", option = d.scheduler })
   end
   if d.denoise_strength then
     local v = math.floor(d.denoise_strength * 100)
@@ -708,10 +772,16 @@ handlers.audio_analysis = function(resp)
       PT.dlg:modify{ id = "audio_mod_preset", option = PT.audio.recommended_preset }
     end
 
-    local rec_str = PT.audio.recommended_preset ~= ""
-      and " — preset: " .. PT.audio.recommended_preset or ""
-    PT.update_status("Audio analyzed: " .. dur_str .. ", " .. PT.audio.total_frames
-      .. " frames" .. bpm_str .. lufs_str .. rec_str)
+    -- Warn if total frames exceeds max
+    local max_cap = 10800
+    if PT.audio.total_frames > max_cap then
+      PT.update_status("Audio exceeds max frames — generation will be capped at " .. max_cap)
+    else
+      local rec_str = PT.audio.recommended_preset ~= ""
+        and " — preset: " .. PT.audio.recommended_preset or ""
+      PT.update_status("Audio analyzed: " .. dur_str .. ", " .. PT.audio.total_frames
+        .. " frames" .. bpm_str .. lufs_str .. rec_str)
+    end
   end
 end
 

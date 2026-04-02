@@ -63,7 +63,15 @@ function PT.import_result(resp)
 
     app.transaction("SDDj Generate", function()
       local layer = spr:newLayer()
-      layer.name = "SDDj #" .. tostring(resp.seed or "?")
+      -- A/B comparison layer naming
+      local seed_str = tostring(resp.seed or "?")
+      if PT._ab_second_pass then
+        layer.name = "SDDj B #" .. seed_str
+      elseif PT.dlg and PT.dlg.data.ab_compare and not PT._ab_second_pass then
+        layer.name = "SDDj A #" .. seed_str
+      else
+        layer.name = "SDDj #" .. seed_str
+      end
       spr:newCel(layer, app.frame, img, Point(0, 0))
     end)
 

@@ -1,4 +1,69 @@
 # Changelog
+## [0.9.89] — 2026-04
+### RC Perfection Audit — Full UI/Backend Alignment & Quality Features
+
+#### Scheduler Engine
+- **DPM++ SDE Karras default** (`pipeline_factory.py`): Replaces DDIM as default scheduler — better convergence at 8 steps with Hyper-SD distilled models (`algorithm_type="sde-dpmsolver++"`, `use_karras_sigmas=True`).
+- **Per-request scheduler override** (`core.py`, `animation.py`, `audio_reactive.py`): Scheduler can be changed per-request via `scheduler` field. Restored in `finally` blocks after generation. 7 schedulers available: DPM++ SDE Karras, DPM++ 2M Karras, DDIM, Euler Ancestral, Euler, UniPC, LMS.
+- **`scheduler_factory.py`** (new): Registry-based scheduler creation with `timestep_spacing="trailing"` for Hyper-SD compatibility.
+
+#### Performance
+- **`channels_last` memory format** (`core.py`): UNet + VAE set to NHWC — better NVIDIA tensor core utilization on Ampere+ (~5-15% speedup).
+- **`compile_mode` default → `max-autotune`** (`config.py`): With `auto_compile_mode` GPU SM-based auto-selection (sm89→max-autotune, sm75→no-cudagraphs, <75→default).
+- **VAE decoder compilation** (`pipeline_factory.py`): `torch.compile` on VAE decoder with `fullgraph=True` primary, `fullgraph=False` fallback.
+- **`epilogue_fusion` fix** (`pipeline_factory.py`): Corrected from `False` to `True` per PyTorch July 2025 blog.
+
+#### Multi-LoRA Stacking
+- **Second LoRA slot** (`core.py`, `protocol.py`): LoRA2 loaded and fused additively on top of LoRA1. Cleanup restores to LoRA1-only state via weight snapshot + re-fuse.
+- **LoRA weight per-frame scheduling** (`audio_reactive.py`, `modulation_engine.py`): `lora_weight` added as audio modulation target — per-frame LoRA weight via `set_adapters()`.
+
+#### IP-Adapter (Reference Image Guidance)
+- **Lazy-loaded IP-Adapter** (`core.py`, `config.py`): Style/content/composition transfer via reference image. +1-2GB VRAM, loaded on first use. Integrated in all 4 generation paths (txt2img, img2img, inpaint, controlnet).
+
+#### Upscaler
+- **Real-ESRGAN pre-pixelation upscale** (`postprocess.py`): 2x/4x upscale before pixel art processing. Model weights auto-downloaded via `hf_hub_download`. Alpha channel preservation.
+
+#### Frame Interpolation
+- **RIFE or blend fallback** (`animation.py`): Post-animation frame interpolation (2x/3x/4x). RIFE primary, `Image.blend` linear interpolation fallback.
+
+#### PAG (Perturbed Attention Guidance)
+- **Config + runtime passthrough** (`config.py`, `core.py`): `pag_scale` passed to pipeline if PAG-compatible variant loaded. ECCV 2024.
+
+#### Quality
+- **`guidance_rescale`** (`protocol.py`, `core.py`): Diffusers native parameter for oversaturation control at high CFG. Applied in all 4 generation paths.
+
+#### Aseprite Extension (UI)
+- **Scheduler combobox** (`sddj_dialog.lua`): 7 scheduler options with DPM++ SDE Karras default.
+- **LoRA 2 section** (`sddj_dialog.lua`): Checkbox + combobox + weight slider.
+- **IP-Adapter section** (`sddj_dialog.lua`): Reference image with mode (full/style/composition) + scale slider.
+- **Upscale section** (`sddj_dialog.lua`): Checkbox + 2x/4x factor.
+- **Frame interpolation** (`sddj_dialog.lua`): None/2x/3x/4x combobox.
+- **Prompt history** (`sddj_dialog.lua`, `sddj_handler.lua`): LRU-30 prompt history with popup selection.
+- **Prompt preview** (`sddj_dialog.lua`): Live preview label with locked fields injected.
+- **Keyframe preview** (`sddj_dialog.lua`): Generate single image from keyframe 0's prompt.
+- **A/B compare** (`sddj_handler.lua`, `sddj_import.lua`): Generate seed vs seed+1, layer naming "SDDj A/B #seed".
+- **Animation guidance start/end** (`sddj_dialog.lua`): Sliders for ControlNet animation modes.
+- **AnimateDiff frame cap** (`sddj_request.lua`): Clamped to 32 frames max with status warning.
+- **PixelOE** (`sddj_dialog.lua`): Added to pixelate method dropdown.
+- **Expression variables tooltip** (`sddj_dialog.lua`): Lists all available DSL variables.
+- **Modulation slots hint** (`sddj_dialog.lua`): Discovery label for audio slot count.
+- **Preset save summary** (`sddj_dialog.lua`): Preview of settings before save.
+- **Negative embedding shared weight label** (`sddj_dialog.lua`): Clarifies shared weight behavior.
+- **Settings persistence** (`sddj_settings.lua`): All new fields persisted across sessions.
+- **Image size feedback** (`sddj_capture.lua`): User-friendly message when sprite > 2048x2048.
+
+#### Bug Fixes & Hardening
+- **`compile_mode` SM threshold fix** (`pipeline_factory.py`): `max-autotune-no-cudagraphs` still triggers GEMM benchmarking. GPUs <40 SMs (RTX 4060=24, RTX 4060 Ti=34) now auto-select `"default"` mode — eliminates minutes-long warmup with zero gain.
+- **`postprocess.py` logger** (`postprocess.py`): Module-level `log` variable was undefined in upscaler error paths — would crash with `NameError` on any upscaler failure. Fixed: single `log = logging.getLogger()` at module top.
+- **Scheduler restore `UnboundLocalError`** (`animation.py`, `audio_reactive.py`): `_original_scheduler` initialized inside `try:` after LoRA setup — if LoRA threw, `finally:` block crashed with `UnboundLocalError`. Fixed: initialization moved before `try:`.
+- **Binary frame data loss under load** (`sddj_ws.lua`): `response._raw_image` was nullified immediately after `handle_response()`, but response may be queued for deferred processing. Queued frames lost their image data. Fixed: handler already nullifies after processing.
+- **`save_animation_frame` silent errors** (`sddj_output.lua`): `pcall` swallowed all errors silently. Fixed: error now reported via `PT.update_status()`.
+- **GUIDE.md scheduler documentation** (`docs/GUIDE.md`): Outdated DDIM reference replaced with 7-scheduler table and DPM++ SDE Karras default.
+
+#### Known Limitations
+- **LoRA weight audio modulation**: Per-frame LoRA weight modulation via `set_adapters()` is a no-op in the current fused-LoRA architecture. Will be functional when/if PEFT unfused mode is implemented.
+- **`guidance_rescale`/`pag_scale` in animation**: These parameters are not yet passed through to animation chain loops (default disabled, no UI exposure).
+
 ## [0.9.88] — 2026-04
 ### Non-Blocking Startup, Compile Tuning & Edge Case Hardening
 

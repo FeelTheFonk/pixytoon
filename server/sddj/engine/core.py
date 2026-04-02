@@ -83,6 +83,8 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         self._loaded_ti_tokens: set[str] = set()
         self._loaded = False
         self._cancel_event = threading.Event()
+        # IP-Adapter state
+        self._ip_adapter_loaded = False
         # Audio reactivity modules (lazy, no GPU)
         self._tome_applied = False
         self._audio_analyzer = None
@@ -154,6 +156,11 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         pipeline_factory.setup_attention(self._pipe)
         pipeline_factory.setup_vae(self._pipe)
 
+        # 2b. channels_last memory format for better tensor core utilization (Ampere+)
+        self._pipe.unet.to(memory_format=torch.channels_last)
+        self._pipe.vae.to(memory_format=torch.channels_last)
+        log.info("channels_last memory format applied to UNet + VAE")
+
         # 3. Hyper-SD LoRA — fuse permanently
         pipeline_factory.setup_hyper_sd(self._pipe)
 
@@ -169,6 +176,9 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
 
         # 6. torch.compile — BEFORE DeepCache
         pipeline_factory.apply_torch_compile(self._pipe)
+
+        # 6b. torch.compile VAE decoder
+        pipeline_factory.apply_vae_compile(self._pipe)
 
         # 7. Token Merging (ToMe) — AFTER torch.compile, training-free acceleration
         if settings.enable_tome:
@@ -361,6 +371,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         self._lora_fuser = LoRAFuser()
         self._loaded_ti_tokens.clear()
         self._loaded = False
+        self._ip_adapter_loaded = False
         self._animatediff.unload()
         rembg_wrapper.unload()
         clear_embedding_cache()
@@ -401,6 +412,14 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         if self._stem_separator is not None:
             self._stem_separator.unload()
             cleaned.append("StemSeparator")
+
+        if self._ip_adapter_loaded:
+            try:
+                self._pipe.unload_ip_adapter()
+                self._ip_adapter_loaded = False
+                cleaned.append("IP-Adapter")
+            except Exception:
+                pass
 
         vram_cleanup(force=True)
 
@@ -455,6 +474,102 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
             pipeline_factory.create_controlnet_pipeline(self._pipe, mode)
         )
         self._controlnet_mode = mode
+
+    # ─── IP-ADAPTER ────────────────────────────────────────────
+
+    _IP_ADAPTER_MODELS = {
+        "full": "ip-adapter_sd15.bin",
+        "style": "ip-adapter-plus_sd15.bin",
+        "composition": "ip-adapter-plus-face_sd15.bin",
+    }
+
+    def _ensure_ip_adapter(self, mode: str = "full"):
+        """Lazy-load IP-Adapter, switching model if mode changed."""
+        model_name = self._IP_ADAPTER_MODELS.get(mode, settings.ip_adapter_model)
+        if self._ip_adapter_loaded and getattr(self, '_ip_adapter_mode', None) == mode:
+            return
+        # Unload previous if switching mode
+        if self._ip_adapter_loaded:
+            try:
+                self._pipe.unload_ip_adapter()
+            except Exception:
+                pass
+            self._ip_adapter_loaded = False
+        try:
+            self._pipe.load_ip_adapter(
+                settings.ip_adapter_repo,
+                subfolder="models",
+                weight_name=model_name,
+                local_files_only=True,
+            )
+            self._ip_adapter_loaded = True
+            self._ip_adapter_mode = mode
+            log.info("IP-Adapter loaded: %s/%s (mode=%s)", settings.ip_adapter_repo, model_name, mode)
+        except Exception as e:
+            log.warning("IP-Adapter unavailable (%s): %s", model_name, e)
+
+    def _prepare_ip_adapter_kwargs(self, req, kwargs: dict) -> None:
+        """If IP-Adapter is requested, load it and add kwargs for the pipeline call."""
+        if not settings.enable_ip_adapter:
+            return
+        if not req.ip_adapter_image or req.ip_adapter_scale <= 0:
+            return
+        try:
+            mode = req.ip_adapter_mode or "full"
+            self._ensure_ip_adapter(mode)
+            if not self._ip_adapter_loaded:
+                return
+            ref_image = decode_b64_image(req.ip_adapter_image).convert("RGB")
+            self._pipe.set_ip_adapter_scale(req.ip_adapter_scale)
+            kwargs["ip_adapter_image"] = ref_image
+        except Exception as e:
+            log.warning("IP-Adapter preparation failed: %s", e)
+
+    # ─── MULTI-LORA ─────────────────────────────────────────────
+
+    def _apply_lora2(self, req) -> None:
+        """Fuse second LoRA on top of already-fused LoRA1.
+
+        The primary LoRA is fused into weights (no PEFT adapter remains).
+        LoRA2 is loaded, fused additively at its weight, then metadata unloaded.
+        Cleanup restores to LoRA1-only state via snapshot + re-fuse.
+        """
+        if req.lora2 is None:
+            return
+        if req.lora is None:
+            return  # lora2 requires lora1 to be set
+        if req.lora2.name == req.lora.name:
+            return  # Same LoRA — skip duplicate load
+        try:
+            from ..lora_manager import resolve_lora_path
+            lora2_path = resolve_lora_path(req.lora2.name)
+            self._pipe.load_lora_weights(
+                str(lora2_path.parent),
+                weight_name=lora2_path.name,
+                adapter_name="lora2_tmp",
+                local_files_only=True,
+            )
+            self._pipe.fuse_lora(lora_scale=req.lora2.weight)
+            self._pipe.unload_lora_weights()
+            log.info("Multi-LoRA: +%s fused at weight %.2f on top of %s",
+                     req.lora2.name, req.lora2.weight, req.lora.name)
+        except FileNotFoundError:
+            log.warning("LoRA2 '%s' not found — proceeding with single LoRA", req.lora2.name)
+        except Exception as e:
+            log.warning("LoRA2 '%s' load failed — proceeding with single LoRA: %s",
+                        req.lora2.name, e)
+
+    def _cleanup_lora2(self) -> None:
+        """Restore to single-LoRA state by re-fusing LoRA1 from snapshot."""
+        if not self._lora_fuser.current_name:
+            return
+        try:
+            name = self._lora_fuser.current_name
+            weight = self._lora_fuser.current_weight
+            # set_lora restores from snapshot then re-loads + fuses LoRA1
+            self._lora_fuser.set_lora(self._pipe, name, weight)
+        except Exception as e:
+            log.warning("LoRA2 cleanup (re-fuse LoRA1) failed: %s", e)
 
     # ─── GENERATION ──────────────────────────────────────────
 
@@ -523,6 +638,15 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
                             or lora_weight != self._lora_fuser.current_weight):
                         self.set_style_lora(lora_name, lora_weight)
 
+                # Multi-LoRA: load second adapter if specified
+                _lora2_active = False
+                if req.lora2 is not None:
+                    try:
+                        self._apply_lora2(req)
+                        _lora2_active = True
+                    except Exception as e:
+                        log.warning("Multi-LoRA setup failed: %s", e)
+
                 effective_neg = self._build_effective_negative(req.negative_prompt, req.negative_ti)
 
                 # Progress callback adapter with cancellation + timeout support
@@ -556,22 +680,47 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
                     if _overrides:
                         req = req.model_copy(update=_overrides)
 
+                # ── Per-request scheduler override ────────────────────
+                _original_scheduler = None
+                if req.scheduler:
+                    try:
+                        from ..scheduler_factory import create_scheduler
+                        _original_scheduler = self._pipe.scheduler
+                        new_sched = create_scheduler(req.scheduler, _original_scheduler.config)
+                        self._pipe.scheduler = new_sched
+                        if self._img2img_pipe is not None:
+                            self._img2img_pipe.scheduler = type(new_sched).from_config(new_sched.config)
+                    except Exception as e:
+                        log.warning("Scheduler override '%s' failed: %s — using default", req.scheduler, e)
+                        _original_scheduler = None
+
                 # ── Mode dispatch ─────────────────────────────────────
 
-                if req.mode == GenerationMode.TXT2IMG:
-                    image = self._txt2img(req, generator, step_callback, effective_prompt, effective_neg)
+                try:
+                    if req.mode == GenerationMode.TXT2IMG:
+                        image = self._txt2img(req, generator, step_callback, effective_prompt, effective_neg)
 
-                elif req.mode == GenerationMode.IMG2IMG:
-                    image = self._img2img(req, generator, step_callback, effective_prompt, effective_neg)
+                    elif req.mode == GenerationMode.IMG2IMG:
+                        image = self._img2img(req, generator, step_callback, effective_prompt, effective_neg)
 
-                elif req.mode == GenerationMode.INPAINT:
-                    image = self._inpaint(req, generator, step_callback, effective_prompt, effective_neg)
+                    elif req.mode == GenerationMode.INPAINT:
+                        image = self._inpaint(req, generator, step_callback, effective_prompt, effective_neg)
 
-                elif req.mode.value.startswith("controlnet_"):
-                    image = self._controlnet_generate(req, generator, step_callback, effective_prompt, effective_neg)
+                    elif req.mode.value.startswith("controlnet_"):
+                        image = self._controlnet_generate(req, generator, step_callback, effective_prompt, effective_neg)
 
-                else:
-                    raise ValueError(f"Unknown mode: {req.mode}")
+                    else:
+                        raise ValueError(f"Unknown mode: {req.mode}")
+                finally:
+                    # Cleanup multi-LoRA after generation
+                    if _lora2_active:
+                        self._cleanup_lora2()
+                    # Restore original scheduler if overridden
+                    if _original_scheduler is not None:
+                        self._pipe.scheduler = _original_scheduler
+                        if self._img2img_pipe is not None:
+                            self._img2img_pipe.scheduler = type(_original_scheduler).from_config(
+                                _original_scheduler.config)
 
                 # ── Post-process ──────────────────────────────────────
                 image = postprocess_apply(image, req.post_process)
@@ -598,6 +747,11 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         except torch.cuda.OutOfMemoryError:
             log.error("CUDA OOM — clearing VRAM cache")
             vram_cleanup(force=True)
+            try:
+                from ..pipeline_factory import fresh_scheduler
+                self._pipe.scheduler = fresh_scheduler(self._pipe)
+            except Exception:
+                pass  # best-effort
             raise
         finally:
             self._cancel_event.clear()
@@ -606,7 +760,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
 
     def _txt2img(self, req, generator, callback, prompt, negative):
         torch.compiler.cudagraph_mark_step_begin()
-        return self._pipe(
+        kwargs = dict(
             prompt=prompt,
             negative_prompt=negative,
             num_inference_steps=req.steps,
@@ -617,7 +771,14 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
             clip_skip=req.clip_skip,
             callback_on_step_end=callback,
             output_type="pil",
-        ).images[0]
+        )
+        if req.guidance_rescale > 0:
+            kwargs["guidance_rescale"] = req.guidance_rescale
+        if req.pag_scale > 0 and "PAG" in type(self._pipe).__name__:
+            kwargs["pag_scale"] = req.pag_scale
+        # IP-Adapter reference image
+        self._prepare_ip_adapter_kwargs(req, kwargs)
+        return self._pipe(**kwargs).images[0]
 
     def _img2img(self, req, generator, callback, prompt, negative):
         if req.source_image is None:
@@ -639,7 +800,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         if self._dc_state is not None:
             self._dc_state.suppress_for("img2img")
         try:
-            return self._img2img_pipe(
+            kwargs = dict(
                 prompt=prompt,
                 negative_prompt=negative,
                 image=source,
@@ -650,7 +811,14 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
                 clip_skip=req.clip_skip,
                 callback_on_step_end=callback,
                 output_type="pil",
-            ).images[0]
+            )
+            if req.guidance_rescale > 0:
+                kwargs["guidance_rescale"] = req.guidance_rescale
+            if req.pag_scale > 0 and "PAG" in type(self._img2img_pipe).__name__:
+                kwargs["pag_scale"] = req.pag_scale
+            # IP-Adapter reference image
+            self._prepare_ip_adapter_kwargs(req, kwargs)
+            return self._img2img_pipe(**kwargs).images[0]
         finally:
             if self._dc_state is not None:
                 self._dc_state.restore()
@@ -680,7 +848,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         if self._dc_state is not None:
             self._dc_state.suppress_for("img2img")
         try:
-            inpainted = self._img2img_pipe(
+            kwargs = dict(
                 prompt=prompt,
                 negative_prompt=negative,
                 image=source,
@@ -691,7 +859,13 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
                 clip_skip=req.clip_skip,
                 callback_on_step_end=callback,
                 output_type="pil",
-            ).images[0]
+            )
+            if req.guidance_rescale > 0:
+                kwargs["guidance_rescale"] = req.guidance_rescale
+            if req.pag_scale > 0 and "PAG" in type(self._img2img_pipe).__name__:
+                kwargs["pag_scale"] = req.pag_scale
+            self._prepare_ip_adapter_kwargs(req, kwargs)
+            inpainted = self._img2img_pipe(**kwargs).images[0]
         finally:
             if self._dc_state is not None:
                 self._dc_state.restore()
@@ -730,6 +904,11 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
             callback_on_step_end=callback,
             output_type="pil",
         )
+        if req.guidance_rescale > 0:
+            call_kwargs["guidance_rescale"] = req.guidance_rescale
+        if req.pag_scale > 0 and "PAG" in type(self._controlnet_pipe).__name__:
+            call_kwargs["pag_scale"] = req.pag_scale
+        self._prepare_ip_adapter_kwargs(req, call_kwargs)
 
         if use_img2img:
             call_kwargs["image"] = source

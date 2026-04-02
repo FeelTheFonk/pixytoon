@@ -12,8 +12,10 @@ function PT.capture_active_layer()
     PT.update_status("Capture rejected: sprite exceeds " .. max_cap .. "px limit")
     return nil
   end
-  if spr.width > 2048 or spr.height > 2048 then
-    PT.update_status("Warning: large sprite — capture may be slow")
+  local large_source = (spr.width > 2048 or spr.height > 2048)
+  if large_source then
+    -- Large source: warn user about resize
+    PT.update_status("Source image resized to fit 2048x2048 max")
   end
   local cel = app.cel
   if cel == nil or cel.image == nil then return nil end

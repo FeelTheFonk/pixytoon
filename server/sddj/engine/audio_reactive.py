@@ -124,6 +124,7 @@ class AudioReactiveMixin:
 
         self._cancel_event.clear()
         self._ensure_audio_modules()
+        _original_scheduler = None
 
         try:
             # Handle LoRA
@@ -131,6 +132,19 @@ class AudioReactiveMixin:
                 if (req.lora.name != self._lora_fuser.current_name
                         or req.lora.weight != self._lora_fuser.current_weight):
                     self.set_style_lora(req.lora.name, req.lora.weight)
+
+            # Per-request scheduler override
+            if req.scheduler:
+                try:
+                    from ..scheduler_factory import create_scheduler
+                    _original_scheduler = self._pipe.scheduler
+                    new_sched = create_scheduler(req.scheduler, _original_scheduler.config)
+                    self._pipe.scheduler = new_sched
+                    if self._img2img_pipe is not None:
+                        self._img2img_pipe.scheduler = type(new_sched).from_config(new_sched.config)
+                except Exception as e:
+                    log.warning("Scheduler override '%s' failed: %s", req.scheduler, e)
+                    _original_scheduler = None
 
             # 1. Analyze audio
             analysis = self.analyze_audio(req.audio_path, req.fps, req.enable_stems)
@@ -199,6 +213,12 @@ class AudioReactiveMixin:
             raise
         finally:
             self._cancel_event.clear()
+            # Restore original scheduler if overridden
+            if _original_scheduler is not None:
+                self._pipe.scheduler = _original_scheduler
+                if self._img2img_pipe is not None:
+                    self._img2img_pipe.scheduler = type(_original_scheduler).from_config(
+                        _original_scheduler.config)
 
     def _generate_audio_chain(
         self,
@@ -324,6 +344,20 @@ class AudioReactiveMixin:
                         frame_count += 1
                         log.debug("Audio frame %d/%d: cadence skip (reuse)", frame_idx, total_frames)
                         continue
+
+                # Per-frame LoRA weight modulation (between pipeline calls, not per-step)
+                # NOTE: Currently a no-op — LoRAFuser fuses weights and unloads the PEFT
+                # adapter, so set_adapters() has nothing to modulate. The except clause
+                # handles this gracefully. Will work if/when we switch to unfused PEFT mode.
+                if "lora_weight" in frame_params and self._lora_fuser.current_name:
+                    try:
+                        lw = frame_params["lora_weight"]
+                        self._pipe.set_adapters(
+                            [self._lora_fuser.current_name],
+                            [max(0.0, min(2.0, lw))],
+                        )
+                    except Exception:
+                        pass  # expected: fused LoRA has no active PEFT adapter
 
                 eff_denoise = frame_params.get("denoise_strength", req.denoise_strength)
                 _raw_denoise = eff_denoise

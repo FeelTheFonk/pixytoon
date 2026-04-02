@@ -11,6 +11,7 @@ import torch
 from diffusers import (
     ControlNetModel,
     DDIMScheduler,
+    DPMSolverMultistepScheduler,
     StableDiffusionControlNetPipeline,
     StableDiffusionControlNetImg2ImgPipeline,
     StableDiffusionImg2ImgPipeline,
@@ -88,6 +89,15 @@ def load_base_pipeline() -> StableDiffusionPipeline:
                 local_files_only=True,
             )
         pipe.to("cuda")
+
+        # PAG: inform user at load time if enabled
+        if settings.enable_pag:
+            log.info(
+                "PAG config enabled — pag_scale will be passed to pipeline if supported. "
+                "To use PAG, load a PAG-compatible pipeline variant "
+                "(e.g. StableDiffusionPAGPipeline)."
+            )
+
         _pipeline_cache[cache_key] = pipe
     return pipe
 
@@ -174,8 +184,10 @@ def setup_vae(pipe: StableDiffusionPipeline) -> None:
 
 def setup_hyper_sd(pipe: StableDiffusionPipeline) -> None:
     """Load Hyper-SD LoRA, fuse permanently, then unload adapter."""
-    pipe.scheduler = DDIMScheduler.from_config(
+    pipe.scheduler = DPMSolverMultistepScheduler.from_config(
         pipe.scheduler.config,
+        algorithm_type="sde-dpmsolver++",
+        use_karras_sigmas=True,
         timestep_spacing="trailing",
     )
 
@@ -285,6 +297,35 @@ def apply_unet_quantization(pipe: StableDiffusionPipeline) -> None:
         log.warning("UNet quantization failed (%s): %s — continuing without quantization", dtype, e)
 
 
+def _resolve_compile_mode() -> str:
+    """Auto-select compile mode based on GPU SM count.
+
+    Both max-autotune and max-autotune-no-cudagraphs trigger exhaustive GEMM
+    kernel benchmarking (max_autotune_gemm) which requires a minimum SM count
+    to produce any benefit.  GPUs below 40 SMs (RTX 4060=24, RTX 4060 Ti=34)
+    waste minutes on GEMM search with zero gain and risk ptxas crashes.
+
+    Thresholds:
+      ≥68 SMs + Ampere+  → max-autotune         (full GEMM + CUDA graphs)
+      ≥40 SMs + Turing+  → max-autotune-no-cudagraphs  (GEMM search, no graphs)
+      <40 SMs             → default              (fast compile, no GEMM search)
+    """
+    mode = settings.compile_mode
+    if settings.auto_compile_mode and torch.cuda.is_available():
+        props = torch.cuda.get_device_properties(0)
+        sm_count = props.multi_processor_count
+        cap = torch.cuda.get_device_capability()
+        sm_arch = cap[0] * 10 + cap[1]
+        if sm_count >= 68 and sm_arch >= 80:
+            mode = "max-autotune"
+        elif sm_count >= 40 and sm_arch >= 75:
+            mode = "max-autotune-no-cudagraphs"
+        else:
+            mode = "default"
+        log.info("Auto-selected compile_mode=%s (sm%d, %d SMs)", mode, sm_arch, sm_count)
+    return mode
+
+
 def apply_torch_compile(pipe: StableDiffusionPipeline) -> None:
     """torch.compile the UNet if enabled.
 
@@ -304,30 +345,47 @@ def apply_torch_compile(pipe: StableDiffusionPipeline) -> None:
     """
     if not settings.enable_torch_compile:
         return
+    mode = _resolve_compile_mode()
     # Inductor config flags for diffusion model optimization (PyTorch blog, July 2025)
     torch._inductor.config.conv_1x1_as_mm = True
     # Coordinate descent kernel tuning — only beneficial for max-autotune modes
     # (exhaustive GEMM benchmarking). Wastes 10-60s on "default" mode with no gain.
-    if settings.compile_mode.startswith("max-autotune"):
+    if mode.startswith("max-autotune"):
         torch._inductor.config.coordinate_descent_tuning = True
         torch._inductor.config.coordinate_descent_check_all_directions = True
     # INT8/mixed-precision fusion flags — only needed for torchao quantized models
     if settings.enable_unet_quantization:
-        torch._inductor.config.epilogue_fusion = False
+        torch._inductor.config.epilogue_fusion = True
         torch._inductor.config.force_fuse_int_mm_with_mul = True
         torch._inductor.config.use_mixed_mm = True
     use_dynamic = settings.compile_dynamic and not settings.enable_deepcache
     try:
         pipe.unet = torch.compile(
             pipe.unet,
-            mode=settings.compile_mode,
+            mode=mode,
             fullgraph=False,
             dynamic=use_dynamic,
         )
         log.info("torch.compile enabled for UNet (mode=%s, dynamic=%s)",
-                 settings.compile_mode, use_dynamic)
+                 mode, use_dynamic)
     except Exception as e:
         log.warning("torch.compile failed: %s", e)
+
+
+def apply_vae_compile(pipe: StableDiffusionPipeline) -> None:
+    """torch.compile the VAE decoder for faster image decode."""
+    if not settings.enable_torch_compile:
+        return
+    mode = _resolve_compile_mode()
+    try:
+        pipe.vae.decode = torch.compile(pipe.vae.decode, mode=mode, fullgraph=True)
+        log.info("torch.compile enabled for VAE decode (mode=%s)", mode)
+    except Exception:
+        try:
+            pipe.vae.decode = torch.compile(pipe.vae.decode, mode=mode, fullgraph=False)
+            log.info("torch.compile enabled for VAE decode (mode=%s, fullgraph=False fallback)", mode)
+        except Exception as e:
+            log.warning("VAE compile failed: %s — continuing uncompiled", e)
 
 
 def create_img2img_pipeline(

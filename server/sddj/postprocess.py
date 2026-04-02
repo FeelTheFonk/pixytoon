@@ -33,7 +33,10 @@ from .protocol import (
     QuantizeMethod,
 )
 from . import palette_manager
+from .config import settings
 from .oklab import rgb_to_oklab, oklab_to_rgb
+
+log = logging.getLogger("sddj.postprocess")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -43,6 +46,8 @@ from .oklab import rgb_to_oklab, oklab_to_rgb
 def _any_processing_active(spec: PostProcessSpec) -> bool:
     """Check if any post-processing stage is enabled."""
     if spec.remove_bg:
+        return True
+    if spec.upscale_enabled:
         return True
     if spec.pixelate.enabled:
         return True
@@ -73,6 +78,10 @@ def apply(image: Image.Image, spec: PostProcessSpec) -> Image.Image:
     # 1. Background removal
     if spec.remove_bg:
         img = _remove_background(img)
+
+    # 1b. Upscale (before pixelation — higher resolution input improves pixel art quality)
+    if spec.upscale_enabled and settings.enable_upscaler:
+        img = _upscale(img, spec.upscale_factor)
 
     # 2. Pixelation
     if spec.pixelate.enabled:
@@ -120,10 +129,74 @@ def _remove_background(img: Image.Image) -> Image.Image:
 
 
 # ─────────────────────────────────────────────────────────────
-# STEP 2: PIXELATION
+# STEP 1b: UPSCALE (Real-ESRGAN)
 # ─────────────────────────────────────────────────────────────
 
-_pixelate_log = logging.getLogger("sddj.postprocess")
+_upscaler = None
+
+
+def _ensure_upscaler():
+    global _upscaler
+    if _upscaler is not None:
+        return _upscaler
+    try:
+        from realesrgan import RealESRGANer
+        from basicsr.archs.rrdbnet_arch import RRDBNet
+        from huggingface_hub import hf_hub_download
+        model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=6, num_grow_ch=32, scale=4)
+        # Download model weights if not cached
+        model_path = hf_hub_download(
+            repo_id="ai-forever/Real-ESRGAN",
+            filename="RealESRGAN_x4plus_anime_6B.pth",
+            local_files_only=False,
+        )
+        _upscaler = RealESRGANer(
+            scale=4,
+            model_path=model_path,
+            model=model,
+            tile=512,
+            tile_pad=10,
+            pre_pad=0,
+            half=True,
+        )
+        return _upscaler
+    except ImportError:
+        log.warning("realesrgan not installed — upscaling unavailable")
+        return None
+    except Exception as e:
+        log.warning("Upscaler initialization failed: %s", e)
+        return None
+
+
+def _upscale(img: Image.Image, factor: int = 4) -> Image.Image:
+    """Upscale image using Real-ESRGAN (lazy-loaded)."""
+    upscaler = _ensure_upscaler()
+    if upscaler is None:
+        return img
+    try:
+        has_alpha = img.mode == "RGBA"
+        if has_alpha:
+            alpha = img.getchannel("A")
+            rgb = img.convert("RGB")
+        else:
+            rgb = img if img.mode == "RGB" else img.convert("RGB")
+        img_array = np.array(rgb)
+        output, _ = upscaler.enhance(img_array, outscale=factor)
+        result = Image.fromarray(output)
+        if has_alpha:
+            # Upscale alpha channel to match
+            alpha_resized = alpha.resize(result.size, Image.NEAREST)
+            result = result.convert("RGBA")
+            result.putalpha(alpha_resized)
+        return result
+    except Exception as e:
+        log.warning("Upscale failed: %s — returning original", e)
+        return img
+
+
+# ─────────────────────────────────────────────────────────────
+# STEP 2: PIXELATION
+# ─────────────────────────────────────────────────────────────
 
 
 def _pixelate(
@@ -163,7 +236,7 @@ def _pixelate(
                 out.putalpha(alpha_resized)
             return out
         except ImportError:
-            _pixelate_log.warning("pixeloe not installed, falling back to box downscale")
+            log.warning("pixeloe not installed, falling back to box downscale")
             method = PixelateMethod.BOX
     if method == PixelateMethod.BOX:
         # BOX (area averaging) preserves thin features as averaged colors

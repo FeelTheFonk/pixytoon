@@ -50,6 +50,43 @@ from .helpers import (
 log = logging.getLogger("sddj.engine")
 
 
+def _interpolate_frames(frames: list, factor: int) -> list:
+    """Interpolate between animation frames using RIFE or linear blend.
+
+    Falls back to simple alpha blending if RIFE is not available.
+    """
+    if len(frames) < 2 or factor < 2:
+        return frames
+    try:
+        # Try RIFE first
+        from rife_ncnn_vulkan import Rife
+        rife = Rife(gpuid=0)
+        interpolated = []
+        for i in range(len(frames) - 1):
+            interpolated.append(frames[i])
+            for j in range(1, factor):
+                t = j / factor
+                mid = rife.process(frames[i], frames[i + 1], timestep=t)
+                interpolated.append(mid)
+        interpolated.append(frames[-1])
+        return interpolated
+    except ImportError:
+        log.warning("RIFE not available — using simple blend interpolation")
+        # Simple alpha blend fallback
+        interpolated = []
+        for i in range(len(frames) - 1):
+            interpolated.append(frames[i])
+            for j in range(1, factor):
+                t = j / factor
+                blended = Image.blend(frames[i], frames[i + 1], t)
+                interpolated.append(blended)
+        interpolated.append(frames[-1])
+        return interpolated
+    except Exception as e:
+        log.warning("Frame interpolation failed: %s — returning original frames", e)
+        return frames
+
+
 class AnimationMixin:
     """Animation generation methods for DiffusionEngine."""
 
@@ -64,6 +101,7 @@ class AnimationMixin:
             self.load()
 
         self._cancel_event.clear()
+        _original_scheduler = None
 
         try:
             # Handle LoRA same as single generation
@@ -72,12 +110,32 @@ class AnimationMixin:
                         or req.lora.weight != self._lora_fuser.current_weight):
                     self.set_style_lora(req.lora.name, req.lora.weight)
 
-            if req.method == AnimationMethod.CHAIN:
-                return self._generate_chain(req, on_frame, on_progress)
-            elif req.method == AnimationMethod.ANIMATEDIFF:
-                return self._generate_animatediff(req, on_frame, on_progress)
-            else:
-                raise ValueError(f"Unknown animation method: {req.method}")
+            # Per-request scheduler override
+            if req.scheduler:
+                try:
+                    from ..scheduler_factory import create_scheduler
+                    _original_scheduler = self._pipe.scheduler
+                    new_sched = create_scheduler(req.scheduler, _original_scheduler.config)
+                    self._pipe.scheduler = new_sched
+                    if self._img2img_pipe is not None:
+                        self._img2img_pipe.scheduler = type(new_sched).from_config(new_sched.config)
+                except Exception as e:
+                    log.warning("Scheduler override '%s' failed: %s", req.scheduler, e)
+                    _original_scheduler = None
+
+            try:
+                if req.method == AnimationMethod.CHAIN:
+                    return self._generate_chain(req, on_frame, on_progress)
+                elif req.method == AnimationMethod.ANIMATEDIFF:
+                    return self._generate_animatediff(req, on_frame, on_progress)
+                else:
+                    raise ValueError(f"Unknown animation method: {req.method}")
+            finally:
+                if _original_scheduler is not None:
+                    self._pipe.scheduler = _original_scheduler
+                    if self._img2img_pipe is not None:
+                        self._img2img_pipe.scheduler = type(_original_scheduler).from_config(
+                            _original_scheduler.config)
 
         except torch.cuda.OutOfMemoryError:
             log.error("CUDA OOM during animation — clearing VRAM cache")
@@ -564,6 +622,15 @@ class AnimationMixin:
                     pipe.disable_free_init()
                 except Exception:
                     pass
+
+        # Frame interpolation (RIFE or blend fallback)
+        if settings.enable_frame_interpolation and getattr(req, 'interpolation_factor', None) and len(pil_frames) >= 2:
+            try:
+                pil_frames = _interpolate_frames(pil_frames, req.interpolation_factor)
+                total_frames = len(pil_frames)
+                log.info("Frame interpolation: %dx → %d frames", req.interpolation_factor, total_frames)
+            except Exception as e:
+                log.warning("Frame interpolation failed: %s — using original frames", e)
 
         # Post-process and encode all frames
         frame_count = 0

@@ -147,6 +147,8 @@ class PostProcessSpec(BaseModel):
     dither: DitherMode = DitherMode.NONE
     palette: PaletteSpec = Field(default_factory=PaletteSpec)
     remove_bg: bool = False
+    upscale_enabled: bool = False
+    upscale_factor: int = Field(4, ge=2, le=4)  # 2x or 4x
 
 
 
@@ -207,6 +209,7 @@ class PromptScheduleSpec(BaseModel):
 _EXCLUDE_GENERATE = frozenset({
     "action", "method", "frame_count", "frame_duration_ms",
     "seed_strategy", "tag_name", "enable_freeinit", "freeinit_iterations",
+    "interpolation_factor",
     "locked_fields", "prompt_template", "randomness",
     "subject_type", "prompt_mode", "exclude_terms",
     "audio_path", "fps", "enable_stems",
@@ -278,9 +281,17 @@ class BaseGenerationParams(BaseModel):
     cfg_scale: float = Field(5.0, ge=0.0, le=30.0)
     denoise_strength: float = Field(0.30, ge=0.0, le=1.0)
     clip_skip: int = Field(2, ge=1, le=12)
+    guidance_rescale: float = Field(0.0, ge=0.0, le=1.0)
+    pag_scale: float = Field(0.0, ge=0.0, le=10.0)  # 0 = disabled; requires PAG pipeline
+    scheduler: Optional[str] = None  # None = use server default
     lora: Optional[LoRASpec] = None
+    lora2: Optional[LoRASpec] = None  # Second LoRA slot (multi-LoRA stacking)
     negative_ti: Optional[list[EmbeddingSpec]] = None
     post_process: PostProcessSpec = Field(default_factory=PostProcessSpec)
+    # ── IP-Adapter reference image ──
+    ip_adapter_image: Optional[str] = None  # base64 reference image
+    ip_adapter_scale: float = Field(0.0, ge=0.0, le=2.0)  # 0 = disabled
+    ip_adapter_mode: Optional[str] = None  # "full", "style", "composition"
 
 
 class GenerateRequest(BaseGenerationParams):
@@ -310,6 +321,8 @@ class AnimationRequest(BaseGenerationParams):
     # AnimateDiff-specific
     enable_freeinit: bool = False
     freeinit_iterations: int = Field(2, ge=1, le=3)
+    # ── Frame interpolation (RIFE or blend fallback) ──
+    interpolation_factor: Optional[int] = Field(None, ge=2, le=4)  # None = disabled
     # ── Prompt scheduling ──
     prompt_schedule: Optional[PromptScheduleSpec] = None
 
@@ -335,11 +348,20 @@ class Request(BaseModel):
     cfg_scale: Optional[float] = None
     denoise_strength: Optional[float] = None
     clip_skip: Optional[int] = None
+    guidance_rescale: Optional[float] = None
+    scheduler: Optional[str] = None
+    pag_scale: Optional[float] = None
     lora: Optional[LoRASpec] = None
+    lora2: Optional[LoRASpec] = None
     negative_ti: Optional[list[EmbeddingSpec]] = None
     post_process: Optional[PostProcessSpec] = None
+    # IP-Adapter fields
+    ip_adapter_image: Optional[str] = Field(None, max_length=50_000_000)
+    ip_adapter_scale: Optional[float] = None
+    ip_adapter_mode: Optional[str] = None
     # Animation fields
     method: Optional[AnimationMethod] = None
+    interpolation_factor: Optional[int] = None
     frame_count: Optional[int] = None
     frame_duration_ms: Optional[int] = None
     seed_strategy: Optional[SeedStrategy] = None

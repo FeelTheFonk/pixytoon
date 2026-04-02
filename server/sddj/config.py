@@ -57,7 +57,8 @@ class Settings(BaseSettings):
 
     # ── Performance ──────────────────────────────────────────
     enable_torch_compile: bool = True
-    compile_mode: Literal["default", "max-autotune", "max-autotune-no-cudagraphs", "reduce-overhead"] = "default"
+    compile_mode: Literal["default", "max-autotune", "max-autotune-no-cudagraphs", "reduce-overhead"] = "max-autotune"
+    auto_compile_mode: bool = True  # Auto-select compile mode based on GPU SM count
     compile_dynamic: bool = False  # True only when DeepCache disabled (incompatible)
     # At 8 steps with interval=3, gain may be marginal — benchmark with/without
     enable_deepcache: bool = True
@@ -84,6 +85,12 @@ class Settings(BaseSettings):
     # ── Queue management ─────────────────────────────────────
     queue_wait_timeout: float = Field(120.0, gt=0.0)  # Max wait for GPU lock (seconds)
 
+    # ── PAG (Perturbed Attention Guidance) ────────────────────
+    # Requires diffusers PAG pipeline support (StableDiffusionPAGPipeline).
+    # Adds ~10-15% overhead. Default off — enable explicitly when PAG variant loaded.
+    enable_pag: bool = False
+    default_pag_scale: float = Field(3.0, ge=0.0, le=10.0)
+
     # ── FreeU v2 (free quality boost, no training needed) ────
     enable_freeu: bool = True
     freeu_s1: float = Field(0.9, ge=0.0, le=2.0)
@@ -99,6 +106,18 @@ class Settings(BaseSettings):
 
     # ── Timeouts ─────────────────────────────────────────────
     generation_timeout: float = Field(600.0, gt=0.0)  # 10 minutes max per generation
+
+    # ── IP-Adapter ───────────────────────────────────────────
+    enable_ip_adapter: bool = False  # Lazy-load, +1-2GB VRAM
+    ip_adapter_repo: str = "h94/IP-Adapter"
+    ip_adapter_model: str = "ip-adapter_sd15.bin"
+
+    # ── Upscaler ────────────────────────────────────────────
+    enable_upscaler: bool = False  # Requires realesrgan package
+    upscaler_model: str = "RealESRGAN_x4plus_anime_6B"
+
+    # ── Frame interpolation ─────────────────────────────────
+    enable_frame_interpolation: bool = False
 
     # ── rembg ────────────────────────────────────────────────
     rembg_model: str = "birefnet-general"  # SOTA edges (IoU 0.87 DIS5K vs u2net 0.39). Alt: u2net (fast CPU ~3-4s)
