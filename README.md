@@ -1,4 +1,4 @@
-# SDDj v0.9.87
+# SDDj v0.9.88
 
 Local SOTA image generation and animation for Aseprite via Stable Diffusion + AnimateDiff.
 

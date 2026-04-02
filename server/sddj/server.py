@@ -244,7 +244,37 @@ async def _lifespan(application: FastAPI):
     if settings.enable_frame_compression and not _HAS_LZ4:
         log.warning("enable_frame_compression=True but lz4 not installed — compression disabled")
     log.info("Engine loaded. WebSocket ready on ws://%s:%d/ws", settings.host, settings.port)
+
+    # Warmup task starts immediately — acquires _generate_lock to prevent
+    # concurrent GPU access during compilation. Clients can connect but will
+    # queue behind the lock until warmup releases it.
+    warmup_task: asyncio.Task | None = None
+    if settings.enable_warmup:
+        async def _background_warmup():
+            async with _acquire_gpu():
+                await asyncio.get_running_loop().run_in_executor(
+                    None, engine.warmup,
+                )
+
+        warmup_task = asyncio.create_task(_background_warmup())
+
+        def _on_warmup_done(task: asyncio.Task) -> None:
+            if task.cancelled():
+                log.info("Background warmup cancelled (shutdown)")
+            elif task.exception():
+                log.error("Background warmup failed: %s", task.exception())
+
+        warmup_task.add_done_callback(_on_warmup_done)
+
     yield
+
+    if warmup_task is not None and not warmup_task.done():
+        engine.cancel()  # interrupt warmup via cancel_event
+        warmup_task.cancel()
+        try:
+            await warmup_task
+        except (asyncio.CancelledError, Exception):
+            pass
 
     # Graceful shutdown: close active WebSocket connections
     for ws in list(_active_connections):

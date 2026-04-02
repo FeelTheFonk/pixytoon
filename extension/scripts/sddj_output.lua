@@ -214,8 +214,8 @@ function PT.open_output_dir()
   if not app.fs.isDirectory(dir) then
     app.fs.makeDirectory(dir)
   end
-  -- Sanitize: strict allowlist, then use explorer directly (avoids cmd.exe metachar injection)
-  local safe_dir = dir:gsub('[^%w%s:/\\%-_.]', "")
+  -- Sanitize: strip shell metacharacters only (preserve parens, tilde, etc.)
+  local safe_dir = dir:gsub('[`$|<>&;%%!]', "")
   if package.config:sub(1, 1) == "\\" then
     safe_dir = safe_dir:gsub("/", "\\")
     os.execute('explorer "' .. safe_dir .. '"')

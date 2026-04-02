@@ -67,7 +67,7 @@ class TestSettingsDefaults:
     def test_performance_defaults(self):
         s = self._make_settings()
         assert s.enable_torch_compile is True
-        assert s.compile_mode == "max-autotune-no-cudagraphs"
+        assert s.compile_mode == "default"
         assert s.enable_deepcache is True
         assert s.enable_attention_slicing is True
         assert s.enable_vae_tiling is True

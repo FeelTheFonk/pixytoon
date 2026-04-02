@@ -1,11 +1,43 @@
 # Changelog
+## [0.9.88] — 2026-04
+### Non-Blocking Startup, Compile Tuning & Edge Case Hardening
+
+#### Server Startup (Critical Fix)
+- **Non-blocking warmup** (`server.py`): `torch.compile` warmup moved from blocking lifespan startup to background `asyncio.Task` behind `_generate_lock`. Server accepts WebSocket connections immediately (~4s startup vs ~3.5min). Clients queue transparently during warmup.
+- **Warmup done callback** (`server.py`): Exceptions in background warmup now logged via `add_done_callback` (was silently swallowed).
+- **Cancellation-aware warmup** (`core.py`): Warmup uses `_cancel_event`-checking callback instead of `_noop_callback` — shutdown interrupts warmup at next step instead of waiting for completion.
+- **Shutdown safety** (`server.py`): Lifespan shutdown calls `engine.cancel()` before `warmup_task.cancel()` to interrupt the executor-bound pipeline call.
+
+#### torch.compile Tuning
+- **`compile_mode` default → `"default"`** (`config.py`): `max-autotune-no-cudagraphs` triggers exhaustive GEMM benchmarking that requires ≥68 SMs for benefit. RTX 4060 Ti (34 SMs) wasted 200+ seconds with no gain. Users with high-SM GPUs can still set `SDDJ_COMPILE_MODE=max-autotune-no-cudagraphs`.
+- **Gated `coordinate_descent_tuning`** (`pipeline_factory.py`): Expensive kernel neighbor search now only runs in `max-autotune*` modes — saves 10-60s compilation on `"default"` mode.
+
+#### Aseprite Extension
+- **`queued` handler** (`sddj_handler.lua`): New handler for server queue feedback during warmup — shows "Queued — server warming up" instead of confusing "Unknown response type".
+- **ETA accuracy** (`sddj_handler.lua`): `gen_step_start` reset on first progress step — ETA no longer includes server queue wait time.
+- **Generation timeout reset** (`sddj_handler.lua`): Timeout restarts from queue acknowledgment, preventing premature timeout when warmup delays generation start.
+- **Pong status preservation** (`sddj_handler.lua`): Pong response no longer overwrites useful post-generation status messages (seed, timing) every 30s.
+- **Animation export fix** (`sddj_handler.lua`): `animation_complete` now preserves `output_dir` via `pre_reset` — MP4 export button works after non-audio animations.
+- **Inpainting mask fix** (`sddj_capture.lua`): GRAY mode mask buffers now write 2 bytes/pixel (GrayA format) — fixes corrupt masks in selection-based (Strategy A) and alpha-based (Strategy C) inpainting.
+- **Schedule presets on reconnect** (`sddj_ws.lua`): `list_prompt_schedules` added to `request_resources()` — schedule presets refresh on reconnect like all other resource types.
+- **Path sanitization fix** (`sddj_output.lua`): Output directory opening no longer strips parentheses, tildes, and other valid path characters. Sanitization now targets shell metacharacters only.
+
+#### Observability
+- **SageAttention2 fallback** (`pipeline_factory.py`): Auto-mode fallback from SageAttention → SDP now logged at INFO level (was silent `log.debug`) — users can see whether the 1.89× speedup is active.
+
+#### Code Quality
+- **Unused import** (`pipeline_factory.py`): Removed `AutoencoderKL` import (unused since TAESD cleanup in v0.9.87).
+- **`_tome_applied` init** (`core.py`): Attribute initialized in `__init__` instead of relying on `getattr` default.
+- **Phantom dependency** (`pyproject.toml`): Removed `scikit-image` (~80MB) — unused since OKLAB migration in v0.9.87.
+- **Startup message** (`start.ps1`): Updated engine load time estimate (warmup no longer blocks readiness).
+
 ## [0.9.87] — 2026-04
 ### SOTA 2026 R&D Audit — Full-Stack Optimization & Hardening
 
 #### Acceleration & GPU Pipeline
 - **SageAttention2** (`pipeline_factory.py`): Monkey-patches `F.scaled_dot_product_attention` with `sageattn` — 1.89× attention speedup on RTX 40xx (ICLR/ICML 2025). Auto-fallback to SDP/xformers/slicing. Proper save/restore lifecycle on engine unload.
 - **torchao UNet quantization** (`pipeline_factory.py`): INT8/FP8 dynamic quantization with auto GPU detection (sm89→fp8dq, sm80→int8dq). Gated Inductor flags (`epilogue_fusion`, `force_fuse_int_mm_with_mul`, `use_mixed_mm`) only active when quantization enabled.
-- **Inductor tuning** (`pipeline_factory.py`): `conv_1x1_as_mm`, `coordinate_descent_tuning`, `coordinate_descent_check_all_directions` unconditionally enabled. `compile_mode` default → `max-autotune-no-cudagraphs`.
+- **Inductor tuning** (`pipeline_factory.py`): `conv_1x1_as_mm` unconditionally enabled; `coordinate_descent_tuning` + `coordinate_descent_check_all_directions` enabled when `compile_mode=max-autotune*`.
 - **Token Merging (ToMe)** (`core.py`): Optional `tomesd.apply_patch()` with proper cleanup on unload and broad exception handling.
 - **VRAM fragmentation** (`server.py`): `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` set at startup.
 - **CUDA availability check** (`pipeline_factory.py`): Fail-fast with clear error if CUDA unavailable.
@@ -45,7 +77,7 @@
 - `TestNewFieldDefaults`: 20 tests covering defaults, bounds, and Literal validation for all new config fields.
 - `TestStemBackendDispatch`: Dispatch logic + roformer→demucs fallback.
 - `test_return_flow`: `apply_temporal_coherence(return_flow=True)` path coverage.
-- `test_valid_modes`: Added `max-autotune-no-cudagraphs` (the actual default).
+- `test_valid_modes`: All Literal compile modes validated.
 - `prompt_schedules_dir` added to directory validator tests.
 
 #### Dependencies

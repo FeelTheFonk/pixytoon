@@ -85,7 +85,7 @@ if ($alreadyRunning) {
     ))
     $serverProc = Start-Process pwsh -ArgumentList "-EncodedCommand", $EncodedCommand -WindowStyle Minimized -PassThru
 
-    Write-Host "  ${D}Waiting for engine to load (~30s load + ~30s warmup)...${R}"
+    Write-Host "  ${D}Waiting for engine to load (~10-30s)...${R}"
 
     $maxWait = 120; $waited = 0; $ready = $false
     while ($waited -lt $maxWait) {

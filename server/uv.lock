@@ -2255,7 +2255,7 @@ wheels = [
 
 [[package]]
 name = "sddj-server"
-version = "0.9.87"
+version = "0.9.88"
 source = { editable = "." }
 dependencies = [
     { name = "accelerate" },
@@ -2275,7 +2275,6 @@ dependencies = [
     { name = "pyloudnorm" },
     { name = "rembg" },
     { name = "safetensors" },
-    { name = "scikit-image" },
     { name = "scikit-learn" },
     { name = "scipy" },
     { name = "simpleeval" },
@@ -2349,7 +2348,6 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9.0" },
     { name = "safetensors", specifier = ">=0.4,<1.0" },
     { name = "sageattention", marker = "extra == 'sage-attention'", specifier = ">=1.0" },
-    { name = "scikit-image", specifier = ">=0.24" },
     { name = "scikit-learn", specifier = ">=1.5" },
     { name = "scipy", specifier = ">=1.13" },
     { name = "simpleeval", specifier = ">=1.0.5,<2.0" },

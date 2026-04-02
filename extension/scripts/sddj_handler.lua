@@ -28,6 +28,10 @@ handlers.progress = function(resp)
   local pct = math.floor((resp.step / resp.total) * 100)
   local eta_str = ""
   local now = os.clock()
+  -- Reset ETA baseline on first step (accurate after server queue wait)
+  if resp.step == 1 then
+    PT.state.gen_step_start = now
+  end
   if PT.state.gen_step_start and resp.step > 1 then
     local elapsed = now - PT.state.gen_step_start
     local steps_done = resp.step - 1
@@ -339,6 +343,9 @@ handlers.animation_complete = function(resp)
     on_done_ui = function()
       pcall(function() PT.dlg:modify{ id = "export_mp4_btn", enabled = true } end)
     end,
+    pre_reset = function()
+      PT.audio.last_output_dir = PT.anim.output_dir
+    end,
     get_fps = function()
       local dur_ms = (PT.dlg and tonumber(PT.dlg.data.anim_duration) or 100)
       return 1000.0 / math.max(1, dur_ms)
@@ -456,7 +463,16 @@ handlers.pong = function(resp)
   PT.state.last_pong = os.clock()
   if not PT.state.connected then PT.set_connected(true) end
   if not PT.res.requested then PT.request_resources() end
-  PT.update_status("Connected")
+  -- Only overwrite status when idle (don't clobber useful post-generation info)
+  if not PT.state.generating and not PT.state.animating and not PT.audio.generating then
+    PT.update_status("Connected")
+  end
+end
+
+handlers.queued = function(resp)
+  PT.update_status("Queued — server warming up (please wait)")
+  -- Restart generation timeout so the full budget starts from queue acknowledgment
+  PT.start_gen_timeout()
 end
 
 handlers.prompt_result = function(resp)

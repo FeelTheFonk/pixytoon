@@ -9,7 +9,6 @@ from typing import Optional
 
 import torch
 from diffusers import (
-    AutoencoderKL,
     ControlNetModel,
     DDIMScheduler,
     StableDiffusionControlNetPipeline,
@@ -123,7 +122,7 @@ def setup_attention(pipe: StableDiffusionPipeline) -> None:
                     "falling back to next available backend"
                 )
             else:
-                log.debug("sageattention not installed, trying SDP")
+                log.info("SageAttention2 not available — using SDP (pip install sageattention for ~1.89× speedup)")
         except Exception as e:
             log.warning("SageAttention2 init failed (%s), falling back", e)
 
@@ -307,8 +306,11 @@ def apply_torch_compile(pipe: StableDiffusionPipeline) -> None:
         return
     # Inductor config flags for diffusion model optimization (PyTorch blog, July 2025)
     torch._inductor.config.conv_1x1_as_mm = True
-    torch._inductor.config.coordinate_descent_tuning = True
-    torch._inductor.config.coordinate_descent_check_all_directions = True
+    # Coordinate descent kernel tuning — only beneficial for max-autotune modes
+    # (exhaustive GEMM benchmarking). Wastes 10-60s on "default" mode with no gain.
+    if settings.compile_mode.startswith("max-autotune"):
+        torch._inductor.config.coordinate_descent_tuning = True
+        torch._inductor.config.coordinate_descent_check_all_directions = True
     # INT8/mixed-precision fusion flags — only needed for torchao quantized models
     if settings.enable_unet_quantization:
         torch._inductor.config.epilogue_fusion = False

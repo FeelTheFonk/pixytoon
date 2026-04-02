@@ -57,7 +57,7 @@ class Settings(BaseSettings):
 
     # ── Performance ──────────────────────────────────────────
     enable_torch_compile: bool = True
-    compile_mode: Literal["default", "max-autotune", "max-autotune-no-cudagraphs", "reduce-overhead"] = "max-autotune-no-cudagraphs"
+    compile_mode: Literal["default", "max-autotune", "max-autotune-no-cudagraphs", "reduce-overhead"] = "default"
     compile_dynamic: bool = False  # True only when DeepCache disabled (incompatible)
     # At 8 steps with interval=3, gain may be marginal — benchmark with/without
     enable_deepcache: bool = True

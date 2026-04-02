@@ -84,6 +84,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         self._loaded = False
         self._cancel_event = threading.Event()
         # Audio reactivity modules (lazy, no GPU)
+        self._tome_applied = False
         self._audio_analyzer = None
         self._audio_cache = None
         self._stem_separator = None
@@ -207,9 +208,8 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         # 11. Load textual inversion embeddings
         self._load_embeddings()
 
-        # 12. Warmup
-        if settings.enable_warmup:
-            self._warmup()
+        # 12. Warmup — deferred to server lifespan (background task behind
+        #     _generate_lock) so WebSocket endpoint is available immediately.
 
     def _load_default_style_lora(self) -> None:
         """Load and fuse the default style LoRA before warmup.
@@ -242,6 +242,13 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         except Exception as e:
             log.warning("Failed to load default style LoRA '%s': %s", lora_name, e)
 
+    def warmup(self) -> None:
+        """Public warmup — call from server after lifespan yield."""
+        if not self._loaded:
+            log.warning("Cannot warmup: engine not loaded")
+            return
+        self._warmup()
+
     def _warmup(self) -> None:
         """Pre-compile the torch.compile graph with a dummy generation.
 
@@ -260,6 +267,15 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         log.info("Warmup: triggering torch.compile + JIT compilation...")
         t0 = time.perf_counter()
 
+        # Cancellation-aware callback — allows shutdown to interrupt warmup
+        # instead of waiting for all steps to complete.
+        cancel_event = self._cancel_event
+
+        def _warmup_callback(pipe, step_idx, timestep, cb_kwargs):
+            if cancel_event.is_set():
+                raise RuntimeError("Warmup cancelled (server shutting down)")
+            return cb_kwargs
+
         try:
             with torch.inference_mode():
                 gen = torch.Generator("cuda").manual_seed(0)
@@ -274,7 +290,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
                     height=settings.default_height,
                     generator=gen,
                     clip_skip=settings.default_clip_skip,
-                    callback_on_step_end=_noop_callback,
+                    callback_on_step_end=_warmup_callback,
                     output_type="pil",
                 )
             elapsed = time.perf_counter() - t0

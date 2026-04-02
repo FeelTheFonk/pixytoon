@@ -46,8 +46,8 @@ function PT.capture_mask()
     local mask_img = Image(mw, mh, ColorMode.GRAY)
     mask_img:clear(Color{ gray = 0 })
     local mask_buf = {}
-    local white = string.char(255)
-    local black = string.char(0)
+    local white = string.char(255, 255)  -- GrayA: gray=255, alpha=255
+    local black = string.char(0, 255)    -- GrayA: gray=0,   alpha=255
     for y = 0, mh - 1 do
       local in_sel_y = (y >= sel.bounds.y and y < sel.bounds.y + sel.bounds.height)
       for x = 0, mw - 1 do
@@ -100,8 +100,8 @@ function PT.capture_mask()
         local w, h = img.width, img.height
         local byte = string.byte
         -- Pre-fill mask buffer with zeroes via string.rep (avoids 4M-entry table)
-        local zero = string.char(0)
-        local white_ch = string.char(255)
+        local zero = string.char(0, 255)     -- GrayA: gray=0, alpha=255
+        local white_ch = string.char(255, 255) -- GrayA: gray=255, alpha=255
         local mask_data = {}
         -- Collect only non-zero pixel positions, build mask row-by-row
         for my = 0, mask_h - 1 do
