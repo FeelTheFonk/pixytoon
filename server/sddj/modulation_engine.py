@@ -11,6 +11,8 @@ import logging
 import math
 from dataclasses import dataclass, field
 
+import numba
+import numpy as np
 
 from .audio_analyzer import AudioAnalysis
 
@@ -568,6 +570,34 @@ class ExpressionEvaluator:
         return float(result)
 
 
+@numba.jit(nopython=True, cache=True)
+def _ema_slot_vectorized(
+    src: np.ndarray,
+    alpha_attack: float,
+    alpha_release: float,
+    invert: bool,
+    min_val: float,
+    range_val: float,
+) -> np.ndarray:
+    """Asymmetric EMA + range mapping for a single modulation slot.
+
+    Numba-accelerated: eliminates Python loop overhead per frame.
+    For N frames, this is ~10-50x faster than the equivalent Python loop.
+    """
+    n = src.shape[0]
+    out = np.empty(n, dtype=np.float64)
+    prev = src[0]
+    for i in range(n):
+        raw = src[i]
+        if raw > prev:
+            prev = prev + alpha_attack * (raw - prev)
+        else:
+            prev = prev + alpha_release * (raw - prev)
+        mapped = (1.0 - prev) if invert else prev
+        out[i] = min_val + range_val * mapped
+    return out
+
+
 class ModulationEngine:
     """Computes per-frame parameter schedules from audio analysis + modulation config."""
 
@@ -643,9 +673,8 @@ class ModulationEngine:
         # Pre-build expression evaluator if needed
         evaluator = self._get_evaluator() if expressions else None
 
-        # Per-slot EMA state: each slot has its own smoothing envelope
+        # Per-slot EMA coefficients (attack/release)
         from math import exp as _exp
-        slot_ema: list[float | None] = [None] * len(active_slots)
         slot_alphas: list[tuple[float, float]] = []
         for slot in active_slots:
             a_att = 1.0 - _exp(-1.0 / max(1, slot.attack))
@@ -659,7 +688,44 @@ class ModulationEngine:
         slot_ranges = [s.max_val - s.min_val for s in active_slots]
         slot_targets = [s.target for s in active_slots]
 
-        # Pre-allocate expression variables dict (updated in-place per frame)
+        # ── Phase 1: Vectorized per-slot EMA via Numba ──────────────
+        # Each slot produces a full-length output array in one Numba call,
+        # replacing the previous Python frame×slot nested loop.
+        slot_outputs: list[np.ndarray] = []
+        for slot_idx in range(len(active_slots)):
+            src = slot_sources[slot_idx]
+            src_arr = np.asarray(src[:total], dtype=np.float64)
+            if len(src_arr) < total:
+                # Pad short sources with last value
+                pad = np.full(total - len(src_arr), src_arr[-1], dtype=np.float64)
+                src_arr = np.concatenate((src_arr, pad))
+            a_att, a_rel = slot_alphas[slot_idx]
+            out = _ema_slot_vectorized(
+                src_arr, a_att, a_rel,
+                slot_inverts[slot_idx],
+                slot_mins[slot_idx],
+                slot_ranges[slot_idx],
+            )
+            slot_outputs.append(out)
+
+        # ── Phase 2: Aggregate per-target (average multiple slots) ────
+        # Group slot indices by target
+        target_slot_indices: dict[str, list[int]] = {}
+        for i, t in enumerate(slot_targets):
+            target_slot_indices.setdefault(t, []).append(i)
+
+        # Pre-compute per-target arrays (averaged + clamped)
+        target_arrays: dict[str, np.ndarray] = {}
+        for target, indices in target_slot_indices.items():
+            if len(indices) == 1:
+                arr = slot_outputs[indices[0]]
+            else:
+                arr = np.mean([slot_outputs[i] for i in indices], axis=0)
+            lo, hi = TARGET_RANGES[target]
+            np.clip(arr, lo, hi, out=arr)
+            target_arrays[target] = arr
+
+        # ── Phase 3: Build per-frame dicts + expression overrides ─────
         expr_variables: dict[str, float] | None = None
         if expressions and evaluator:
             expr_variables = {
@@ -671,41 +737,11 @@ class ModulationEngine:
 
         for frame_idx in range(total):
             params: dict[str, float] = {}
-            # Track per-target contributions for multi-slot aggregation
-            target_values: dict[str, list[float]] = {}
-
-            # Apply modulation matrix slots with per-slot EMA smoothing
-            for slot_idx in range(len(active_slots)):
-                src_arr = slot_sources[slot_idx]
-                raw_val = float(src_arr[min(frame_idx, len(src_arr) - 1)])
-
-                # Per-slot asymmetric EMA (fast attack, slow release)
-                prev = slot_ema[slot_idx]
-                if prev is None:
-                    smoothed = raw_val
-                else:
-                    a_att, a_rel = slot_alphas[slot_idx]
-                    if raw_val > prev:
-                        smoothed = prev + a_att * (raw_val - prev)
-                    else:
-                        smoothed = prev + a_rel * (raw_val - prev)
-                slot_ema[slot_idx] = smoothed
-
-                # Invert source if requested (0→1, 1→0)
-                mapped = (1.0 - smoothed) if slot_inverts[slot_idx] else smoothed
-
-                # Map [0, 1] smoothed feature to [min_val, max_val]
-                output = slot_mins[slot_idx] + slot_ranges[slot_idx] * mapped
-                target_values.setdefault(slot_targets[slot_idx], []).append(output)
-
-            # Aggregate multi-slot targets (average)
-            for target, values in target_values.items():
-                lo, hi = TARGET_RANGES[target]
-                params[target] = max(lo, min(hi, sum(values) / len(values)))
+            for target, arr in target_arrays.items():
+                params[target] = float(arr[frame_idx])
 
             # Override with custom expressions (take priority over slots)
             if expr_variables is not None and evaluator:
-                # Update variables in-place (no dict allocation per frame)
                 expr_variables["t"] = float(frame_idx)
                 expr_variables["s"] = frame_idx / analysis.fps
                 for feat_name, feat_arr in analysis.features.items():
@@ -721,9 +757,7 @@ class ModulationEngine:
                     except Exception as e:
                         log.warning("Expression error at frame %d for %s: %s",
                                    frame_idx, target, e)
-                        # Keep slot value if expression fails
 
-            # Convert integer-semantic params
             if "seed_offset" in params:
                 params["seed_offset"] = float(int(params["seed_offset"]))
             if "frame_cadence" in params:

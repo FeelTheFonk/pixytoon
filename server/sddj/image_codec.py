@@ -23,9 +23,18 @@ _REF_LAB_CACHE: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
 
 def _img_cache_key(img) -> str:
-    """Content-based cache key for images (C-16). Samples first 1024 elements for speed."""
+    """Content-based cache key for images (C-16).
+
+    Stride-samples ~1024 elements across the full pixel range to avoid
+    collisions from images sharing identical top-left corners.
+    """
     arr = np.asarray(img)
-    sample = arr.flat[:1024].tobytes()
+    n = arr.size
+    if n <= 1024:
+        sample = arr.flat[:].tobytes()
+    else:
+        stride = n // 1024
+        sample = arr.flat[::stride][:1024].tobytes()
     return hashlib.md5(sample).hexdigest()
 
 

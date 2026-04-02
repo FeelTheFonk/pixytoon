@@ -17,7 +17,7 @@ import math
 import random
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 
@@ -89,7 +89,7 @@ def _ease_cubic(t: float) -> float:
     return 1.0 - (-2.0 * t + 2.0) ** 3 / 2.0
 
 
-_EASING_FUNCTIONS: dict[TransitionType, callable] = {
+_EASING_FUNCTIONS: dict[TransitionType, Callable[[float], float]] = {
     TransitionType.BLEND: _ease_linear,
     TransitionType.LINEAR_BLEND: _ease_linear,
     TransitionType.SLERP: _ease_linear,
@@ -100,7 +100,7 @@ _EASING_FUNCTIONS: dict[TransitionType, callable] = {
 }
 
 
-def get_easing(transition: TransitionType) -> callable:
+def get_easing(transition: TransitionType) -> Callable[[float], float]:
     """Return the easing function for a transition type."""
     return _EASING_FUNCTIONS.get(transition, _ease_linear)
 
@@ -946,8 +946,9 @@ def auto_generate_segments(
             prompt, _, _ = prompt_gen.generate(
                 locked=locked, randomness=randomness,
             )
-        except Exception:
-            prompt = base_prompt  # Fallback to original
+        except Exception as e:
+            log.debug("auto_generate_segments: prompt gen failed, using base: %s", e)
+            prompt = base_prompt
 
         frame_idx = int(start * (analysis.fps or 24.0))
         keyframes.append({
@@ -1310,8 +1311,8 @@ def randomize_schedule(
                 # Normalise transition type after clamping
                 if keyframes[i].get("transition_frames", 0) == 0 and keyframes[i]["transition"] != "hard_cut":
                     keyframes[i]["transition"] = "hard_cut"
-    except Exception:
-        pass  # best effort — structure was built to be valid
+    except Exception as e:
+        log.debug("randomize_schedule post-validation fix failed: %s", e)
 
     log.info(
         "Randomized schedule: profile=%s, kf=%d, randomness=%d, frames=%d",

@@ -1,12 +1,23 @@
 # Changelog
 ## [0.9.85] — 2026-04
-### [Title]
+### Animation Engine Refactor — Deduplication, Vectorization & Correctness
 
 #### Added
-- 
+- **Shared prompt resolution** (`engine/helpers.py`): `FramePromptResult` dataclass, `resolve_frame_prompt()` and `inject_prompt_kwargs()` — eliminates ~350 lines of duplicated SLERP blend + per-keyframe override logic between `animation.py` and `audio_reactive.py`.
+- **Numba-vectorized EMA** (`modulation_engine.py`): `_ema_slot_vectorized()` JIT kernel replaces nested Python frame×slot loop. Per-slot full-sequence vectorization with numpy aggregation phase.
+- **Embedding cache cleanup** (`engine/core.py`): `clear_embedding_cache()` calls on `unload()` and `set_style_lora()` to prevent stale SLERP embeddings after model/LoRA changes.
 
 #### Fixed
-- 
+- **Request mutation bug** (`engine/audio_reactive.py`): `req.prompt_schedule = ...` mutated the shared request object across concurrent generations. Fixed with Pydantic `model_copy(update={...})` for immutable handling.
+- **Cache key collision** (`image_codec.py`): `_img_cache_key()` hashed only first 1024 pixels — images with identical headers but different content collided. Replaced with stride-sampled MD5 across entire image array.
+- **Type annotations** (`prompt_schedule.py`): `callable` → `Callable[[float], float]` for proper static analysis.
+- **Silent exception swallowing** (`prompt_schedule.py`): Two bare `except Exception: pass` blocks now log at DEBUG level for diagnostics.
+- **Shallow copy preset isolation** (`prompt_schedule_presets.py`): `dict()` shallow copies → `copy.deepcopy()` preventing nested dict mutation between callers.
+
+#### Refactored
+- **`animation.py`**: Replaced 40-line prompt resolution block and 8 `inject_prompt_kwargs` patterns with shared helpers. Merged two identical controlnet/plain img2img branches. Removed dead `_pp_active` variable and unused imports. Net −66 lines.
+- **`audio_reactive.py`**: Same helper adoption pattern. Net −52 lines.
+- **`modulation_engine.py`**: 3-phase restructure — (1) vectorized EMA per slot via Numba, (2) numpy aggregation per target, (3) Python loop for expression overrides only.
 
 
 ## [0.9.84] — 2026-04

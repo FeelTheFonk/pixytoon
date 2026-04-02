@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import logging
 import math
+from dataclasses import dataclass
 
 import numpy as np
 from PIL import Image
 
 from ..config import settings
+from ..embedding_blend import blend_prompt_embeds
 from ..image_codec import match_color_lab, apply_optical_flow_blend, apply_motion_warp, apply_perspective_tilt
 from ..protocol import ProgressResponse
+
+log = logging.getLogger("sddj.engine")
 
 
 def build_prompt_schedule(req) -> "PromptSchedule | None":
@@ -259,4 +264,105 @@ def apply_noise_injection(
         np.clip(arr, 0.0, 1.0, out=arr)
         image = Image.fromarray((arr * 255).astype(np.uint8))
     return image
+
+
+# ── Shared prompt resolution + pipeline kwargs ────────────
+
+
+@dataclass
+class FramePromptResult:
+    """Resolved prompt info for a single animation frame.
+
+    ``denoise_strength``, ``cfg_scale``, ``steps`` are raw per-keyframe
+    overrides (None = use base).  Callers compute effective values
+    (scaled steps, sub-floor alpha) from these.
+    """
+    prompt: str
+    negative: str
+    blend_embeds: tuple | None = None
+    denoise_strength: float | None = None
+    cfg_scale: float | None = None
+    steps: int | None = None
+
+
+def resolve_frame_prompt(
+    schedule,
+    frame_idx: int,
+    base_prompt: str,
+    base_negative: str,
+    ti_suffix: str,
+    pipe_for_embed,
+    clip_skip: int,
+    *,
+    audio_fps: float | None = None,
+) -> FramePromptResult:
+    """Resolve prompt + SLERP blend + per-keyframe overrides for a frame.
+
+    Shared between animation.py and audio_reactive.py chain loops.
+    Returns None-valued overrides when the schedule doesn't specify them —
+    callers apply their own defaults.
+
+    ``audio_fps`` enables legacy time-based segment fallback (audio_reactive only).
+    """
+    result = FramePromptResult(prompt=base_prompt, negative=base_negative)
+
+    if not schedule:
+        return result
+
+    if schedule.keyframes:
+        blend_info = schedule.get_blend_info_for_frame(frame_idx)
+        result.prompt = blend_info.effective_prompt or base_prompt
+        if blend_info.negative_prompt:
+            result.negative = (
+                (blend_info.negative_prompt + ", " + ti_suffix)
+                if ti_suffix else blend_info.negative_prompt
+            )
+        if blend_info.is_blending:
+            try:
+                result.blend_embeds = blend_prompt_embeds(
+                    pipe_for_embed,
+                    blend_info.prompt_a,
+                    blend_info.prompt_b,
+                    blend_info.blend_weight,
+                    negative_prompt=result.negative,
+                    negative_prompt_b=blend_info.negative_prompt_b,
+                    clip_skip=clip_skip,
+                )
+                log.debug(
+                    "Frame %d: SLERP blend %.2f (%s → %s)",
+                    frame_idx, blend_info.blend_weight,
+                    blend_info.prompt_a[:30],
+                    blend_info.prompt_b[:30],
+                )
+            except Exception as e:
+                log.warning("SLERP blend failed frame %d: %s", frame_idx, e)
+        if blend_info.denoise_strength is not None:
+            result.denoise_strength = blend_info.denoise_strength
+        if blend_info.cfg_scale is not None:
+            result.cfg_scale = blend_info.cfg_scale
+        if blend_info.steps is not None:
+            result.steps = blend_info.steps
+    elif hasattr(schedule, "segments") and schedule.segments and audio_fps is not None:
+        result.prompt = schedule.get_prompt(frame_idx / audio_fps)
+
+    return result
+
+
+def inject_prompt_kwargs(
+    kwargs: dict,
+    blend_embeds: tuple | None,
+    prompt: str,
+    negative: str,
+) -> None:
+    """Set prompt or embedding kwargs on a pipeline call dict in-place.
+
+    Uses pre-computed SLERP embeddings when available, falling back
+    to text prompts.
+    """
+    if blend_embeds is not None:
+        kwargs["prompt_embeds"] = blend_embeds[0]
+        kwargs["negative_prompt_embeds"] = blend_embeds[1]
+    else:
+        kwargs["prompt"] = prompt
+        kwargs["negative_prompt"] = negative
 

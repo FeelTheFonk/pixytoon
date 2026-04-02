@@ -52,6 +52,7 @@ from ..image_codec import (
     resize_to_target,
     round8,
 )
+from ..embedding_blend import clear_embedding_cache
 from ..lora_fuser import LoRAFuser
 from .helpers import GenerationCancelled, build_prompt_schedule, scale_steps_for_denoise
 from .animation import AnimationMixin
@@ -313,6 +314,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         self._loaded = False
         self._animatediff.unload()
         rembg_wrapper.unload()
+        clear_embedding_cache()
         vram_cleanup(force=True)
         vram_log("post-unload")
         log.info("Pipeline unloaded")
@@ -373,6 +375,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
             return
         weight = max(-2.0, min(2.0, weight))
         self._lora_fuser.set_lora(self._pipe, name, weight)
+        clear_embedding_cache()
 
     # ─── CONTROLNET ──────────────────────────────────────────
 
