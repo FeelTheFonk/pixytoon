@@ -3,7 +3,8 @@
 ```powershell
 git clone https://github.com/FeelTheFonk/sddj.git
 cd sddj/server
-uv sync --all-extras   # all deps including demucs, sageattention, etc.
+uv sync --all-extras   # all deps including demucs, torchao, etc.
+# SageAttention is installed separately by setup.ps1 (pre-built wheel)
 uv run python run.py   # dev server on ws://localhost:9999
 ```
 

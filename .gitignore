@@ -37,6 +37,10 @@ venv/
 .DS_Store
 Thumbs.db
 
+# Pre-built wheels (downloaded by setup.ps1)
+*.whl
+server/wheels/
+
 # Temp
 *.tmp
 *.pdb

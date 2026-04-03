@@ -84,5 +84,6 @@
     "material_study": "{quality}, {subject}, {material}, {style}, {artist}, {lighting}, {colors}, {details}",
     "scene_bg": "{quality}, {subject}, {background}, {style}, {artist}, {lighting}, {mood}, {colors}",
     "descriptor_rich": "{quality}, {descriptor}, {subject}, {style}, {artist}, {lighting}, {mood}, {colors}, {details}"
-  }
+  },
+  "items": []
 }

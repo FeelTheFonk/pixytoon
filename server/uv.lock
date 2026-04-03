@@ -2093,15 +2093,6 @@ wheels = [
 ]
 
 [[package]]
-name = "sageattention"
-version = "1.0.6"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a5/c9/0445157fd09c8e5722503588db2a25afe9ab362d927b344dbbe7ee3ce84b/sageattention-1.0.6.tar.gz", hash = "sha256:b0398a5877222ee1abaeccd27d1029309c8b57994794a11c1278e0bfd176512c", size = 12611, upload-time = "2024-11-20T13:30:41.346Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/53/06/f7b47adb766bcb38b3f88763374a3e8dffea05ee9b556bc24dbcbd60fd29/sageattention-1.0.6-py3-none-any.whl", hash = "sha256:fafc66569bed62a16839e820c2612141b5a20accf55b876d941bab9c0ac5d888", size = 20105, upload-time = "2024-11-20T13:30:39.544Z" },
-]
-
-[[package]]
 name = "samplerate"
 version = "0.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2255,7 +2246,7 @@ wheels = [
 
 [[package]]
 name = "sddj-server"
-version = "0.9.92"
+version = "0.9.93"
 source = { editable = "." }
 dependencies = [
     { name = "accelerate" },
@@ -2309,9 +2300,6 @@ quantization = [
 roformer-stems = [
     { name = "audio-separator" },
 ]
-sage-attention = [
-    { name = "sageattention" },
-]
 taesd = [
     { name = "huggingface-hub" },
 ]
@@ -2347,7 +2335,6 @@ requires-dist = [
     { name = "rembg", specifier = ">=2.0,<3.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9.0" },
     { name = "safetensors", specifier = ">=0.4,<1.0" },
-    { name = "sageattention", marker = "extra == 'sage-attention'", specifier = ">=1.0" },
     { name = "scikit-learn", specifier = ">=1.5" },
     { name = "scipy", specifier = ">=1.13" },
     { name = "simpleeval", specifier = ">=1.0.5,<2.0" },
@@ -2361,7 +2348,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
     { name = "websockets", specifier = ">=14" },
 ]
-provides-extras = ["dev", "audio-stems", "roformer-stems", "sage-attention", "quantization", "tome", "taesd", "compression", "pixeloe"]
+provides-extras = ["dev", "audio-stems", "roformer-stems", "quantization", "tome", "taesd", "compression", "pixeloe"]
 
 [[package]]
 name = "setuptools"
