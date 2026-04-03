@@ -724,9 +724,9 @@ _ACTION_DISPATCH: dict[Action, Callable] = {
     Action.DELETE_PROMPT_SCHEDULE:   lambda ws, req, _id: _handle_delete_prompt_schedule(ws, req),
     Action.VALIDATE_DSL:            lambda ws, req, _id: _handle_validate_dsl(ws, req),
     Action.RANDOMIZE_SCHEDULE:      lambda ws, req, _id: _handle_randomize_schedule(ws, req),
-    Action.GENERATE_AUDIO_REACTIVE: _handle_generate_audio_reactive,
+    Action.GENERATE_AUDIO_REACTIVE: lambda ws, req, ws_id: _handle_generate_audio_reactive(ws, req, ws_id),
     Action.EXPORT_MP4:              lambda ws, req, _id: _handle_export_mp4(ws, req),
-    Action.SHUTDOWN:                _handle_shutdown,
+    Action.SHUTDOWN:                lambda ws, req, ws_id: _handle_shutdown(ws, req, ws_id),
     Action.GENERATE:                _handle_generate,
     Action.GENERATE_ANIMATION:      _handle_generate_animation,
 }
