@@ -40,21 +40,25 @@ log = logging.getLogger("sddj.lora_fuser")
 _adapter_counter = itertools.count(1)
 
 # ── peft version detection ─────────────────────────────────
-# set_adapters() requires peft >= 0.18.1 and diffusers support.
-# Detected once at import to avoid per-call overhead.
+# set_adapters() fast path DISABLED: diffusers 0.37 + peft 0.18's
+# pipe.set_adapters(["B"]) requires adapter B in EVERY PEFT-wrapped layer.
+# When switching between LoRAs that target different modules (e.g., LoRA A
+# modifies text_encoder, LoRA B doesn't), layers injected by A don't have
+# B's adapter → ValueError.  No cleanup operation fixes this:
+#   - unload_lora_weights() strips PEFT infrastructure; subsequent
+#     load_lora_weights() returns without error but doesn't re-inject.
+#   - delete_adapters() leaves empty PEFT wrappers that still fail.
+# The fuse/unfuse path works reliably for ALL LoRA combinations.
+# Cost: 200-400ms per switch (negligible vs multi-second generation).
 _USE_SET_ADAPTERS: bool = False
 try:
     import peft
-    _peft_version = tuple(int(x) for x in peft.__version__.split(".")[:3])
-    if _peft_version >= (0, 18, 1):
-        _USE_SET_ADAPTERS = True
-        log.info("peft %s detected — using fast set_adapters() path", peft.__version__)
-    else:
-        log.info("peft %s < 0.18.1 — using fuse/unfuse fallback path", peft.__version__)
+    log.info("peft %s detected — using fuse/unfuse path (set_adapters disabled for compatibility)",
+             peft.__version__)
 except ImportError:
-    log.info("peft not installed — using fuse/unfuse fallback path")
+    log.info("peft not installed — using fuse/unfuse path")
 except Exception:
-    log.info("peft version detection failed — using fuse/unfuse fallback path")
+    log.info("peft version detection failed — using fuse/unfuse path")
 
 
 def _sanitize_adapter_name(lora_name: str) -> str:
@@ -101,8 +105,38 @@ class LoRAFuser:
 
     # ── Fast path: set_adapters() ────────────────────────────
 
+    def needs_reapply(self, pipe) -> bool:
+        """Return True if active LoRA was invalidated by external PEFT changes.
+
+        AnimateDiff's strip_peft_from_unet() removes all PEFT layers from the
+        shared UNet.  After stripping, current_name is stale — the LoRA is not
+        actually applied, even though the fuser thinks it is.  Callers should
+        check this before skipping set_style_lora() on name match.
+        """
+        if not _USE_SET_ADAPTERS or self.current_name is None:
+            return False
+        raw_unet = _get_raw_module(pipe.unet)
+        return not hasattr(raw_unet, "peft_config")
+
+    def invalidate(self) -> None:
+        """Reset all cached state after external PEFT invalidation."""
+        if self._loaded_adapters or self.current_name is not None:
+            log.info("LoRA state invalidated (clearing %d cached adapters, current='%s')",
+                     len(self._loaded_adapters), self.current_name)
+        self._loaded_adapters.clear()
+        self.current_name = None
+        self.current_weight = 0.0
+
     def _set_lora_fast(self, pipe, name: Optional[str], weight: float) -> None:
-        """Apply LoRA using set_adapters (peft >= 0.18.1). ~1ms vs 200-400ms fuse/unfuse."""
+        """Apply LoRA using set_adapters (peft >= 0.18.1). ~1ms vs 200-400ms fuse/unfuse.
+
+        Key design: when switching to a DIFFERENT LoRA, all existing adapters
+        are unloaded first.  This prevents PEFT layer conflicts when LoRAs
+        target different modules (e.g., LoRA A modifies text_encoder layers,
+        LoRA B doesn't — set_adapters would fail on text_encoder layers that
+        only contain A's adapter name).  Reactivating the SAME adapter is
+        still O(1) via set_adapters cache hit.
+        """
         if name is None:
             # Disable all adapters
             if self.current_name is not None:
@@ -121,7 +155,40 @@ class LoRAFuser:
         path = resolve_lora_path(name)
         adapter_name = _sanitize_adapter_name(name)
 
-        # Load adapter if not already cached in the pipeline
+        # ── Verify cache against actual PEFT state ──────────────
+        # _loaded_adapters can become stale when external code modifies PEFT
+        # (AnimateDiff's strip_peft_from_unet, unload_lora_weights, etc.)
+        raw_unet = _get_raw_module(pipe.unet)
+        peft_cfg = getattr(raw_unet, "peft_config", None)
+
+        if peft_cfg is None:
+            # ALL PEFT removed (e.g., strip_peft_from_unet) — cache is fully stale
+            if self._loaded_adapters:
+                log.info("PEFT absent from UNet — clearing %d stale adapter entries",
+                         len(self._loaded_adapters))
+                self._loaded_adapters.clear()
+        elif adapter_name in self._loaded_adapters and adapter_name not in peft_cfg:
+            # This specific adapter was cached but no longer in PEFT
+            log.info("Adapter '%s' missing from UNet peft_config — removing from cache",
+                     adapter_name)
+            self._loaded_adapters.discard(adapter_name)
+
+        # ── Unload before switching to a different adapter ──────
+        # Different LoRAs target different modules/layers.  PEFT layers that
+        # were injected by LoRA-A but not by LoRA-B still hold A's adapter
+        # name.  Calling set_adapters(['B']) on those layers raises
+        # "Adapter 'B' not in present adapters: ('A',)".
+        # Fix: unload ALL adapters before loading a different one.
+        if adapter_name not in self._loaded_adapters and self._loaded_adapters:
+            log.info("Switching adapter: unloading %d existing adapter(s) before loading '%s'",
+                     len(self._loaded_adapters), adapter_name)
+            try:
+                pipe.unload_lora_weights()
+            except Exception as e:
+                log.warning("Failed to unload existing LoRA weights: %s", e)
+            self._loaded_adapters.clear()
+
+        # ── Load adapter if not present ─────────────────────────
         if adapter_name not in self._loaded_adapters:
             log.info("Loading LoRA adapter '%s' from %s", adapter_name, path)
             try:
@@ -136,7 +203,7 @@ class LoRAFuser:
                 log.error("Failed to load LoRA adapter '%s': %s", adapter_name, e)
                 raise
 
-        # Activate the adapter with the desired weight (~1ms)
+        # ── Activate the adapter (~1ms) ─────────────────────────
         try:
             pipe.set_adapters([adapter_name], [weight])
             log.debug("set_adapters('%s', weight=%.2f) — ~1ms switch", adapter_name, weight)

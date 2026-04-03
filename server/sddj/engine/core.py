@@ -54,7 +54,7 @@ from ..image_codec import (
 )
 from ..embedding_blend import bump_model_generation, clear_embedding_cache
 from PIL import Image as _PILImage
-from ..lora_fuser import LoRAFuser
+from ..lora_fuser import LoRAFuser, _USE_SET_ADAPTERS, _sanitize_adapter_name
 from .helpers import GenerationCancelled, build_prompt_schedule, scale_steps_for_denoise
 from .animation import AnimationMixin
 from .audio_reactive import AudioReactiveMixin
@@ -76,6 +76,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         self._deepcache_helper = None
         self._dc_state = None  # Mode-aware DeepCache wrapper (avoids redundant toggles)
         self._lora_fuser = LoRAFuser()
+        self._lora2_adapter_name: Optional[str] = None
         self._animatediff = AnimateDiffManager()
         self._loaded_ti_tokens: set[str] = set()
         self._loaded = False
@@ -534,11 +535,11 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
     # ─── MULTI-LORA ─────────────────────────────────────────────
 
     def _apply_lora2(self, req) -> None:
-        """Fuse second LoRA on top of already-fused LoRA1.
+        """Apply second LoRA on top of LoRA1.
 
-        The primary LoRA is fused into weights (no PEFT adapter remains).
-        LoRA2 is loaded, fused additively at its weight, then metadata unloaded.
-        Cleanup restores to LoRA1-only state via snapshot + re-fuse.
+        Fast path (set_adapters): loads LoRA2 as a PEFT adapter and activates
+        both via set_adapters([lora1, lora2], [w1, w2]).  No weight fusion.
+        Fallback path (fuse/unfuse): fuses LoRA2 into already-fused weights.
         """
         if req.lora2 is None:
             return
@@ -549,16 +550,53 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         try:
             from ..lora_manager import resolve_lora_path
             lora2_path = resolve_lora_path(req.lora2.name)
-            self._pipe.load_lora_weights(
-                str(lora2_path.parent),
-                weight_name=lora2_path.name,
-                adapter_name="lora2_tmp",
-                local_files_only=True,
-            )
-            self._pipe.fuse_lora(lora_scale=req.lora2.weight)
-            self._pipe.unload_lora_weights()
-            log.info("Multi-LoRA: +%s fused at weight %.2f on top of %s",
-                     req.lora2.name, req.lora2.weight, req.lora.name)
+
+            if _USE_SET_ADAPTERS:
+                # Fast path: load LoRA2 as adapter, activate both via set_adapters.
+                # Falls back gracefully if LoRAs target different modules (set_adapters
+                # fails on layers that only have one adapter's PEFT injection).
+                adapter2_name = _sanitize_adapter_name(req.lora2.name) + "_l2"
+                lora1_adapter = _sanitize_adapter_name(req.lora.name)
+                self._pipe.load_lora_weights(
+                    str(lora2_path.parent),
+                    weight_name=lora2_path.name,
+                    adapter_name=adapter2_name,
+                    local_files_only=True,
+                )
+                try:
+                    self._pipe.set_adapters(
+                        [lora1_adapter, adapter2_name],
+                        [req.lora.weight, req.lora2.weight],
+                    )
+                    self._lora2_adapter_name = adapter2_name
+                    log.info("Multi-LoRA (fast): %s(%.2f) + %s(%.2f) via set_adapters",
+                             req.lora.name, req.lora.weight,
+                             req.lora2.name, req.lora2.weight)
+                except Exception as e:
+                    # LoRAs have incompatible architectures — can't coexist in PEFT.
+                    # Clean up LoRA2 and continue with LoRA1 only.
+                    log.warning("Multi-adapter set_adapters failed (architecture mismatch), "
+                                "proceeding with LoRA1 only: %s", e)
+                    try:
+                        self._pipe.delete_adapters([adapter2_name])
+                    except Exception:
+                        pass
+                    self._pipe.set_adapters([lora1_adapter], [req.lora.weight])
+                    self._lora2_adapter_name = None
+                    return
+            else:
+                # Fallback path: fuse LoRA2 into already-fused weights
+                self._pipe.load_lora_weights(
+                    str(lora2_path.parent),
+                    weight_name=lora2_path.name,
+                    adapter_name="lora2_tmp",
+                    local_files_only=True,
+                )
+                self._pipe.fuse_lora(lora_scale=req.lora2.weight)
+                self._pipe.unload_lora_weights()
+                self._lora2_adapter_name = None
+                log.info("Multi-LoRA (fuse): +%s fused at weight %.2f on top of %s",
+                         req.lora2.name, req.lora2.weight, req.lora.name)
         except FileNotFoundError:
             log.warning("LoRA2 '%s' not found — proceeding with single LoRA", req.lora2.name)
         except Exception as e:
@@ -566,16 +604,33 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
                         req.lora2.name, e)
 
     def _cleanup_lora2(self) -> None:
-        """Restore to single-LoRA state by re-fusing LoRA1 from snapshot."""
+        """Restore to single-LoRA state after generation."""
         if not self._lora_fuser.current_name:
             return
         try:
-            name = self._lora_fuser.current_name
-            weight = self._lora_fuser.current_weight
-            # set_lora restores from snapshot then re-loads + fuses LoRA1
-            self._lora_fuser.set_lora(self._pipe, name, weight)
+            if _USE_SET_ADAPTERS:
+                # Fast path: deactivate LoRA2, restore LoRA1-only via set_adapters
+                lora1_adapter = _sanitize_adapter_name(self._lora_fuser.current_name)
+                self._pipe.set_adapters(
+                    [lora1_adapter],
+                    [self._lora_fuser.current_weight],
+                )
+                # Delete LoRA2 adapter to free memory
+                adapter2 = getattr(self, '_lora2_adapter_name', None)
+                if adapter2:
+                    try:
+                        self._pipe.delete_adapters([adapter2])
+                    except Exception:
+                        pass  # non-critical — adapter will be overwritten on next load
+                    self._lora2_adapter_name = None
+                log.debug("LoRA2 cleanup (fast): restored single-adapter %s", lora1_adapter)
+            else:
+                # Fallback path: restore from snapshot + re-fuse LoRA1
+                name = self._lora_fuser.current_name
+                weight = self._lora_fuser.current_weight
+                self._lora_fuser.set_lora(self._pipe, name, weight)
         except Exception as e:
-            log.warning("LoRA2 cleanup (re-fuse LoRA1) failed: %s", e)
+            log.warning("LoRA2 cleanup failed: %s", e)
 
     # ─── GENERATION ──────────────────────────────────────────
 
@@ -642,7 +697,8 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
                     lora_name = req.lora.name
                     lora_weight = req.lora.weight
                     if (lora_name != self._lora_fuser.current_name
-                            or lora_weight != self._lora_fuser.current_weight):
+                            or lora_weight != self._lora_fuser.current_weight
+                            or self._lora_fuser.needs_reapply(self._pipe)):
                         self.set_style_lora(lora_name, lora_weight)
 
                 # Multi-LoRA: load second adapter if specified

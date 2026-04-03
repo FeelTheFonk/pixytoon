@@ -173,7 +173,8 @@ class AudioReactiveMixin:
             # Handle LoRA
             if req.lora is not None:
                 if (req.lora.name != self._lora_fuser.current_name
-                        or req.lora.weight != self._lora_fuser.current_weight):
+                        or req.lora.weight != self._lora_fuser.current_weight
+                        or self._lora_fuser.needs_reapply(self._pipe)):
                     self.set_style_lora(req.lora.name, req.lora.weight)
 
             # Per-request scheduler override
@@ -669,6 +670,11 @@ class AudioReactiveMixin:
         is_controlnet = req.mode.value.startswith("controlnet_")
         if not is_controlnet and self._controlnet_pipe is not None:
             log.info("Smart transition: unloading ControlNet before AnimateDiff audio")
+            from ..vram_utils import move_to_cpu
+            move_to_cpu(self._controlnet_pipe)
+            if self._controlnet_img2img_pipe is not None:
+                move_to_cpu(self._controlnet_img2img_pipe)
+                self._controlnet_img2img_pipe = None
             self._controlnet_pipe = None
             self._controlnet_mode = None
 

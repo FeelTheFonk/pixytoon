@@ -113,6 +113,7 @@ class DeepCacheState:
                 log.debug("DeepCache suppressed for mode=%s", mode)
             except Exception as e:
                 log.warning("Failed to suppress DeepCache: %s", e)
+                return False  # disable failed — don't mark as suppressed
         self._suppressed_mode = mode
         return True
 

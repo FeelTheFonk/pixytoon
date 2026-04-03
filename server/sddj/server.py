@@ -554,7 +554,15 @@ def _make_thread_callback(websocket: WebSocket, loop: asyncio.AbstractEventLoop)
             except asyncio.QueueFull:
                 pass
 
+    async def drain() -> None:
+        """Wait for the consumer to finish sending all queued responses."""
+        try:
+            await asyncio.wrap_future(_consumer_future)
+        except Exception:
+            pass
+
     callback.stop = stop  # type: ignore[attr-defined]
+    callback.drain = drain  # type: ignore[attr-defined]
     callback._consumer_future = _consumer_future  # type: ignore[attr-defined]
     return callback
 
@@ -628,6 +636,9 @@ async def _handle_generate(websocket: WebSocket, req: Request, ws_id: int) -> No
         finally:
             _generating[ws_id].clear()
             on_progress.stop()  # type: ignore[attr-defined]
+    # Drain queued progress messages before sending result to preserve
+    # protocol ordering (client expects all progress before result).
+    await on_progress.drain()  # type: ignore[attr-defined]
     await _send(websocket, result)
 
 
@@ -680,6 +691,12 @@ async def _handle_generate_animation(websocket: WebSocket, req: Request, ws_id: 
             _generating[ws_id].clear()
             on_anim_progress.stop()  # type: ignore[attr-defined]
             on_anim_frame.stop()  # type: ignore[attr-defined]
+
+    # Drain both queues BEFORE completion — prevents race where the client
+    # receives AnimationComplete before all frames, sets animating=false,
+    # and silently drops the remaining queued frames.
+    await on_anim_progress.drain()  # type: ignore[attr-defined]
+    await on_anim_frame.drain()  # type: ignore[attr-defined]
 
     await _send(websocket, AnimationCompleteResponse(
         total_frames=frame_count,
@@ -1347,6 +1364,10 @@ async def _handle_generate_audio_reactive(
             _generating[ws_id].clear()
             on_progress.stop()  # type: ignore[attr-defined]
             on_frame.stop()  # type: ignore[attr-defined]
+
+    # Drain both queues before completion (same race fix as animation)
+    await on_progress.drain()  # type: ignore[attr-defined]
+    await on_frame.drain()  # type: ignore[attr-defined]
 
     await _send(websocket, AudioReactiveCompleteResponse(
         total_frames=frame_count,

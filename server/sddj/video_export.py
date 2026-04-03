@@ -70,6 +70,15 @@ def _fill_frame_gaps(frame_dir: Path, frames: list[Path]) -> list[Path]:
 
     first = min(numbered)
     last = max(numbered)
+
+    # Safety cap: refuse to fill unreasonably large gaps (corrupted/misnamed frames)
+    max_gap_fill = 10000
+    total_gaps = (last - first + 1) - len(numbered)
+    if total_gaps > max_gap_fill:
+        log.error("Frame gap too large (%d missing in [%d..%d]) — refusing to fill. "
+                  "Check for corrupted frame filenames.", total_gaps, first, last)
+        return sorted(numbered.values())
+
     filled = 0
     prev_path = numbered[first]
 
@@ -130,6 +139,9 @@ def export_mp4(
     frame_dir = Path(frame_dir)
     if not frame_dir.is_dir():
         raise FileNotFoundError(f"Frame directory not found: {frame_dir}")
+
+    if fps <= 0:
+        raise ValueError(f"fps must be positive, got {fps}")
 
     # Validate frames exist
     frames = sorted(frame_dir.glob("frame_*.png"))

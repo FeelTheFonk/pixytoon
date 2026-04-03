@@ -440,6 +440,8 @@ handlers.error = function(resp)
   PT.state.progress_pct = 0
   PT.audio.generating = false
   PT.audio.analyzing = false
+  PT._ab_second_pass = false
+  PT._ab_first_seed = nil
   PT.reset_loop_state()
   PT.timers.loop = PT.stop_timer(PT.timers.loop)
   PT.state.gen_step_start = nil

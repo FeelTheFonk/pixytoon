@@ -167,7 +167,8 @@ class AnimationMixin:
             # Handle LoRA same as single generation
             if req.lora is not None:
                 if (req.lora.name != self._lora_fuser.current_name
-                        or req.lora.weight != self._lora_fuser.current_weight):
+                        or req.lora.weight != self._lora_fuser.current_weight
+                        or self._lora_fuser.needs_reapply(self._pipe)):
                     self.set_style_lora(req.lora.name, req.lora.weight)
 
             # Per-request scheduler override
