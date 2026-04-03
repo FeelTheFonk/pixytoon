@@ -307,7 +307,7 @@ function PT.schedule_reconnect()
     PT.cfg.RECONNECT_MAX_DELAY
   )
   PT.update_status("Reconnecting in " .. string.format("%.0f", delay) .. "s (#" .. PT.reconnect.attempts .. ")...")
-  PT.timers.reconnect = Timer{
+  local ok, t = pcall(Timer, {
     interval = delay,
     ontick = function()
       PT.timers.reconnect = PT.stop_timer(PT.timers.reconnect)
@@ -315,8 +315,8 @@ function PT.schedule_reconnect()
       PT.update_status("Reconnecting (#" .. PT.reconnect.attempts .. ")...")
       PT.connect()
     end,
-  }
-  PT.timers.reconnect:start()
+  })
+  if ok and t then PT.timers.reconnect = t; t:start() end
 end
 
 -- ─── UI Button Reset (factored) ──────────────────────────
@@ -357,14 +357,21 @@ end
 
 function PT.request_resources()
   PT.res.requested = true
-  PT.send({ action = "list_palettes" })
-  PT.send({ action = "list_loras" })
-  PT.send({ action = "list_embeddings" })
-  PT.send({ action = "list_presets" })
-  PT.send({ action = "list_modulation_presets" })
-  PT.send({ action = "list_expression_presets" })
-  PT.send({ action = "list_choreography_presets" })
-  PT.send({ action = "list_prompt_schedules" })
+  -- Rapid-fire all resource requests without waiting for individual responses.
+  -- Server processes them concurrently; responses arrive in any order.
+  local resource_actions = {
+    "list_palettes",
+    "list_loras",
+    "list_embeddings",
+    "list_presets",
+    "list_modulation_presets",
+    "list_expression_presets",
+    "list_choreography_presets",
+    "list_prompt_schedules",
+  }
+  for _, action in ipairs(resource_actions) do
+    PT.send({ action = action })
+  end
 end
 
 end

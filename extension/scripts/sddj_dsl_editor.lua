@@ -15,6 +15,26 @@ local TRANSITIONS = {
   "ease_in_out", "cubic", "slerp",
 }
 
+-- ─── Shared: transform raw parse keyframes to editor format ──
+
+local function _transform_raw_keyframes(raw_keyframes)
+  local kfs = {}
+  for _, kf in ipairs(raw_keyframes) do
+    kfs[#kfs + 1] = {
+      frame = kf.frame or 0,
+      prompt = kf.prompt or "",
+      negative = kf.negative_prompt or "",
+      transition = kf.transition or "hard_cut",
+      transition_frames = kf.transition_frames or 0,
+      weight = math.floor((kf.weight or 1.0) * 100),
+      denoise = kf.denoise_strength and math.floor(kf.denoise_strength * 100) or nil,
+      cfg = kf.cfg_scale and math.floor(kf.cfg_scale * 10) or nil,
+      steps = kf.steps or nil,
+    }
+  end
+  return kfs
+end
+
 -- ─── Parse DSL text into editable keyframe list ──────────────
 
 local function dsl_to_keyframes(dsl_text, total_frames, fps)
@@ -25,21 +45,7 @@ local function dsl_to_keyframes(dsl_text, total_frames, fps)
   if PT.dsl_parser then
     local ok, result = pcall(PT.dsl_parser.parse, dsl_text, total_frames or 100, fps or 24)
     if ok and result and result.keyframes and #result.keyframes > 0 then
-      local kfs = {}
-      for _, kf in ipairs(result.keyframes) do
-        kfs[#kfs + 1] = {
-          frame = kf.frame or 0,
-          prompt = kf.prompt or "",
-          negative = kf.negative_prompt or "",
-          transition = kf.transition or "hard_cut",
-          transition_frames = kf.transition_frames or 0,
-          weight = math.floor((kf.weight or 1.0) * 100),
-          denoise = kf.denoise_strength and math.floor(kf.denoise_strength * 100) or nil,
-          cfg = kf.cfg_scale and math.floor(kf.cfg_scale * 10) or nil,
-          steps = kf.steps or nil,
-        }
-      end
-      return kfs
+      return _transform_raw_keyframes(result.keyframes)
     end
   end
   -- Fallback: single empty keyframe
@@ -321,23 +327,10 @@ function PT.update_schedule_state(dsl_text)
   if PT.dsl_parser and dsl_text ~= "" then
     local ok, result = pcall(PT.dsl_parser.parse, dsl_text, total_frames, fps, nil, false)
     if ok and result then
-      -- Extract keyframes from parse result (same transform as dsl_to_keyframes)
-      local kfs = {}
-      if result.keyframes and #result.keyframes > 0 then
-        for _, kf in ipairs(result.keyframes) do
-          kfs[#kfs + 1] = {
-            frame = kf.frame or 0,
-            prompt = kf.prompt or "",
-            negative = kf.negative_prompt or "",
-            transition = kf.transition or "hard_cut",
-            transition_frames = kf.transition_frames or 0,
-            weight = math.floor((kf.weight or 1.0) * 100),
-            denoise = kf.denoise_strength and math.floor(kf.denoise_strength * 100) or nil,
-            cfg = kf.cfg_scale and math.floor(kf.cfg_scale * 10) or nil,
-            steps = kf.steps or nil,
-          }
-        end
-      end
+      -- Extract keyframes from parse result (shared transform with dsl_to_keyframes)
+      local kfs = (result.keyframes and #result.keyframes > 0)
+        and _transform_raw_keyframes(result.keyframes)
+        or {}
       PT.schedule_data.keyframes = kfs
       PT.schedule_data.total_frames = total_frames
 
@@ -370,6 +363,15 @@ function PT.update_schedule_state(dsl_text)
 
   -- Update status label
   PT.update_schedule_status()
+
+  -- Server-side validation (async, supplements local parse)
+  if dsl_text ~= "" and PT.state and PT.state.connected and PT.send then
+    pcall(PT.send, {
+      action       = "validate_dsl",
+      dsl_text     = dsl_text,
+      total_frames = total_frames,
+    })
+  end
 
   -- Repaint timeline
   if PT.dlg then

@@ -256,8 +256,14 @@ def download_base_configs() -> None:
 
 def download_hyper_sd_lora() -> None:
     label = "Hyper-SD LoRA"
-    print(f"    [DL] {label}: ByteDance/Hyper-SD ...")
-    if _hf_file_cached("ByteDance/Hyper-SD", "Hyper-SD15-8steps-CFG-lora.safetensors"):
+    # Derive filename from configured step count (matches config.py auto-derivation)
+    try:
+        from server.sddj.config import settings
+        lora_file = settings.hyper_sd_lora_file
+    except Exception:
+        lora_file = "Hyper-SD15-8steps-CFG-lora.safetensors"
+    print(f"    [DL] {label}: ByteDance/Hyper-SD ({lora_file}) ...")
+    if _hf_file_cached("ByteDance/Hyper-SD", lora_file):
         print("      [SKIP] Hyper-SD LoRA already cached.")
         _record(label, True, "cached")
         return
@@ -267,7 +273,7 @@ def download_hyper_sd_lora() -> None:
         with temporary_online_mode():
             hf_hub_download(
                 "ByteDance/Hyper-SD",
-                filename="Hyper-SD15-8steps-CFG-lora.safetensors",
+                filename=lora_file,
             )
         print("      [OK] Hyper-SD LoRA cached.")
         _record(label, True)

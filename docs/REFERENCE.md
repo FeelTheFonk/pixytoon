@@ -286,7 +286,8 @@ All prefixed `SDDJ_`. Priority: system env > `server/.env` > defaults.
 | `SDDJ_PROMPTS_DATA_DIR` | `server/data/prompts` | Auto-prompt data |
 | `SDDJ_DEFAULT_CHECKPOINT` | `models/checkpoints/liberteRedmond_v10.safetensors` | SD1.5 checkpoint |
 | `SDDJ_HYPER_SD_REPO` | `ByteDance/Hyper-SD` | Hyper-SD repo |
-| `SDDJ_HYPER_SD_LORA_FILE` | `Hyper-SD15-8steps-CFG-lora.safetensors` | Hyper-SD LoRA file |
+| `SDDJ_HYPER_SD_STEPS` | `8` | Hyper-SD step count (1-12) |
+| `SDDJ_HYPER_SD_LORA_FILE` | *(auto-derived from steps)* | Hyper-SD LoRA file (auto: `Hyper-SD15-{steps}steps-CFG-lora.safetensors`) |
 | `SDDJ_HYPER_SD_FUSE_SCALE` | `0.8` | Hyper-SD fusion scale |
 | `SDDJ_DEFAULT_STYLE_LORA` | `auto` | Default style LoRA (`auto`=first found, `""`=none) |
 | `SDDJ_DEFAULT_STYLE_LORA_WEIGHT` | `1.0` | Default LoRA fuse weight |

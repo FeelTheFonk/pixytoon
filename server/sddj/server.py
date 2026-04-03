@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import itertools
+from collections.abc import Callable
 try:
     import orjson as _json_fast
     _HAS_ORJSON = True
@@ -47,11 +48,9 @@ from .protocol import (
     ModulationPresetDetailResponse,
     PaletteDeletedResponse,
     PaletteSavedResponse,
-    PongResponse,
     PresetDeletedResponse,
     PresetResponse,
     PresetSavedResponse,
-    ProgressResponse,
     PromptResultResponse,
     Request,
     ShutdownResponse,
@@ -95,6 +94,9 @@ import re as _re_module
 
 _SUPPORTED_AUDIO_EXTS = frozenset({".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"})
 _FRAME_PATTERN = _re_module.compile(r"^frame_\d+\.png$")
+
+# Pre-serialized PongResponse — always identical JSON, no need to invoke Pydantic each time.
+_PONG_JSON = '{"type":"pong"}'
 
 
 async def _validate_audio_path(websocket: WebSocket, audio_path: str) -> str | None:
@@ -366,6 +368,25 @@ async def ws_endpoint(websocket: WebSocket) -> None:
 
                 if "text" in msg:
                     raw = msg["text"]
+
+                    # Fast-path for trivial actions (avoid parsing 60+ Optional fields)
+                    if _HAS_ORJSON:
+                        try:
+                            _fast = _json_fast.loads(raw)
+                            _fast_action = _fast.get("action") if isinstance(_fast, dict) else None
+                        except Exception:
+                            _fast_action = None
+                        if _fast_action == "ping":
+                            await websocket.send_text(_PONG_JSON)
+                            continue
+                        if _fast_action == "cancel":
+                            if ws_id in _generating and _generating[ws_id].is_set():
+                                engine.cancel()
+                                log.info("Cancel (fast-path) ws_id=%d", ws_id)
+                            else:
+                                await websocket.send_text(_PONG_JSON)
+                            continue
+
                     try:
                         req = Request.model_validate_json(raw)
                     except Exception as e:
@@ -438,28 +459,58 @@ async def _handle_msg_during_gen(
             engine.cancel()
             log.info("Cancel received during generation (ws_id=%d)", ws_id)
         else:
-            await _send(websocket, PongResponse())
+            await websocket.send_text(_PONG_JSON)
     elif req.action == Action.PING:
-        await _send(websocket, PongResponse())
+        await websocket.send_text(_PONG_JSON)
     elif req.action == Action.SHUTDOWN:
         # Cancel current generation then shut down
         if ws_id in _generating and _generating[ws_id].is_set():
             engine.cancel()
-        await _handle_shutdown(websocket, ws_id)
+        await _handle_shutdown(websocket, None, ws_id)
+    elif req.action in _LONG_RUNNING_ACTIONS:
+        # Reject duplicate generation requests instead of silently dropping them
+        await _send(websocket, ErrorResponse(
+            code="BUSY",
+            message="A generation is already in progress. Send cancel first.",
+        ))
+
+
+_PROGRESS_INTERVAL_S = 0.05  # 50ms — time-based throttle for progress messages
+_FRAME_QUEUE_MAX = 32  # bounded backpressure — limits transient memory peak to ~50MB
+
+
+async def _frame_queue_consumer(
+    queue: asyncio.Queue, websocket: WebSocket,
+) -> None:
+    """Drain the bounded frame queue, sending each response over WebSocket."""
+    while True:
+        response = await queue.get()
+        if response is None:
+            break  # sentinel — generation finished
+        try:
+            await _send(websocket, response)
+        except Exception:
+            pass  # Client disconnected — keep draining to unblock producer
+        queue.task_done()
 
 
 def _make_thread_callback(websocket: WebSocket, loop: asyncio.AbstractEventLoop):
     """Create a thread-safe callback that sends responses via the event loop.
 
-    Fire-and-forget: schedules the WS send on the async loop but does NOT block
-    the engine thread waiting for completion. This eliminates the GPU idle time
-    that occurred when .result(timeout) would stall the diffusion thread for
-    every frame callback.
+    Uses a bounded asyncio.Queue (maxsize=32) for backpressure. When the queue
+    is full, the oldest pending frame is dropped to prevent unbounded memory
+    growth if the client cannot keep up.
 
-    Progress-type responses are throttled (every 2nd sent) to reduce WS overhead.
-    Frame/result callbacks are never dropped.
+    Progress-type responses are throttled to at most one every 50ms to reduce WS
+    overhead without dropping updates at low step counts.
     """
-    _progress_counter = [0]
+    queue: asyncio.Queue = asyncio.Queue(maxsize=_FRAME_QUEUE_MAX)
+    _last_progress_t = [0.0]
+
+    # Start consumer coroutine on the event loop
+    _consumer_future = asyncio.run_coroutine_threadsafe(
+        _frame_queue_consumer(queue, websocket), loop,
+    )
 
     def callback(response) -> None:
         try:
@@ -469,202 +520,224 @@ def _make_thread_callback(websocket: WebSocket, loop: asyncio.AbstractEventLoop)
             except AttributeError:
                 return
             if getattr(response, "type", None) == "progress":
-                _progress_counter[0] += 1
-                if _progress_counter[0] % 2 != 0:
+                now = time.monotonic()
+                if (now - _last_progress_t[0]) < _PROGRESS_INTERVAL_S:
                     return
-            asyncio.run_coroutine_threadsafe(_send(websocket, response), loop)
+                _last_progress_t[0] = now
+
+            # Thread-safe put with backpressure: if full, drop oldest frame
+            try:
+                queue.put_nowait(response)
+            except asyncio.QueueFull:
+                try:
+                    queue.get_nowait()  # drop oldest
+                except asyncio.QueueEmpty:
+                    pass
+                try:
+                    queue.put_nowait(response)
+                except asyncio.QueueFull:
+                    pass  # queue still full — skip this frame entirely
         except Exception as e:
             log.debug("Frame callback send failed: %s", e)
+
+    def stop() -> None:
+        """Signal the consumer to stop (call after generation completes)."""
+        try:
+            queue.put_nowait(None)  # sentinel
+        except asyncio.QueueFull:
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                queue.put_nowait(None)
+            except asyncio.QueueFull:
+                pass
+
+    callback.stop = stop  # type: ignore[attr-defined]
+    callback._consumer_future = _consumer_future  # type: ignore[attr-defined]
     return callback
 
 
-async def _handle(websocket: WebSocket, req: Request, ws_id: int) -> None:
-    """Dispatch request by action type."""
-    try:
-        if req.action == Action.PING:
-            await _send(websocket, PongResponse())
+async def _handle_ping(websocket: WebSocket, req: Request, ws_id: int) -> None:
+    await websocket.send_text(_PONG_JSON)
 
-        elif req.action == Action.CANCEL:
-            if ws_id in _generating and _generating[ws_id].is_set():
-                engine.cancel()
-            else:
-                await _send(websocket, PongResponse())  # No-op — nothing to cancel
 
-        elif req.action == Action.LIST_LORAS:
-            items = lora_manager.list_loras()
-            await _send(websocket, ListResponse(list_type="loras", items=items))
+async def _handle_cancel(websocket: WebSocket, req: Request, ws_id: int) -> None:
+    if ws_id in _generating and _generating[ws_id].is_set():
+        engine.cancel()
+    else:
+        await websocket.send_text(_PONG_JSON)  # No-op — nothing to cancel
 
-        elif req.action == Action.LIST_PALETTES:
-            items = palette_manager.list_palettes()
-            await _send(websocket, ListResponse(list_type="palettes", items=items))
 
-        elif req.action == Action.SAVE_PALETTE:
-            await _handle_save_palette(websocket, req)
+async def _handle_list_loras(websocket: WebSocket, req: Request, ws_id: int) -> None:
+    items = lora_manager.list_loras()
+    await _send(websocket, ListResponse(list_type="loras", items=items))
 
-        elif req.action == Action.DELETE_PALETTE:
-            await _handle_delete_palette(websocket, req)
 
-        elif req.action == Action.LIST_CONTROLNETS:
-            from . import pipeline_factory
-            await _send(websocket, ListResponse(
-                list_type="controlnets",
-                items=[m.value for m in pipeline_factory.CONTROLNET_IDS],
-            ))
+async def _handle_list_palettes(websocket: WebSocket, req: Request, ws_id: int) -> None:
+    items = palette_manager.list_palettes()
+    await _send(websocket, ListResponse(list_type="palettes", items=items))
 
-        elif req.action == Action.LIST_EMBEDDINGS:
-            items = _get_ti_manager().list_embeddings()
-            await _send(websocket, ListResponse(list_type="embeddings", items=items))
 
-        elif req.action == Action.GENERATE_PROMPT:
-            await _handle_generate_prompt(websocket, req)
+async def _handle_list_controlnets(websocket: WebSocket, req: Request, ws_id: int) -> None:
+    from . import pipeline_factory
+    await _send(websocket, ListResponse(
+        list_type="controlnets",
+        items=[m.value for m in pipeline_factory.CONTROLNET_IDS],
+    ))
 
-        elif req.action == Action.LIST_PRESETS:
-            from .presets_manager import presets_manager
-            items = presets_manager.list_presets()
-            await _send(websocket, ListResponse(list_type="presets", items=items))
 
-        elif req.action == Action.GET_PRESET:
-            await _handle_get_preset(websocket, req)
+async def _handle_list_embeddings(websocket: WebSocket, req: Request, ws_id: int) -> None:
+    items = _get_ti_manager().list_embeddings()
+    await _send(websocket, ListResponse(list_type="embeddings", items=items))
 
-        elif req.action == Action.SAVE_PRESET:
-            await _handle_save_preset(websocket, req)
 
-        elif req.action == Action.DELETE_PRESET:
-            await _handle_delete_preset(websocket, req)
+async def _handle_list_presets(websocket: WebSocket, req: Request, ws_id: int) -> None:
+    from .presets_manager import presets_manager
+    items = presets_manager.list_presets()
+    await _send(websocket, ListResponse(list_type="presets", items=items))
 
-        elif req.action == Action.CLEANUP:
-            await _handle_cleanup(websocket)
 
-        elif req.action == Action.ANALYZE_AUDIO:
-            await _handle_analyze_audio(websocket, req)
+async def _handle_generate(websocket: WebSocket, req: Request, ws_id: int) -> None:
+    gen_req = req.to_generate_request()
+    loop = asyncio.get_running_loop()
 
-        elif req.action == Action.CHECK_STEMS:
-            await _handle_check_stems(websocket)
+    on_progress = _make_thread_callback(websocket, loop)
 
-        elif req.action == Action.LIST_MODULATION_PRESETS:
-            await _handle_list_modulation_presets(websocket)
-
-        elif req.action == Action.GET_MODULATION_PRESET:
-            await _handle_get_modulation_preset(websocket, req)
-
-        elif req.action == Action.LIST_EXPRESSION_PRESETS:
-            await _handle_list_expression_presets(websocket)
-
-        elif req.action == Action.GET_EXPRESSION_PRESET:
-            await _handle_get_expression_preset(websocket, req)
-
-        elif req.action == Action.LIST_CHOREOGRAPHY_PRESETS:
-            await _handle_list_choreography_presets(websocket)
-
-        elif req.action == Action.GET_CHOREOGRAPHY_PRESET:
-            await _handle_get_choreography_preset(websocket, req)
-
-        elif req.action == Action.LIST_PROMPT_SCHEDULES:
-            await _handle_list_prompt_schedules(websocket)
-
-        elif req.action == Action.GET_PROMPT_SCHEDULE:
-            await _handle_get_prompt_schedule(websocket, req)
-
-        elif req.action == Action.SAVE_PROMPT_SCHEDULE:
-            await _handle_save_prompt_schedule(websocket, req)
-
-        elif req.action == Action.DELETE_PROMPT_SCHEDULE:
-            await _handle_delete_prompt_schedule(websocket, req)
-
-        elif req.action == Action.VALIDATE_DSL:
-            await _handle_validate_dsl(websocket, req)
-
-        elif req.action == Action.RANDOMIZE_SCHEDULE:
-            await _handle_randomize_schedule(websocket, req)
-
-        elif req.action == Action.GENERATE_AUDIO_REACTIVE:
-            await _handle_generate_audio_reactive(websocket, req, ws_id)
-
-        elif req.action == Action.EXPORT_MP4:
-            await _handle_export_mp4(websocket, req)
-
-        elif req.action == Action.SHUTDOWN:
-            await _handle_shutdown(websocket, ws_id)
-            return  # Connection will close after shutdown
-
-        elif req.action == Action.GENERATE:
-            gen_req = req.to_generate_request()
-            loop = asyncio.get_running_loop()
-
-            on_progress = _make_thread_callback(websocket, loop)
-
-            # Serialize GPU access — pipeline is NOT thread-safe
-            async with _acquire_gpu(websocket):
-                _generating[ws_id].set()
-                try:
-                    result = await asyncio.wait_for(
-                        loop.run_in_executor(
-                            None,
-                            lambda: engine.generate(gen_req, on_progress=on_progress),
-                        ),
-                        timeout=settings.generation_timeout,
-                    )
-                except asyncio.TimeoutError:
-                    engine.cancel()
-                    raise RuntimeError(
-                        f"Generation timed out after {settings.generation_timeout:.0f}s"
-                    )
-                finally:
-                    _generating[ws_id].clear()
-            await _send(websocket, result)
-
-        elif req.action == Action.GENERATE_ANIMATION:
-            anim_req = req.to_animation_request()
-
-            # Server-side frame count validation (protocol allows 256, config may differ)
-            if anim_req.frame_count > settings.max_animation_frames:
-                await _send(websocket, ErrorResponse(
-                    code="INVALID_REQUEST",
-                    message=f"frame_count {anim_req.frame_count} exceeds max {settings.max_animation_frames}",
-                ))
-                return
-
-            loop = asyncio.get_running_loop()
-
-            on_anim_progress = _make_thread_callback(websocket, loop)
-            on_anim_frame = _make_thread_callback(websocket, loop)
-
-            # Auto-scale timeout for animation (30s per frame minimum)
-            anim_timeout = max(
-                settings.generation_timeout,
-                anim_req.frame_count * 30,
+    # Serialize GPU access — pipeline is NOT thread-safe
+    async with _acquire_gpu(websocket):
+        _generating[ws_id].set()
+        try:
+            fut = loop.run_in_executor(
+                None,
+                lambda: engine.generate(gen_req, on_progress=on_progress),
             )
-            async with _acquire_gpu(websocket):
-                _generating[ws_id].set()
-                try:
-                    t0 = time.perf_counter()
-                    frame_count, last_seed = await asyncio.wait_for(
-                        loop.run_in_executor(
-                            None,
-                            lambda: engine.generate_animation(
-                                anim_req,
-                                on_frame=on_anim_frame,
-                                on_progress=on_anim_progress,
-                            ),
-                        ),
-                        timeout=anim_timeout,
-                    )
-                    total_ms = int((time.perf_counter() - t0) * 1000)
-                except asyncio.TimeoutError:
-                    engine.cancel()
-                    raise RuntimeError(
-                        f"Animation timed out after {anim_timeout:.0f}s"
-                    )
-                finally:
-                    _generating[ws_id].clear()
+            result = await asyncio.wait_for(fut, timeout=settings.generation_timeout)
+        except asyncio.TimeoutError:
+            engine.cancel()
+            # FC-05: wait for the orphan executor thread to actually finish
+            # before releasing GPU lock to prevent concurrent GPU access.
+            try:
+                await asyncio.wait_for(asyncio.shield(fut), timeout=30.0)
+            except (asyncio.TimeoutError, Exception):
+                log.warning("Generate executor thread did not finish within 30s after timeout")
+            raise RuntimeError(
+                f"Generation timed out after {settings.generation_timeout:.0f}s"
+            )
+        finally:
+            _generating[ws_id].clear()
+            on_progress.stop()  # type: ignore[attr-defined]
+    await _send(websocket, result)
 
-            await _send(websocket, AnimationCompleteResponse(
-                total_frames=frame_count,
-                total_time_ms=total_ms,
-                seed=last_seed,
-                tag_name=anim_req.tag_name,
-            ))
 
+async def _handle_generate_animation(websocket: WebSocket, req: Request, ws_id: int) -> None:
+    anim_req = req.to_animation_request()
+
+    # Server-side frame count validation (protocol allows 256, config may differ)
+    if anim_req.frame_count > settings.max_animation_frames:
+        await _send(websocket, ErrorResponse(
+            code="INVALID_REQUEST",
+            message=f"frame_count {anim_req.frame_count} exceeds max {settings.max_animation_frames}",
+        ))
+        return
+
+    loop = asyncio.get_running_loop()
+
+    on_anim_progress = _make_thread_callback(websocket, loop)
+    on_anim_frame = _make_thread_callback(websocket, loop)
+
+    # Auto-scale timeout for animation (30s per frame minimum)
+    anim_timeout = max(
+        settings.generation_timeout,
+        anim_req.frame_count * 30,
+    )
+    async with _acquire_gpu(websocket):
+        _generating[ws_id].set()
+        try:
+            t0 = time.perf_counter()
+            fut = loop.run_in_executor(
+                None,
+                lambda: engine.generate_animation(
+                    anim_req,
+                    on_frame=on_anim_frame,
+                    on_progress=on_anim_progress,
+                ),
+            )
+            frame_count, last_seed = await asyncio.wait_for(fut, timeout=anim_timeout)
+            total_ms = int((time.perf_counter() - t0) * 1000)
+        except asyncio.TimeoutError:
+            engine.cancel()
+            # FC-05: wait for the orphan executor thread to actually finish
+            try:
+                await asyncio.wait_for(asyncio.shield(fut), timeout=30.0)
+            except (asyncio.TimeoutError, Exception):
+                log.warning("Animation executor thread did not finish within 30s after timeout")
+            raise RuntimeError(
+                f"Animation timed out after {anim_timeout:.0f}s"
+            )
+        finally:
+            _generating[ws_id].clear()
+            on_anim_progress.stop()  # type: ignore[attr-defined]
+            on_anim_frame.stop()  # type: ignore[attr-defined]
+
+    await _send(websocket, AnimationCompleteResponse(
+        total_frames=frame_count,
+        total_time_ms=total_ms,
+        seed=last_seed,
+        tag_name=anim_req.tag_name,
+    ))
+
+
+# ─────────────────────────────────────────────────────────────
+# O(1) DISPATCH TABLE — replaces the O(n) if/elif chain
+# ─────────────────────────────────────────────────────────────
+# Handlers that accept (websocket, req) are wrapped with lambdas
+# to match the uniform (websocket, req, ws_id) signature.
+
+_ACTION_DISPATCH: dict[Action, Callable] = {
+    Action.PING:                     _handle_ping,
+    Action.CANCEL:                   _handle_cancel,
+    Action.LIST_LORAS:               _handle_list_loras,
+    Action.LIST_PALETTES:            _handle_list_palettes,
+    Action.SAVE_PALETTE:             lambda ws, req, _id: _handle_save_palette(ws, req),
+    Action.DELETE_PALETTE:           lambda ws, req, _id: _handle_delete_palette(ws, req),
+    Action.LIST_CONTROLNETS:         _handle_list_controlnets,
+    Action.LIST_EMBEDDINGS:          _handle_list_embeddings,
+    Action.GENERATE_PROMPT:          lambda ws, req, _id: _handle_generate_prompt(ws, req),
+    Action.LIST_PRESETS:             _handle_list_presets,
+    Action.GET_PRESET:               lambda ws, req, _id: _handle_get_preset(ws, req),
+    Action.SAVE_PRESET:              lambda ws, req, _id: _handle_save_preset(ws, req),
+    Action.DELETE_PRESET:            lambda ws, req, _id: _handle_delete_preset(ws, req),
+    Action.CLEANUP:                  lambda ws, _req, _id: _handle_cleanup(ws),
+    Action.ANALYZE_AUDIO:            lambda ws, req, _id: _handle_analyze_audio(ws, req),
+    Action.CHECK_STEMS:              lambda ws, _req, _id: _handle_check_stems(ws),
+    Action.LIST_MODULATION_PRESETS:  lambda ws, _req, _id: _handle_list_modulation_presets(ws),
+    Action.GET_MODULATION_PRESET:    lambda ws, req, _id: _handle_get_modulation_preset(ws, req),
+    Action.LIST_EXPRESSION_PRESETS:  lambda ws, _req, _id: _handle_list_expression_presets(ws),
+    Action.GET_EXPRESSION_PRESET:    lambda ws, req, _id: _handle_get_expression_preset(ws, req),
+    Action.LIST_CHOREOGRAPHY_PRESETS: lambda ws, _req, _id: _handle_list_choreography_presets(ws),
+    Action.GET_CHOREOGRAPHY_PRESET: lambda ws, req, _id: _handle_get_choreography_preset(ws, req),
+    Action.LIST_PROMPT_SCHEDULES:   lambda ws, _req, _id: _handle_list_prompt_schedules(ws),
+    Action.GET_PROMPT_SCHEDULE:     lambda ws, req, _id: _handle_get_prompt_schedule(ws, req),
+    Action.SAVE_PROMPT_SCHEDULE:    lambda ws, req, _id: _handle_save_prompt_schedule(ws, req),
+    Action.DELETE_PROMPT_SCHEDULE:   lambda ws, req, _id: _handle_delete_prompt_schedule(ws, req),
+    Action.VALIDATE_DSL:            lambda ws, req, _id: _handle_validate_dsl(ws, req),
+    Action.RANDOMIZE_SCHEDULE:      lambda ws, req, _id: _handle_randomize_schedule(ws, req),
+    Action.GENERATE_AUDIO_REACTIVE: _handle_generate_audio_reactive,
+    Action.EXPORT_MP4:              lambda ws, req, _id: _handle_export_mp4(ws, req),
+    Action.SHUTDOWN:                _handle_shutdown,
+    Action.GENERATE:                _handle_generate,
+    Action.GENERATE_ANIMATION:      _handle_generate_animation,
+}
+
+
+async def _handle(websocket: WebSocket, req: Request, ws_id: int) -> None:
+    """Dispatch request by action type — O(1) dict lookup."""
+    try:
+        handler = _ACTION_DISPATCH.get(req.action)
+        if handler is not None:
+            await handler(websocket, req, ws_id)
         else:
             await _send(websocket, ErrorResponse(
                 code="UNKNOWN_ACTION",
@@ -813,7 +886,7 @@ async def _handle_cleanup(websocket: WebSocket) -> None:
 # SERVER LIFECYCLE HANDLER
 # ─────────────────────────────────────────────────────────────
 
-async def _handle_shutdown(websocket: WebSocket, ws_id: int) -> None:
+async def _handle_shutdown(websocket: WebSocket, req: Request | None, ws_id: int) -> None:
     """Graceful server shutdown triggered by client."""
     # Cancel any running generation before shutdown (don't refuse)
     if _generate_lock is not None and _generate_lock.locked():
@@ -1147,8 +1220,10 @@ async def _handle_export_mp4(websocket: WebSocket, req: Request) -> None:
         return
 
     # Security: validate output_dir exists and is within the output sandbox
-    real_dir = os.path.realpath(output_dir)
-    if not os.path.isdir(real_dir):
+    # Offload blocking filesystem I/O to a thread to avoid blocking the event loop.
+    real_dir = await asyncio.to_thread(os.path.realpath, output_dir)
+    is_dir = await asyncio.to_thread(os.path.isdir, real_dir)
+    if not is_dir:
         await _send(websocket, ExportMp4ErrorResponse(
             message=f"Output directory not found: {output_dir}"))
         return
@@ -1162,7 +1237,8 @@ async def _handle_export_mp4(websocket: WebSocket, req: Request) -> None:
             message="Output directory is outside the allowed sandbox"))
         return
     # Ensure dir contains SDDj-named frame files (frame_N.png convention)
-    has_frames = any(_FRAME_PATTERN.match(f) for f in os.listdir(real_dir))
+    dir_entries = await asyncio.to_thread(os.listdir, real_dir)
+    has_frames = any(_FRAME_PATTERN.match(f) for f in dir_entries)
     if not has_frames:
         await _send(websocket, ExportMp4ErrorResponse(
             message="Output directory contains no SDDj frame files"))
@@ -1170,8 +1246,9 @@ async def _handle_export_mp4(websocket: WebSocket, req: Request) -> None:
 
     # Validate audio_path if provided
     if audio_path:
-        audio_real = os.path.realpath(audio_path)
-        if not os.path.isfile(audio_real):
+        audio_real = await asyncio.to_thread(os.path.realpath, audio_path)
+        audio_is_file = await asyncio.to_thread(os.path.isfile, audio_real)
+        if not audio_is_file:
             await _send(websocket, ExportMp4ErrorResponse(
                 message=f"Audio file not found: {audio_path}"))
             return
@@ -1229,6 +1306,11 @@ async def _handle_generate_audio_reactive(
     on_progress = _make_thread_callback(websocket, loop)
     on_frame = _make_thread_callback(websocket, loop)
 
+    # Pre-load audio modules BEFORE acquiring the GPU lock.
+    # First-time import of librosa/demucs/etc. can take 30-300s — doing it
+    # under the GPU lock would block all other clients for the entire duration.
+    await loop.run_in_executor(None, engine._ensure_audio_modules)
+
     # Safety timeout: analysis overhead + per-chunk budget (AnimateDiff generates
     # in 16-frame chunks, so real time scales with chunk count, not frame count).
     est_chunks = settings.audio_max_frames // 12 + 1  # ~12 unique frames/chunk with overlap
@@ -1241,25 +1323,30 @@ async def _handle_generate_audio_reactive(
         _generating[ws_id].set()
         try:
             t0 = time.perf_counter()
-            frame_count, last_seed = await asyncio.wait_for(
-                loop.run_in_executor(
-                    None,
-                    lambda: engine.generate_audio_reactive(
-                        audio_req,
-                        on_frame=on_frame,
-                        on_progress=on_progress,
-                    ),
+            fut = loop.run_in_executor(
+                None,
+                lambda: engine.generate_audio_reactive(
+                    audio_req,
+                    on_frame=on_frame,
+                    on_progress=on_progress,
                 ),
-                timeout=anim_timeout,
             )
+            frame_count, last_seed = await asyncio.wait_for(fut, timeout=anim_timeout)
             total_ms = int((time.perf_counter() - t0) * 1000)
         except asyncio.TimeoutError:
             engine.cancel()
+            # FC-05: wait for the orphan executor thread to actually finish
+            try:
+                await asyncio.wait_for(asyncio.shield(fut), timeout=30.0)
+            except (asyncio.TimeoutError, Exception):
+                log.warning("Audio-reactive executor thread did not finish within 30s after timeout")
             raise RuntimeError(
                 f"Audio-reactive generation timed out after {anim_timeout:.0f}s"
             )
         finally:
             _generating[ws_id].clear()
+            on_progress.stop()  # type: ignore[attr-defined]
+            on_frame.stop()  # type: ignore[attr-defined]
 
     await _send(websocket, AudioReactiveCompleteResponse(
         total_frames=frame_count,
@@ -1308,13 +1395,16 @@ async def _send(websocket: WebSocket, response) -> None:
                 meta["compression"] = "lz4"
             meta_json = _json_dumps_compact(meta)
             meta_bytes = meta_json.encode("utf-8")
-            # Single allocation via b"".join() instead of 2 intermediate
-            # copies from struct.pack + meta_bytes + raw_bytes concatenation.
-            await websocket.send_bytes(b"".join((
-                struct.pack("<I", len(meta_bytes)),
-                meta_bytes,
-                raw_bytes,
-            )))
+            # Pre-allocated bytearray: single allocation, zero intermediate
+            # copies vs b"".join() which creates a temporary tuple + final copy.
+            _hdr_len = 4  # struct.pack("<I", ...) is always 4 bytes
+            _meta_len = len(meta_bytes)
+            _raw_len = len(raw_bytes)
+            buf = bytearray(_hdr_len + _meta_len + _raw_len)
+            struct.pack_into("<I", buf, 0, _meta_len)
+            buf[_hdr_len:_hdr_len + _meta_len] = meta_bytes
+            buf[_hdr_len + _meta_len:] = raw_bytes
+            await websocket.send_bytes(buf)
         else:
             await websocket.send_text(response.model_dump_json())
     except (WebSocketDisconnect, RuntimeError, AssertionError):
@@ -1390,6 +1480,8 @@ def main() -> None:
         port=settings.port,
         log_level="info",
         ws_max_size=50 * 1024 * 1024,  # 50MB max WebSocket message
+        ws_ping_interval=30,   # server-side keepalive: ping every 30s
+        ws_ping_timeout=10,    # close zombie connections after 10s without pong
     )
     _server_instance = uvicorn.Server(config)
     _server_instance.run()

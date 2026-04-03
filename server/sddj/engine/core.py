@@ -64,10 +64,6 @@ log = logging.getLogger("sddj.engine")
 _MAX_SEED = 2**32 - 1
 
 
-def _noop_callback(pipe, step_idx, timestep, cb_kwargs):
-    return cb_kwargs
-
-
 class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
     """Manages the full SD1.5 pipeline with SOTA optimizations."""
 
@@ -622,6 +618,7 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
             self.load()
 
         self._cancel_event.clear()
+        _lora2_active = False  # Defined before try for finally-block access
 
         try:
             with torch.inference_mode():
@@ -642,7 +639,6 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
                         self.set_style_lora(lora_name, lora_weight)
 
                 # Multi-LoRA: load second adapter if specified
-                _lora2_active = False
                 if req.lora2 is not None:
                     try:
                         self._apply_lora2(req)
@@ -746,10 +742,6 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
                     _inp_source, _inp_mask = _inpaint_compositing
                     image = composite_with_mask(_inp_source, image, _inp_mask)
 
-                # Multi-LoRA cleanup AFTER image is ready (not in critical path)
-                if _lora2_active:
-                    self._cleanup_lora2()
-
                 # ── Post-process ──────────────────────────────────────
                 image = postprocess_apply(image, req.post_process)
 
@@ -782,6 +774,14 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
                 pass  # best-effort
             raise
         finally:
+            # FC-03: LoRA2 cleanup in finally — if OOM occurs after LoRA2
+            # fusion, weights remain permanently fused corrupting subsequent
+            # generations unless cleaned up unconditionally.
+            if _lora2_active:
+                try:
+                    self._cleanup_lora2()
+                except Exception as e:
+                    log.warning("LoRA2 cleanup in finally failed: %s", e)
             self._cancel_event.clear()
 
     # ─── VAE DECODE ───────────────────────────────────────────

@@ -11,6 +11,7 @@ Backends:
 
 from __future__ import annotations
 
+import atexit
 import logging
 import tempfile
 import threading
@@ -150,6 +151,18 @@ class _RoFormerBackend:
     # Default ONNX model — Kim_Vocal_2 is the most popular BS-RoFormer checkpoint.
     _DEFAULT_MODEL = "Kim_Vocal_2.onnx"
 
+    # Mapping from audio-separator output filename patterns to canonical stem names.
+    # Class constant — avoids dict recreation per separate() call.
+    _STEM_MAP = {
+        "vocal": "vocals",
+        "drum": "drums",
+        "bass": "bass",
+        "other": "other",
+        "guitar": "guitar",
+        "piano": "piano",
+        "instrum": "other",  # instrumental fallback
+    }
+
     def __init__(self, model_name: str | None = None, device: str = "cpu") -> None:
         self._model_name = model_name or self._DEFAULT_MODEL
         self._device = device
@@ -174,6 +187,7 @@ class _RoFormerBackend:
             log.info("Loading RoFormer separator: model=%s, device=%s",
                      self._model_name, self._device)
             self._output_dir = tempfile.mkdtemp(prefix="sddj_roformer_")
+            atexit.register(self._cleanup_output_dir)
             self._separator = Separator(
                 output_dir=self._output_dir,
                 model_file_dir=str(settings.models_dir / "roformer"),
@@ -196,19 +210,10 @@ class _RoFormerBackend:
         # audio-separator returns a list of output file paths.
         # Filenames contain the stem name (e.g., "song_(Vocals).wav").
         # Map known stem name patterns to our canonical names.
-        _stem_map = {
-            "vocal": "vocals",
-            "drum": "drums",
-            "bass": "bass",
-            "other": "other",
-            "guitar": "guitar",
-            "piano": "piano",
-            "instrum": "other",  # instrumental fallback
-        }
         for out_path in output_files:
             out_name = Path(out_path).stem.lower()
             matched_stem = None
-            for pattern, canonical in _stem_map.items():
+            for pattern, canonical in self._STEM_MAP.items():
                 if pattern in out_name:
                     # Guard against "non-vocal" matching "vocal"
                     if pattern == "vocal" and "non" in out_name:
@@ -238,15 +243,19 @@ class _RoFormerBackend:
                  len(result), ", ".join(result.keys()), target_sr)
         return result
 
+    def _cleanup_output_dir(self) -> None:
+        """Remove the temporary output directory (called by atexit and unload)."""
+        if hasattr(self, '_output_dir') and self._output_dir is not None:
+            import shutil
+            shutil.rmtree(self._output_dir, ignore_errors=True)
+            self._output_dir = None
+
     def unload(self) -> None:
         if self._separator is not None:
             del self._separator
             self._separator = None
             log.info("RoFormer separator unloaded")
-        if hasattr(self, '_output_dir') and self._output_dir is not None:
-            import shutil
-            shutil.rmtree(self._output_dir, ignore_errors=True)
-            self._output_dir = None
+        self._cleanup_output_dir()
 
 
 # ─────────────────────────────────────────────────────────────

@@ -144,6 +144,13 @@ _OBJECT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Pre-compiled regexes for prompt cleanup (used in _assemble / _trim_to_budget)
+_DOUBLE_COMMA_RE = re.compile(r",\s*,")
+_TRAILING_COMMA_RE = re.compile(r",\s*$")
+_LEADING_COMMA_RE = re.compile(r"^\s*,\s*")
+_MULTI_SPACE_RE = re.compile(r"\s{2,}")
+_UNSAFE_TEMPLATE_RE = re.compile(r"\{[^}]*[.\[\]!:]")
+
 # Auto-negative matching patterns
 _NEG_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"pixel\s*art", re.IGNORECASE), "pixel_art"),
@@ -171,6 +178,8 @@ class PromptGenerator:
         self._artist_buckets: dict[str, list[str]] = defaultdict(list)
         # Active exclusion set (per-call, cleared between generates)
         self._active_exclude: set[str] = set()
+        # Cached template key list (rebuilt when _templates changes)
+        self._template_keys: list[str] = []
         self._load_data(data_dir)
 
     def _load_data(self, data_dir: Path) -> None:
@@ -184,6 +193,7 @@ class PromptGenerator:
                     data = json.load(f)
                 if category == "templates":
                     self._templates = data.get("templates", {})
+                    self._template_keys = list(self._templates.keys())
                     if "default" in self._templates:
                         self._default_template = self._templates["default"]
                     log.info("Loaded %d prompt templates", len(self._templates))
@@ -553,7 +563,7 @@ class PromptGenerator:
         if template is None:
             if gen_mode == Mode.CHAOS and self._templates:
                 # Chaos: random template
-                template = self._templates[random.choice(list(self._templates.keys()))]
+                template = self._templates[random.choice(self._template_keys)]
             elif gen_mode == Mode.CHARACTER and "character" in self._templates:
                 template = self._templates["character"]
             elif gen_mode == Mode.ART_FOCUS and "surrealist" in self._templates:
@@ -562,7 +572,7 @@ class PromptGenerator:
                 # 8-10: occasional random template (~15-45% chance)
                 # 11+: always random template
                 if randomness >= 11 or random.random() < (randomness - 7) * 0.15:
-                    template = self._templates[random.choice(list(self._templates.keys()))]
+                    template = self._templates[random.choice(self._template_keys)]
                 else:
                     template = self._default_template
             else:
@@ -574,7 +584,7 @@ class PromptGenerator:
         if len(template) > _MAX_TEMPLATE_LEN:
             log.warning("Template too long (%d chars), using default", len(template))
             template = self._default_template
-        if re.search(r"\{[^}]*[.\[\]!:]", template):
+        if _UNSAFE_TEMPLATE_RE.search(template):
             log.warning("Template rejected (unsafe pattern): %s", template[:80])
             template = self._default_template
 
@@ -588,10 +598,10 @@ class PromptGenerator:
             prompt = ", ".join(v for v in components.values() if v)
 
         # Clean up empty placeholders (", , " → ", ")
-        prompt = re.sub(r",\s*,", ",", prompt)
-        prompt = re.sub(r",\s*$", "", prompt)
-        prompt = re.sub(r"^\s*,\s*", "", prompt)
-        prompt = re.sub(r"\s{2,}", " ", prompt).strip()
+        prompt = _DOUBLE_COMMA_RE.sub(",", prompt)
+        prompt = _TRAILING_COMMA_RE.sub("", prompt)
+        prompt = _LEADING_COMMA_RE.sub("", prompt)
+        prompt = _MULTI_SPACE_RE.sub(" ", prompt).strip()
 
         return prompt
 
@@ -614,9 +624,9 @@ class PromptGenerator:
                     escaped = re.escape(val)
                     # Remove the value with surrounding commas/spaces
                     prompt = re.sub(r",?\s*" + escaped + r"\s*,?", ",", prompt)
-                    prompt = re.sub(r",\s*,", ",", prompt)
-                    prompt = re.sub(r",\s*$", "", prompt)
-                    prompt = re.sub(r"^\s*,\s*", "", prompt).strip()
+                    prompt = _DOUBLE_COMMA_RE.sub(",", prompt)
+                    prompt = _TRAILING_COMMA_RE.sub("", prompt)
+                    prompt = _LEADING_COMMA_RE.sub("", prompt).strip()
                     if self._estimate_tokens(prompt) <= CLIP_TOKEN_BUDGET:
                         break
 
@@ -658,6 +668,13 @@ def get_prompt_generator() -> PromptGenerator:
 
 
 def __getattr__(name: str):
+    """Module-level lazy accessor.
+
+    Allows ``from .prompt_generator import prompt_generator`` to work without
+    eagerly instantiating the PromptGenerator at import time.  For explicit
+    access, prefer ``get_prompt_generator()`` which is discoverable via
+    standard tooling (IDE autocomplete, help(), dir()).
+    """
     if name == "prompt_generator":
         return get_prompt_generator()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

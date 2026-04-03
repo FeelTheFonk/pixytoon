@@ -6,7 +6,7 @@ return function(PT)
 
 -- ─── Constants ──────────────────────────────────────────────
 
-PT.VERSION = "0.9.90"
+PT.VERSION = "0.9.92"
 
 PT.cfg = {
   DEFAULT_SERVER_URL      = "ws://127.0.0.1:9876/ws",
@@ -46,7 +46,7 @@ PT.state = {
   cancel_pending = false,
   gen_step_start = nil,
   file_counter   = 0,
-  session_id     = tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999)),
+  session_id     = tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999)),
   last_pong      = nil,
   pending_action = nil,  -- "generate" | "animate" | "qr_generate" | "audio" | nil
   progress_pct   = 0,    -- 0-100, generation/animation progress for progress bar

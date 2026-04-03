@@ -51,7 +51,8 @@ class AudioCache:
         else:
             self._dir = Path(tempfile.gettempdir()) / "sddj_audio_cache"
         self._dir.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.RLock()
+        self._lock = threading.Lock()
+        self._put_count = 0
         log.info("Audio cache directory: %s", self._dir)
 
     def get(self, audio_path: str, fps: float, enable_stems: bool = False) -> AudioAnalysis | None:
@@ -108,13 +109,15 @@ class AudioCache:
             enable_stems: bool = False) -> None:
         """Store analysis result in cache (auto-evicts expired entries)."""
         with self._lock:
-            # Auto-evict expired entries to prevent unbounded growth
-            try:
-                removed = self._cleanup_unlocked()
-                if removed:
-                    log.debug("Auto-evicted %d expired cache entries", removed)
-            except Exception as e:
-                log.warning("Auto-evict failed (non-fatal): %s", e)
+            # Auto-evict expired entries every 10 puts to amortize I/O cost
+            self._put_count += 1
+            if self._put_count % 10 == 0:
+                try:
+                    removed = self._cleanup_unlocked()
+                    if removed:
+                        log.debug("Auto-evicted %d expired cache entries", removed)
+                except Exception as e:
+                    log.warning("Auto-evict failed (non-fatal): %s", e)
             key = _cache_key(audio_path, fps, enable_stems)
             npz_path = self._dir / f"{key}.npz"
             meta_path = self._dir / f"{key}.meta"

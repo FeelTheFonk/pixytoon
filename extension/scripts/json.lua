@@ -184,12 +184,16 @@ end
 
 -- ─── ENCODE ──────────────────────────────────────────────────
 
+local _ESCAPE_MAP = {
+  ['"']  = '\\"',
+  ['\\'] = '\\\\',
+  ['\n'] = '\\n',
+  ['\r'] = '\\r',
+  ['\t'] = '\\t',
+}
 local function encode_string(s)
-  s = s:gsub('\\', '\\\\')
-  s = s:gsub('"', '\\"')
-  s = s:gsub('\n', '\\n')
-  s = s:gsub('\r', '\\r')
-  s = s:gsub('\t', '\\t')
+  -- Single-pass: escape known chars via lookup, then catch remaining control chars
+  s = s:gsub('["\\\n\r\t]', _ESCAPE_MAP)
   s = s:gsub('[%z\1-\31]', function(c)
     return string.format('\\u%04x', c:byte())
   end)
@@ -235,7 +239,7 @@ encode_value = function(v, seen, depth)
     -- Guard against NaN and Inf (invalid JSON)
     if v ~= v then return 'null' end
     if v == math.huge or v == -math.huge then return 'null' end
-    return tostring(v)
+    return string.format("%.17g", v)
   elseif t == 'string' then return encode_string(v)
   elseif t == 'table' then
     -- Cycle detection: if we've already visited this exact table, emit null

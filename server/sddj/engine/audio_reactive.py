@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
 import numpy as np
@@ -47,6 +48,45 @@ from .helpers import (
 )
 
 log = logging.getLogger("sddj.engine")
+
+# Single-thread pool for CPU/GPU pipelining: postprocess + encode runs
+# concurrently with the next frame's GPU inference.  CUDA kernels release
+# the GIL, so numpy/PIL CPU work overlaps with GPU computation.
+_cpu_pipeline = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sddj-audio-cpu")
+
+
+def _postprocess_and_encode_audio_frame(
+    image: Image.Image,
+    post_process,
+    pp_active: bool,
+    hue_shift: float,
+    frame_idx: int,
+    total_frames: int,
+    seed: int,
+    t0_frame: float,
+    frame_params: dict,
+) -> AudioReactiveFrameResponse:
+    """CPU-bound: postprocess + hue shift + RGBA encode.  Runs in background thread."""
+    if pp_active:
+        image = postprocess_apply(image, post_process)
+    if hue_shift > 0.01:
+        image = _apply_hue_shift(image, hue_shift)
+    raw_bytes = encode_image_raw_bytes(image)
+    w, h = image.size
+    elapsed_ms = int((time.perf_counter() - t0_frame) * 1000)
+    resp = AudioReactiveFrameResponse(
+        frame_index=frame_idx,
+        total_frames=total_frames,
+        image="",
+        seed=seed,
+        time_ms=elapsed_ms,
+        width=w,
+        height=h,
+        params_used=frame_params,
+        encoding="raw_rgba",
+    )
+    resp._raw_bytes = raw_bytes
+    return resp
 
 _ANIMATEDIFF_CHUNK_SIZE = 16
 _ANIMATEDIFF_OVERLAP = 4
@@ -314,13 +354,26 @@ class AudioReactiveMixin:
         # M9: Cache raw_bytes for cadence-skip frames (avoids redundant encode)
         _last_raw_bytes = None
 
+        _pending_cpu = None  # Future for pipelined postprocess + encode
+
         log.info("Audio-reactive chain: %d frames, mode=%s, steps=%d, seed_base=%d",
                  total_frames, req.mode.value, req.steps, base_seed)
 
-        with torch.inference_mode():
+        try:
+          with torch.inference_mode():
             for frame_idx in range(total_frames):
                 if self._cancel_event.is_set():
                     raise GenerationCancelled("Audio-reactive animation cancelled")
+
+                # Emit previous frame's pipelined CPU result (should already
+                # be complete — GPU work took longer than CPU postprocess)
+                if _pending_cpu is not None:
+                    frame_resp = _pending_cpu.result()
+                    _last_raw_bytes = frame_resp._raw_bytes  # M9: cache for cadence-skip reuse
+                    frame_count += 1
+                    if on_frame:
+                        on_frame(frame_resp)
+                    _pending_cpu = None
 
                 t0_frame = time.perf_counter()
 
@@ -548,38 +601,33 @@ class AudioReactiveMixin:
                 # Store pre-postprocess for next frame
                 chain_source = image
 
-                # Post-process
-                if _pp_active:
-                    image = postprocess_apply(image, req.post_process)
-
-                # Audio-driven palette shift (hue rotation)
+                # CPU/GPU pipelining: submit postprocess + encode to background
+                # thread so it overlaps with the next frame's GPU inference.
+                # image.copy() required — PIL is not thread-safe.
                 hue_shift = frame_params.get("palette_shift", 0.0)
-                if hue_shift > 0.01:
-                    image = _apply_hue_shift(image, hue_shift)
-
-                if self._cancel_event.is_set():
-                    raise GenerationCancelled("Audio-reactive cancelled during post-processing")
-
-                raw_bytes = encode_image_raw_bytes(image)
-                _last_raw_bytes = raw_bytes  # M9: cache for cadence-skip reuse
-                w, h = image.size
-                elapsed_ms = int((time.perf_counter() - t0_frame) * 1000)
-
-                frame_resp = AudioReactiveFrameResponse(
-                    frame_index=frame_idx,
-                    total_frames=total_frames,
-                    image="",
-                    seed=frame_seed,
-                    time_ms=elapsed_ms,
-                    width=w,
-                    height=h,
-                    params_used=frame_params,
-                    encoding="raw_rgba",
+                _pending_cpu = _cpu_pipeline.submit(
+                    _postprocess_and_encode_audio_frame,
+                    image.copy(), req.post_process, _pp_active, hue_shift,
+                    frame_idx, total_frames, frame_seed, t0_frame, frame_params,
                 )
-                frame_resp._raw_bytes = raw_bytes
+
+            # Emit final frame
+            if _pending_cpu is not None:
+                frame_resp = _pending_cpu.result()
+                _last_raw_bytes = frame_resp._raw_bytes
                 frame_count += 1
                 if on_frame:
                     on_frame(frame_resp)
+                _pending_cpu = None
+
+        finally:
+            # Drain abandoned future on cancellation/exception to prevent
+            # leaked background work and swallowed exceptions.
+            if _pending_cpu is not None:
+                try:
+                    _pending_cpu.result()
+                except Exception:
+                    pass
 
         return frame_count, last_seed
 

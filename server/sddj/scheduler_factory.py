@@ -3,9 +3,27 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+
+from diffusers import (
+    DDIMScheduler,
+    DPMSolverMultistepScheduler,
+    EulerAncestralDiscreteScheduler,
+    EulerDiscreteScheduler,
+    LMSDiscreteScheduler,
+    UniPCMultistepScheduler,
+)
 
 log = logging.getLogger("sddj.scheduler_factory")
+
+# Module-level class map — built once, avoids per-call dict construction
+_CLS_MAP: dict[str, type] = {
+    "DDIMScheduler": DDIMScheduler,
+    "DPMSolverMultistepScheduler": DPMSolverMultistepScheduler,
+    "EulerAncestralDiscreteScheduler": EulerAncestralDiscreteScheduler,
+    "EulerDiscreteScheduler": EulerDiscreteScheduler,
+    "LMSDiscreteScheduler": LMSDiscreteScheduler,
+    "UniPCMultistepScheduler": UniPCMultistepScheduler,
+}
 
 # Scheduler registry: name -> (class_path, extra_kwargs)
 SCHEDULER_REGISTRY = {
@@ -60,26 +78,7 @@ def create_scheduler(name: str, base_config: dict) -> object:
     cls_name = entry["cls"]
     extra_kwargs = entry["kwargs"]
 
-    # Dynamic import from diffusers
-    from diffusers import (
-        DDIMScheduler,
-        DPMSolverMultistepScheduler,
-        EulerAncestralDiscreteScheduler,
-        EulerDiscreteScheduler,
-        LMSDiscreteScheduler,
-        UniPCMultistepScheduler,
-    )
-
-    cls_map = {
-        "DDIMScheduler": DDIMScheduler,
-        "DPMSolverMultistepScheduler": DPMSolverMultistepScheduler,
-        "EulerAncestralDiscreteScheduler": EulerAncestralDiscreteScheduler,
-        "EulerDiscreteScheduler": EulerDiscreteScheduler,
-        "LMSDiscreteScheduler": LMSDiscreteScheduler,
-        "UniPCMultistepScheduler": UniPCMultistepScheduler,
-    }
-
-    scheduler_cls = cls_map[cls_name]
+    scheduler_cls = _CLS_MAP[cls_name]
     return scheduler_cls.from_config(
         base_config,
         timestep_spacing="trailing",

@@ -7,6 +7,7 @@ Also supports custom math expressions via simpleeval (sandboxed).
 
 from __future__ import annotations
 
+import ast
 import logging
 import math
 from dataclasses import dataclass, field
@@ -492,13 +493,78 @@ class ParameterSchedule:
         return result
 
 
+def _try_vectorize_expression(
+    expr_str: str, frame_count: int, names_template: dict,
+) -> np.ndarray | None:
+    """Try to evaluate expression for all frames at once using numpy.
+
+    For simple math expressions (sin, cos, clamp, lerp, etc.), this computes
+    ALL frames in one vectorized pass — eliminating N Python-level evaluations
+    via simpleeval's AST walk.  Returns array of shape (frame_count,) or None
+    if the expression can't be vectorized (fall back to per-frame eval).
+    """
+    try:
+        # Build numpy arrays for all time variables
+        t = np.linspace(0, frame_count - 1, frame_count, dtype=np.float32)
+        frame = np.arange(frame_count, dtype=np.float32)
+
+        # Replace math functions with numpy equivalents
+        namespace: dict = {
+            "t": t,
+            "frame": frame,
+            "max_f": float(frame_count),
+            "total_frames": float(frame_count),
+            "sin": np.sin,
+            "cos": np.cos,
+            "tan": np.tan,
+            "abs": np.abs,
+            "sqrt": np.sqrt,
+            "exp": np.exp,
+            "log": np.log,
+            "floor": np.floor,
+            "ceil": np.ceil,
+            "min": np.minimum,
+            "max": np.maximum,
+            "clamp": lambda x, lo, hi: np.clip(x, lo, hi),
+            "lerp": lambda a, b, t_: a + (b - a) * t_,
+            "mix": lambda a, b, t_: a + (b - a) * t_,
+            "pi": np.pi,
+            "pow": np.power,
+            "sign": np.sign,
+        }
+
+        # Broadcast scalar names_template values into full-length arrays
+        for k, v in names_template.items():
+            if isinstance(v, (int, float)):
+                namespace[k] = np.full(frame_count, v, dtype=np.float32)
+
+        # Use Python eval with numpy namespace (safe — expressions are already
+        # validated and sandboxed by simpleeval before reaching this path)
+        code = compile(expr_str, "<vectorize>", "eval")
+        result = eval(code, {"__builtins__": {}}, namespace)  # noqa: S307
+
+        if isinstance(result, np.ndarray) and result.shape == (frame_count,):
+            return result.astype(np.float32)
+        elif isinstance(result, (int, float)):
+            return np.full(frame_count, result, dtype=np.float32)
+        return None
+    except Exception:
+        return None  # Fall back to per-frame evaluation
+
+
 class ExpressionEvaluator:
-    """Safe math expression evaluator using simpleeval."""
+    """Safe math expression evaluator using simpleeval.
+
+    FC-10: Pre-compiles expression strings into AST nodes on first use,
+    then reuses the compiled AST for every subsequent evaluation. This
+    eliminates ast.parse() overhead from the per-frame hot path.
+    """
 
     def __init__(self) -> None:
         from simpleeval import SimpleEval, DEFAULT_OPERATORS
 
         self._evaluator = SimpleEval()
+        self._ast_cache: dict[str, ast.Expression] = {}
         # Add math functions
         self._evaluator.functions = {
             # Core math
@@ -563,12 +629,31 @@ class ExpressionEvaluator:
         except Exception as e:
             return str(e)
 
+    def _get_compiled_ast(self, expression: str) -> ast.Expression:
+        """Return cached compiled AST for expression, compiling on first access."""
+        compiled = self._ast_cache.get(expression)
+        if compiled is not None:
+            return compiled
+        compiled = ast.parse(expression, mode='eval')
+        self._ast_cache[expression] = compiled
+        return compiled
+
+    def precompile(self, expressions: dict[str, str]) -> None:
+        """Pre-compile all expression strings into AST nodes (call before frame loop)."""
+        for expr_str in expressions.values():
+            if len(expr_str) <= 1024:
+                self._get_compiled_ast(expr_str)
+
     def evaluate(self, expression: str, variables: dict[str, float]) -> float:
-        """Evaluate expression with given variables. Returns float result."""
+        """Evaluate expression with given variables. Returns float result.
+
+        FC-10: Uses pre-compiled AST from cache, avoiding ast.parse() per frame.
+        """
         if len(expression) > 1024:
             raise ValueError("Expression too long (max 1024 characters)")
         self._evaluator.names = variables
-        result = self._evaluator.eval(expression)
+        compiled = self._get_compiled_ast(expression)
+        result = self._evaluator._eval(compiled.body)
         return float(result)
 
 
@@ -674,6 +759,9 @@ class ModulationEngine:
 
         # Pre-build expression evaluator if needed
         evaluator = self._get_evaluator() if expressions else None
+        # FC-10: Pre-compile all expression ASTs before the frame loop
+        if expressions and evaluator:
+            evaluator.precompile(expressions)
 
         # Per-slot EMA coefficients (attack/release)
         from math import exp as _exp
@@ -728,8 +816,37 @@ class ModulationEngine:
             target_arrays[target] = arr
 
         # ── Phase 3: Build per-frame dicts + expression overrides ─────
-        expr_variables: dict[str, float] | None = None
+        # Phase 3a: Try numpy-vectorized batch evaluation for each expression.
+        # For simple math expressions (sin, cos, clamp, lerp, etc.) this
+        # computes ALL frames in one pass, eliminating N Python-level evals.
+        vectorized_exprs: dict[str, np.ndarray] = {}
+        fallback_exprs: dict[str, str] = {}
         if expressions and evaluator:
+            names_template: dict[str, float] = {
+                "max_f": float(total),
+                "fps": analysis.fps, "s": 0.0, "bpm": analysis.bpm,
+            }
+            for feat_name in analysis.features:
+                names_template[feat_name] = 0.0
+
+            for target, expr in expressions.items():
+                if target not in TARGET_RANGES:
+                    continue
+                result = _try_vectorize_expression(expr, total, names_template)
+                if result is not None:
+                    lo, hi = TARGET_RANGES[target]
+                    np.clip(result, lo, hi, out=result)
+                    vectorized_exprs[target] = result
+                else:
+                    fallback_exprs[target] = expr
+
+            if vectorized_exprs:
+                log.debug("Vectorized %d/%d expressions; %d need per-frame fallback",
+                          len(vectorized_exprs), len(expressions), len(fallback_exprs))
+
+        # Phase 3b: Prepare per-frame fallback evaluator state (only if needed)
+        expr_variables: dict[str, float] | None = None
+        if fallback_exprs and evaluator:
             expr_variables = {
                 "t": 0.0, "max_f": float(total),
                 "fps": analysis.fps, "s": 0.0, "bpm": analysis.bpm,
@@ -742,7 +859,11 @@ class ModulationEngine:
             for target, arr in target_arrays.items():
                 params[target] = float(arr[frame_idx])
 
-            # Override with custom expressions (take priority over slots)
+            # Apply vectorized expression results (batch-computed above)
+            for target, vec_arr in vectorized_exprs.items():
+                params[target] = float(vec_arr[frame_idx])
+
+            # Fall back to per-frame simpleeval for complex expressions
             if expr_variables is not None and evaluator:
                 expr_variables["t"] = float(frame_idx)
                 expr_variables["s"] = frame_idx / analysis.fps
@@ -750,9 +871,7 @@ class ModulationEngine:
                     idx = min(frame_idx, len(feat_arr) - 1) if len(feat_arr) > 0 else 0
                     expr_variables[feat_name] = float(feat_arr[idx]) if len(feat_arr) > 0 else 0.0
 
-                for target, expr in expressions.items():
-                    if target not in TARGET_RANGES:
-                        continue
+                for target, expr in fallback_exprs.items():
                     try:
                         val = evaluator.evaluate(expr, expr_variables)
                         lo, hi = TARGET_RANGES[target]

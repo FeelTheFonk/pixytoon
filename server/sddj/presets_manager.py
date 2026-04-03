@@ -19,12 +19,19 @@ class PresetsManager:
         self._dir = presets_dir
         self._dir.mkdir(parents=True, exist_ok=True)
         self._list_cache: tuple[str, ...] | None = None
+        self._list_cache_mtime: float = 0.0  # mtime of presets dir at last cache fill
 
     def list_presets(self) -> tuple[str, ...]:
         """Return sorted tuple of available preset names (immutable, no copy needed)."""
-        if self._list_cache is not None:
+        # Invalidate cache if the presets directory has been modified externally
+        try:
+            dir_mtime = self._dir.stat().st_mtime
+        except OSError:
+            dir_mtime = 0.0
+        if self._list_cache is not None and dir_mtime == self._list_cache_mtime:
             return self._list_cache
         self._list_cache = tuple(sorted(p.stem for p in self._dir.glob("*.json")))
+        self._list_cache_mtime = dir_mtime
         return self._list_cache
 
     def get_preset(self, name: str) -> dict:

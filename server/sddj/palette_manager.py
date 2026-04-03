@@ -43,7 +43,7 @@ def load_palette(name: str) -> list[tuple[int, int, int]]:
         raise FileNotFoundError(f"Palette not found: {name}")
     current_mtime = path.stat().st_mtime
     if name in _palette_cache and _palette_mtimes.get(name) == current_mtime:
-        return list(_palette_cache[name])
+        return tuple(_palette_cache[name])
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     if "colors" not in data or not isinstance(data["colors"], list):
@@ -53,7 +53,7 @@ def load_palette(name: str) -> list[tuple[int, int, int]]:
         raise ValueError(f"Palette '{name}' has no colors")
     _palette_cache[name] = colors
     _palette_mtimes[name] = current_mtime
-    return list(colors)
+    return tuple(colors)
 
 
 def hex_list_to_rgb(colors: list[str]) -> list[tuple[int, int, int]]:
@@ -71,7 +71,7 @@ def save_palette(name: str, colors: list[str]) -> None:
     d = settings.palettes_dir
     d.mkdir(parents=True, exist_ok=True)
     path = d / f"{name}.json"
-    if not path.is_file() and len(list(d.glob("*.json"))) >= _MAX_PALETTES:
+    if not path.is_file() and sum(1 for _ in d.glob("*.json")) >= _MAX_PALETTES:
         raise ValueError(f"Maximum number of palettes ({_MAX_PALETTES}) reached")
     data = {"name": name, "colors": colors}
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")

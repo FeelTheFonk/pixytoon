@@ -169,13 +169,16 @@ def _resample_to_fps(feature: np.ndarray, orig_fps: float, target_fps: float,
     if len(non_empty) > 0:
         ne_starts = starts[non_empty]
         ne_ends = ends[non_empty]
-        # Build flat index array for reduceat: concatenate all windows
-        slices = [np.arange(s, e) for s, e in zip(ne_starts, ne_ends)]
-        flat_indices = np.concatenate(slices)
-        # Compute reduceat offsets (cumulative lengths of each window)
         lengths = ne_ends - ne_starts
+        # Build flat index array via vectorized np.repeat + arange
+        # (replaces N individual np.arange() calls + np.concatenate)
         offsets = np.zeros(len(lengths), dtype=np.intp)
         np.cumsum(lengths[:-1], out=offsets[1:])
+        total_len = int(lengths.sum())
+        # Each window starts at ne_starts[i], runs for lengths[i] elements
+        flat_indices = np.repeat(ne_starts, lengths) + (
+            np.arange(total_len, dtype=np.intp) - np.repeat(offsets, lengths)
+        )
         pool_max = np.maximum.reduceat(feature[flat_indices], offsets)
         resampled[non_empty] = pool_max
     return resampled
@@ -448,10 +451,23 @@ def _extract_features(y: np.ndarray, sr: int, hop_length: int, n_fft: int,
     S_mag = np.abs(librosa.stft(y=y, n_fft=n_fft, hop_length=hop_length))
     S_power = S_mag ** 2
 
-    # K-weighting for energy-based features
+    # K-weighting in frequency domain: apply filter magnitude response to
+    # the single STFT instead of computing a second STFT on the time-domain
+    # K-weighted signal. Saves one full STFT (~40% of DSP cost).
     if perceptual_weighting:
+        from scipy.signal import sosfreqz
+        sos = _kweight_sos(sr)
+        n_freqs = S_mag.shape[0]
+        freqs = np.linspace(0, np.pi, n_freqs)
+        _, h_complex = sosfreqz(sos, worN=freqs)
+        k_weight_filter = np.abs(h_complex).astype(np.float32)[:, np.newaxis]
+        S_mag_weighted = S_mag * k_weight_filter
+        S_power_weighted = S_mag_weighted ** 2
+        # K-weighted time-domain signal still needed for RMS energy
         y_energy = _apply_kweight(y, sr)
     else:
+        S_mag_weighted = S_mag
+        S_power_weighted = S_power
         y_energy = y
 
     # ── RMS energy (K-weighted if enabled) ──
@@ -479,10 +495,9 @@ def _extract_features(y: np.ndarray, sr: int, hop_length: int, n_fft: int,
         _resample_to_fps(centroid, librosa_fps, target_fps, total_frames), f"{prefix}_centroid",
     )
 
-    # ── Mel spectrogram (K-weighted for band energies) ──
-    S_mel = librosa.feature.melspectrogram(
-        y=y_energy, sr=sr, n_mels=n_mels, n_fft=n_fft, hop_length=hop_length,
-    )
+    # ── Mel spectrogram (from K-weighted STFT power — no second STFT) ──
+    mel_basis = librosa.filters.mel(sr=sr, n_fft=n_fft, n_mels=n_mels)
+    S_mel = mel_basis @ S_power_weighted
 
     # ── 9-band segmentation (dynamic bin computation) ──
     band_indices = _compute_mel_band_indices(sr, n_mels)

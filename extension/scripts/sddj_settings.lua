@@ -5,6 +5,7 @@
 return function(PT)
 
 local _SETTINGS_VERSION = 2
+local _MOD_SLOT_COUNT = 6
 
 -- Field types: "text" (entry), "option" (combobox), "value" (slider), "bool" (check)
 local _FIELD_SCHEMA = {
@@ -48,6 +49,8 @@ local _FIELD_SCHEMA = {
   { "save_output",         "bool" },
   { "lora2_enabled",       "bool" },
   { "ip_adapter_enabled",  "bool" },
+  { "pag_enabled",         "bool" },
+  { "pag_scale",           "value" },
   -- Post-Process tab
   { "pixel_size",          "value" },
   { "colors",              "value" },
@@ -157,8 +160,8 @@ function PT.save_settings()
   for _, field in ipairs(_FIELD_SCHEMA) do
     s[field[1]] = d[field[1]]
   end
-  -- Modulation slots (6 × 8 fields)
-  for i = 1, 6 do
+  -- Modulation slots (_MOD_SLOT_COUNT × 8 fields)
+  for i = 1, _MOD_SLOT_COUNT do
     for _, f in ipairs(_MOD_FIELDS) do
       local key = "mod" .. i .. "_" .. f
       s[key] = d[key]
@@ -232,7 +235,7 @@ function PT.apply_settings(s)
     _apply_field(dlg, field[1], field[2], s[field[1]])
   end
   -- Modulation slots
-  for i = 1, 6 do
+  for i = 1, _MOD_SLOT_COUNT do
     for _, f in ipairs(_MOD_FIELDS) do
       local key = "mod" .. i .. "_" .. f
       _apply_field(dlg, key, _MOD_TYPES[f], s[key])
@@ -265,10 +268,8 @@ function PT.apply_settings(s)
   end
 
   -- Cache encoded JSON for exit() fallback (covers crash-before-any-save edge case)
-  pcall(function()
-    local ok, encoded = pcall(PT.json.encode, s)
-    if ok then PT._last_encoded_settings = encoded end
-  end)
+  local ok, encoded = pcall(PT.json.encode, s)
+  if ok then PT._last_encoded_settings = encoded end
 end
 
 end

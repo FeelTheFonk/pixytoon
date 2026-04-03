@@ -226,6 +226,10 @@ end
 -- ─── Helper: Streaming Frame (shared by animation + audio) ──
 
 local function _handle_streaming_frame(resp, progress_label)
+  -- Guard against late frames arriving after client timeout/cancel
+  if not PT.state.animating then
+    return  -- silently drop late frame
+  end
   if PT.state.cancel_pending then return end
   if not resp._raw_image and (not resp.image or resp.image == "") then
     PT.update_status("Error: missing image in frame response")
@@ -547,7 +551,9 @@ handlers.pong = function(resp)
 end
 
 handlers.queued = function(resp)
-  PT.update_status("Queued — server warming up (please wait)")
+  local pos = resp.position
+  local pos_str = pos and (" (position " .. tostring(pos) .. ")") or ""
+  PT.update_status("Queued" .. pos_str .. " — server warming up (please wait)")
   -- Restart generation timeout so the full budget starts from queue acknowledgment
   PT.start_gen_timeout()
 end
@@ -802,7 +808,21 @@ handlers.audio_analysis = function(resp)
 end
 
 handlers.audio_reactive_frame = function(resp)
-  _handle_streaming_frame(resp, "Audio")
+  -- Build progress label with active modulation params summary
+  local label = "Audio"
+  if resp.params_used and next(resp.params_used) then
+    local parts = {}
+    for k, v in pairs(resp.params_used) do
+      parts[#parts + 1] = string.format("%s=%.2f", k, v)
+    end
+    if #parts > 0 then
+      -- Truncate to avoid overly long status lines
+      local summary = table.concat(parts, ", ")
+      if #summary > 80 then summary = summary:sub(1, 77) .. "..." end
+      label = "Audio [" .. summary .. "]"
+    end
+  end
+  _handle_streaming_frame(resp, label)
 end
 
 handlers.audio_reactive_complete = function(resp)
@@ -976,7 +996,9 @@ end
 handlers.export_mp4_complete = function(resp)
   if PT.dlg then
     local size_str = string.format("%.1f MB", resp.size_mb or 0)
-    PT.update_status("MP4 exported: " .. size_str)
+    local dur_str = resp.duration_s and string.format(", %.1fs", resp.duration_s) or ""
+    local path_str = resp.path and (", " .. tostring(resp.path)) or ""
+    PT.update_status("MP4 exported: " .. size_str .. dur_str .. path_str)
     PT.dlg:modify{ id = "export_mp4_btn", enabled = true }
   end
 end
@@ -1175,6 +1197,8 @@ local _response_queue = {}
 local _queue_head = 1
 local _processing = false
 local _drain_timer = nil
+local _drop_count = 0
+local _last_drop_log = 0
 
 local function _schedule_drain()  -- forward declaration filled below
 end
@@ -1279,7 +1303,7 @@ local function _drain_next()
     collectgarbage("step", 200)
   end
   -- Compact queue if head advanced far enough
-  if _queue_head > 100 then
+  if _queue_head > 512 then
     local new_q = {}
     for idx = _queue_head, #_response_queue do
       new_q[#new_q + 1] = _response_queue[idx]
@@ -1313,6 +1337,12 @@ function PT.handle_response(resp)
     if q_len >= PT.cfg.MAX_QUEUE_SIZE then
       _response_queue[_queue_head] = nil
       _queue_head = _queue_head + 1  -- drop oldest to prevent OOM
+      _drop_count = _drop_count + 1
+      local now = os.clock()
+      if now - _last_drop_log > 5.0 then
+        _last_drop_log = now
+        pcall(PT.update_status, "Queue full — " .. _drop_count .. " message(s) dropped")
+      end
     end
     _response_queue[#_response_queue + 1] = resp
     return
@@ -1341,6 +1371,7 @@ function PT.clear_response_queue()
   for i = _queue_head, #_response_queue do _response_queue[i] = nil end
   _response_queue = {}
   _queue_head = 1
+  _drop_count = 0
   if _drain_timer then
     pcall(function() _drain_timer:stop() end)
     _drain_timer = nil

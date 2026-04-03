@@ -14,17 +14,17 @@ EXPRESSION_PRESETS: dict[str, dict] = {
     # ─── Rhythmic (BPM-synced) ──────────────────────────────────
     "bpm_pulse": {
         "category": "rhythmic",
-        "targets": {"denoise_strength": "0.25 + 0.35 * abs(sin(s * 3.14159 * bpm / 60))"},
+        "targets": {"denoise_strength": "0.25 + 0.35 * abs(sin(s * 3.141592653589793 * bpm / 60))"},
         "description": "Denoise pulses at BPM — intensity rises and falls with each beat",
     },
     "half_time_pulse": {
         "category": "rhythmic",
-        "targets": {"denoise_strength": "0.25 + 0.25 * abs(sin(s * 3.14159 * bpm / 120))"},
+        "targets": {"denoise_strength": "0.25 + 0.25 * abs(sin(s * 3.141592653589793 * bpm / 120))"},
         "description": "Half-time pulse — one cycle every two beats, relaxed feel",
     },
     "double_time_pulse": {
         "category": "rhythmic",
-        "targets": {"denoise_strength": "0.25 + 0.25 * abs(sin(s * 3.14159 * bpm / 30))"},
+        "targets": {"denoise_strength": "0.25 + 0.25 * abs(sin(s * 3.141592653589793 * bpm / 30))"},
         "description": "Double-time pulse — twice per beat, energetic",
     },
     "beat_gate_noise": {
@@ -34,12 +34,12 @@ EXPRESSION_PRESETS: dict[str, dict] = {
     },
     "alternating_bars": {
         "category": "rhythmic",
-        "targets": {"cfg_scale": "4.0 + 4.0 * abs(sin(s * 3.14159 * bpm / 240))"},
+        "targets": {"cfg_scale": "4.0 + 4.0 * abs(sin(s * 3.141592653589793 * bpm / 240))"},
         "description": "CFG oscillates every 4 beats — structural variation per bar",
     },
     "bpm_zoom_pulse": {
         "category": "rhythmic",
-        "targets": {"motion_zoom": "1.0 + 0.015 * abs(sin(s * 3.14159 * bpm / 60))"},
+        "targets": {"motion_zoom": "1.0 + 0.015 * abs(sin(s * 3.141592653589793 * bpm / 60))"},
         "description": "Subtle zoom pulse synchronized to BPM",
     },
 
@@ -56,7 +56,7 @@ EXPRESSION_PRESETS: dict[str, dict] = {
     },
     "arc_denoise": {
         "category": "temporal",
-        "targets": {"denoise_strength": "0.20 + 0.45 * sin(3.14159 * t / max_f)"},
+        "targets": {"denoise_strength": "0.20 + 0.45 * sin(3.141592653589793 * t / max_f)"},
         "description": "Rise-and-fall arc — builds to midpoint then decays",
     },
     "breathing": {
@@ -274,8 +274,13 @@ def list_expression_presets() -> dict[str, list[dict]]:
 
 
 def get_expression_preset(name: str) -> dict | None:
-    """Return full preset details or None if not found."""
-    return EXPRESSION_PRESETS.get(name)
+    """Return a copy of full preset details or None if not found.
+
+    Returns a shallow copy to prevent callers from mutating the
+    module-level EXPRESSION_PRESETS registry.
+    """
+    preset = EXPRESSION_PRESETS.get(name)
+    return dict(preset) if preset is not None else None
 
 
 def list_choreography_presets() -> list[dict]:
@@ -292,8 +297,9 @@ def list_choreography_presets() -> list[dict]:
 
 
 def get_choreography_preset(name: str) -> dict | None:
-    """Return full choreography preset or None if not found."""
-    return CHOREOGRAPHY_PRESETS.get(name)
+    """Return a copy of full choreography preset or None if not found."""
+    preset = CHOREOGRAPHY_PRESETS.get(name)
+    return dict(preset) if preset is not None else None
 
 
 def detect_conflicts(

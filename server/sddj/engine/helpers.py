@@ -14,6 +14,7 @@ from ..image_codec import (
     match_color_lab,
     apply_motion_warp,
     apply_perspective_tilt,
+    apply_frame_transforms,
     _ensure_rgb3,
     _get_dis_instance,
     _get_flow_grid,
@@ -191,8 +192,8 @@ def _compute_dis_flow(
     Returns a float32 (H, W, 2) flow field.  Reuses the same DIS preset
     as ``apply_optical_flow_blend`` in image_codec.py.
     """
-    curr_arr = _ensure_rgb3(np.array(current, dtype=np.uint8))
-    prev_arr = _ensure_rgb3(np.array(previous, dtype=np.uint8))
+    curr_arr = _ensure_rgb3(np.asarray(current, dtype=np.uint8))
+    prev_arr = _ensure_rgb3(np.asarray(previous, dtype=np.uint8))
     if prev_arr.shape[:2] != curr_arr.shape[:2]:
         prev_arr = cv2.resize(
             prev_arr, (curr_arr.shape[1], curr_arr.shape[0]),
@@ -232,8 +233,8 @@ def apply_temporal_coherence(
         # Compute flow once and reuse for both blending and EquiVDM
         flow_map = _compute_dis_flow(image, prev_image)
         # Apply optical flow blend using the computed flow
-        curr_arr = _ensure_rgb3(np.array(image, dtype=np.uint8))
-        prev_arr = _ensure_rgb3(np.array(prev_image, dtype=np.uint8))
+        curr_arr = _ensure_rgb3(np.asarray(image, dtype=np.uint8))
+        prev_arr = _ensure_rgb3(np.asarray(prev_image, dtype=np.uint8))
         if prev_arr.shape[:2] != curr_arr.shape[:2]:
             prev_arr = cv2.resize(
                 prev_arr, (curr_arr.shape[1], curr_arr.shape[0]),
@@ -267,27 +268,27 @@ def apply_frame_motion(
 ) -> Image.Image:
     """Apply 2D affine motion warp + perspective tilt from modulation params.
 
-    Applies motion_x/y/zoom/rotation (2D affine) first, then
-    tilt_x/tilt_y (perspective) — matching Deforum ordering.
+    Uses apply_frame_transforms to fuse both warps into a single PIL↔numpy
+    round-trip when both are active, avoiding an intermediate conversion.
+    Matching Deforum ordering: affine first, then perspective.
     """
     mx = frame_params.get("motion_x", 0.0)
     my = frame_params.get("motion_y", 0.0)
     mz = frame_params.get("motion_zoom", 1.0)
     mr = frame_params.get("motion_rotation", 0.0)
-    if abs(mx) > _MOTION_XY_THRESHOLD or abs(my) > _MOTION_XY_THRESHOLD or abs(mz - 1.0) > _MOTION_ZOOM_THRESHOLD or abs(mr) > _MOTION_XY_THRESHOLD:
-        image = apply_motion_warp(
-            image, tx=mx, ty=my, zoom=mz, rotation=mr,
-            denoise_strength=denoise_strength,
-        )
+    has_warp = (abs(mx) > _MOTION_XY_THRESHOLD or abs(my) > _MOTION_XY_THRESHOLD
+                or abs(mz - 1.0) > _MOTION_ZOOM_THRESHOLD or abs(mr) > _MOTION_XY_THRESHOLD)
 
     mtx = frame_params.get("motion_tilt_x", 0.0)
     mty = frame_params.get("motion_tilt_y", 0.0)
-    if abs(mtx) > _MOTION_TILT_THRESHOLD or abs(mty) > _MOTION_TILT_THRESHOLD:
-        image = apply_perspective_tilt(
-            image, tilt_x=mtx, tilt_y=mty,
-            denoise_strength=denoise_strength,
-        )
-    return image
+    has_tilt = abs(mtx) > _MOTION_TILT_THRESHOLD or abs(mty) > _MOTION_TILT_THRESHOLD
+
+    warp_params = dict(tx=mx, ty=my, zoom=mz, rotation=mr,
+                       denoise_strength=denoise_strength) if has_warp else None
+    tilt_params = dict(tilt_x=mtx, tilt_y=mty,
+                       denoise_strength=denoise_strength) if has_tilt else None
+
+    return apply_frame_transforms(image, warp_params=warp_params, tilt_params=tilt_params)
 
 
 def apply_noise_injection(

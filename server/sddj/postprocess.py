@@ -68,31 +68,47 @@ def apply(image: Image.Image, spec: PostProcessSpec) -> Image.Image:
     """Apply the full post-processing pipeline.
 
     Returns the image untouched if no processing flags are active.
+
+    Unified ndarray pipeline: converts PIL→ndarray ONCE at entry, passes
+    ndarray through all stages, converts back to PIL ONCE at exit.
+    Alpha is extracted once and reattached at exit to avoid redundant
+    splits across stages.
     """
     # Fast bypass: no processing enabled → return raw image
     if not _any_processing_active(spec):
         return image
 
-    img = image.convert("RGBA")
+    # ── Convert to ndarray ONCE at entry ──────────────────────
+    arr = np.array(image.convert("RGBA"))  # H, W, 4 (RGBA uint8)
+    alpha = arr[:, :, 3].copy()            # Extract alpha ONCE
+    rgb = arr[:, :, :3]                    # RGB view (H, W, 3)
 
-    # 1. Background removal
+    # 1. Background removal (requires PIL — convert only for this call)
     if spec.remove_bg:
-        img = _remove_background(img)
+        pil_tmp = Image.fromarray(arr)
+        pil_tmp = _remove_background(pil_tmp)
+        arr = np.array(pil_tmp)
+        alpha = arr[:, :, 3].copy()
+        rgb = arr[:, :, :3]
 
-    # 1b. Upscale (before pixelation — higher resolution input improves pixel art quality)
+    # 1b. Upscale (requires PIL for Real-ESRGAN — convert only for this call)
     if spec.upscale_enabled and settings.enable_upscaler:
-        img = _upscale(img, spec.upscale_factor)
+        pil_tmp = Image.fromarray(np.dstack([rgb, alpha]))
+        pil_tmp = _upscale(pil_tmp, spec.upscale_factor)
+        arr = np.array(pil_tmp.convert("RGBA"))
+        alpha = arr[:, :, 3].copy()
+        rgb = arr[:, :, :3]
 
-    # 2. Pixelation
+    # 2. Pixelation (ndarray-native)
     if spec.pixelate.enabled:
-        img = _pixelate(img, spec.pixelate.target_size, spec.pixelate.method)
+        rgb, alpha = _pixelate_ndarray(rgb, alpha, spec.pixelate.target_size, spec.pixelate.method)
 
-    # 3. Color quantization (only if explicitly enabled)
+    # 3. Color quantization (ndarray-native, only if explicitly enabled)
     kmeans_centers = None
     if spec.quantize_enabled:
-        img, kmeans_centers = _quantize(img, spec.quantize_method, spec.quantize_colors)
+        rgb, alpha, kmeans_centers = _quantize_ndarray(rgb, alpha, spec.quantize_method, spec.quantize_colors)
 
-    # 4. Palette enforcement
+    # 4. Palette enforcement (ndarray-native)
     palette_rgb: Optional[list[tuple[int, int, int]]] = None
     if spec.palette.mode != PaletteMode.AUTO:
         palette_rgb = _resolve_palette(spec.palette)
@@ -100,23 +116,24 @@ def apply(image: Image.Image, spec: PostProcessSpec) -> Image.Image:
             # Skip explicit enforcement if dithering will handle it —
             # Bayer dither calls _enforce_palette internally.
             if spec.dither == DitherMode.NONE:
-                img = _enforce_palette(img, palette_rgb)
+                rgb = _enforce_palette_ndarray(rgb, palette_rgb)
 
-    # 5. Dithering (OKLAB palette-aware — uses resolved palette or extracts from quantized image)
+    # 5. Dithering (OKLAB palette-aware, ndarray-native)
     if spec.dither != DitherMode.NONE:
         # Reuse KMeans centers if available, avoiding a redundant second KMeans run
         if palette_rgb is None:
             if kmeans_centers is not None:
                 palette_rgb = kmeans_centers
             else:
-                palette_rgb = _extract_palette(img, spec.quantize_colors)
-        img = _apply_dither(img, spec.dither, palette_rgb, has_bg_removal=spec.remove_bg)
+                palette_rgb = _extract_palette_from_ndarray(rgb, spec.quantize_colors)
+        rgb = _apply_dither_ndarray(rgb, alpha, spec.dither, palette_rgb, has_bg_removal=spec.remove_bg)
 
-    # 6. Alpha cleanup
+    # 6. Alpha cleanup (ndarray-native)
     if spec.remove_bg:
-        img = _cleanup_alpha(img)
+        alpha = _cleanup_alpha_ndarray(alpha)
 
-    return img
+    # ── Convert to PIL ONCE at exit ───────────────────────────
+    return Image.fromarray(np.dstack([rgb, alpha]))
 
 
 # ─────────────────────────────────────────────────────────────
@@ -199,12 +216,17 @@ def _upscale(img: Image.Image, factor: int = 4) -> Image.Image:
 # ─────────────────────────────────────────────────────────────
 
 
-def _pixelate(
-    img: Image.Image,
+def _pixelate_ndarray(
+    rgb: np.ndarray,
+    alpha: np.ndarray,
     target_size: int,
     method: PixelateMethod = PixelateMethod.NEAREST,
-) -> Image.Image:
-    w, h = img.size
+) -> tuple[np.ndarray, np.ndarray]:
+    """Pixelate operating on ndarray (rgb H,W,3 uint8 + alpha H,W uint8).
+
+    Returns (rgb, alpha) at the new resolution.
+    """
+    h, w = rgb.shape[:2]
     # Compute proportional target maintaining aspect ratio
     if w >= h:
         new_w = target_size
@@ -219,71 +241,60 @@ def _pixelate(
         try:
             from pixeloe.pixelize import pixelize
             # PixelOE expects RGB numpy array, returns RGB numpy array.
-            # Convert RGBA -> RGB for processing, restore alpha after.
-            has_alpha = img.mode == "RGBA"
-            if has_alpha:
-                alpha = img.getchannel("A")
-                rgb = img.convert("RGB")
-            else:
-                rgb = img if img.mode == "RGB" else img.convert("RGB")
-            arr = np.asarray(rgb)
-            result = pixelize(arr, target_size=min(new_w, new_h))
-            out = Image.fromarray(result)
-            if has_alpha:
-                # Downscale alpha to match PixelOE output dimensions
-                alpha_resized = alpha.resize(out.size, Image.NEAREST)
-                out = out.convert("RGBA")
-                out.putalpha(alpha_resized)
-            return out
+            result = pixelize(rgb, target_size=min(new_w, new_h))
+            # Downscale alpha to match PixelOE output dimensions
+            out_h, out_w = result.shape[:2]
+            alpha_pil = Image.fromarray(alpha).resize((out_w, out_h), Image.NEAREST)
+            return result, np.array(alpha_pil)
         except ImportError:
             log.warning("pixeloe not installed, falling back to box downscale")
             method = PixelateMethod.BOX
+
+    # For NEAREST / BOX: use PIL resize (fast C implementation) on ndarray
     if method == PixelateMethod.BOX:
-        # BOX (area averaging) preserves thin features as averaged colors
-        # rather than losing them to point sampling. Post-snap to palette
-        # restores hard pixel-art edges.
-        return img.resize((new_w, new_h), Image.BOX)
-    # NEAREST is the pixel-art default — no interpolation artifacts
-    return img.resize((new_w, new_h), Image.NEAREST)
+        resample = Image.BOX
+    else:
+        resample = Image.NEAREST
+
+    rgb_pil = Image.fromarray(rgb).resize((new_w, new_h), resample)
+    alpha_pil = Image.fromarray(alpha).resize((new_w, new_h), Image.NEAREST)
+    return np.array(rgb_pil), np.array(alpha_pil)
 
 
 # ─────────────────────────────────────────────────────────────
 # STEP 3: COLOR QUANTIZATION
 # ─────────────────────────────────────────────────────────────
 
-def _quantize(
-    img: Image.Image,
+def _quantize_ndarray(
+    rgb: np.ndarray,
+    alpha: np.ndarray,
     method: QuantizeMethod,
     n_colors: int,
-) -> tuple[Image.Image, Optional[list[tuple[int, int, int]]]]:
-    """Quantize and optionally return extracted palette centers."""
+) -> tuple[np.ndarray, np.ndarray, Optional[list[tuple[int, int, int]]]]:
+    """Quantize operating on ndarray. Returns (rgb, alpha, palette_centers)."""
     if method == QuantizeMethod.KMEANS:
-        return _quantize_kmeans(img, n_colors)
+        rgb_out, centers = _quantize_kmeans_ndarray(rgb, n_colors)
+        return rgb_out, alpha, centers
     elif method == QuantizeMethod.MEDIAN_CUT:
-        img = _quantize_pil(img, n_colors, method=Image.Quantize.MEDIANCUT)
-        return img, _extract_palette_fast(img)
+        rgb_out, alpha_out = _quantize_pil_ndarray(rgb, alpha, n_colors, method=Image.Quantize.MEDIANCUT)
+        palette = _extract_palette_fast_ndarray(rgb_out)
+        return rgb_out, alpha_out, palette
     elif method == QuantizeMethod.OCTREE:
-        img = _quantize_pil(img, n_colors, method=Image.Quantize.MAXCOVERAGE)
-        return img, _extract_palette_fast(img)
+        rgb_out, alpha_out = _quantize_pil_ndarray(rgb, alpha, n_colors, method=Image.Quantize.MAXCOVERAGE)
+        palette = _extract_palette_fast_ndarray(rgb_out)
+        return rgb_out, alpha_out, palette
     elif method == QuantizeMethod.OCTREE_LAB:
-        return _quantize_octree_lab(img, n_colors)
+        rgb_out, centers = _quantize_octree_lab_ndarray(rgb, n_colors)
+        return rgb_out, alpha, centers
     raise ValueError(f"Unknown quantize method: {method}")
 
 
-def _quantize_kmeans(
-    img: Image.Image,
+def _quantize_kmeans_ndarray(
+    rgb: np.ndarray,
     n_colors: int,
-) -> tuple[Image.Image, list[tuple[int, int, int]]]:
+) -> tuple[np.ndarray, list[tuple[int, int, int]]]:
+    """KMeans quantization on ndarray (H,W,3 uint8). Returns (rgb, palette)."""
     from sklearn.cluster import MiniBatchKMeans
-
-    arr = np.array(img)
-    has_alpha = arr.shape[2] == 4
-    if has_alpha:
-        alpha = arr[:, :, 3]
-        rgb = arr[:, :, :3]
-    else:
-        alpha = None
-        rgb = arr
 
     h, w, _ = rgb.shape
     # O-18: Defer float32 copy until after fast-path check
@@ -304,9 +315,7 @@ def _quantize_kmeans(
         unique_colors = np.unique(pixels_u8, axis=0)
         if len(unique_colors) <= n_colors:
             centers = [tuple(int(x) for x in c) for c in unique_colors]
-            if has_alpha:
-                return Image.fromarray(arr), centers
-            return Image.fromarray(rgb), centers
+            return rgb, centers
 
     # O-18: float32 conversion only when KMeans is actually needed
     pixels = pixels_u8.astype(np.float32)
@@ -325,40 +334,21 @@ def _quantize_kmeans(
 
     # Extract palette from rounded centers for downstream use
     palette = [tuple(int(x) for x in c) for c in centers_rounded]
-
-    if has_alpha:
-        result = np.dstack([quantized, alpha])
-        return Image.fromarray(result), palette
-    return Image.fromarray(quantized), palette
+    return quantized, palette
 
 
-def _quantize_octree_lab(
-    img: Image.Image,
+def _quantize_octree_lab_ndarray(
+    rgb: np.ndarray,
     n_colors: int,
-) -> tuple[Image.Image, list[tuple[int, int, int]]]:
-    """Octree quantization in OKLAB space — perceptually uniform palettes.
+) -> tuple[np.ndarray, list[tuple[int, int, int]]]:
+    """Octree quantization in OKLAB space on ndarray (H,W,3 uint8).
 
-    Produces palette entries that are equidistant in human perception,
-    eliminating over-representation of greens and under-representation
-    of blues that plague RGB-space quantization.
-
-    Implementation: KMeans in OKLAB space with deterministic init.
-    This is semantically equivalent to an octree in perceptual space,
-    using MiniBatchKMeans as the spatial partitioner for numerical
-    stability and Numba/BLAS acceleration.
+    Returns (rgb, palette). Perceptually uniform palettes via
+    MiniBatchKMeans in OKLAB space with deterministic init.
 
     Migrated from CIELAB (skimage float64) to OKLAB (float32).
     """
     from sklearn.cluster import MiniBatchKMeans
-
-    arr = np.array(img)
-    has_alpha = arr.shape[2] == 4
-    if has_alpha:
-        alpha = arr[:, :, 3]
-        rgb = arr[:, :, :3]
-    else:
-        alpha = None
-        rgb = arr
 
     h, w, _ = rgb.shape
 
@@ -381,9 +371,7 @@ def _quantize_octree_lab(
         tree = cKDTree(unique_ok)
         _, nearest_idx = tree.query(pixels_ok)
         quantized = centers_rgb[nearest_idx].reshape(h, w, 3)
-        if has_alpha:
-            return Image.fromarray(np.dstack([quantized, alpha])), palette
-        return Image.fromarray(quantized), palette
+        return quantized, palette
 
     # MiniBatchKMeans in OKLAB space
     kmeans = MiniBatchKMeans(
@@ -402,34 +390,28 @@ def _quantize_octree_lab(
     quantized = centers_rgb[labels].reshape(h, w, 3)
 
     palette = [tuple(int(x) for x in c) for c in centers_rgb]
-
-    if has_alpha:
-        result = np.dstack([quantized, alpha])
-        return Image.fromarray(result), palette
-    return Image.fromarray(quantized), palette
+    return quantized, palette
 
 
-def _quantize_pil(
-    img: Image.Image,
+def _quantize_pil_ndarray(
+    rgb: np.ndarray,
+    alpha: np.ndarray,
     n_colors: int,
     method: Image.Quantize,
-) -> Image.Image:
-    has_alpha = img.mode == "RGBA"
-    if has_alpha:
-        alpha = img.getchannel("A")
-        # Binarize alpha before quantization to avoid edge artifacts
-        alpha_arr = np.array(alpha)
-        alpha_arr = np.where(alpha_arr >= 128, 255, 0).astype(np.uint8)
-        alpha = Image.fromarray(alpha_arr)
+) -> tuple[np.ndarray, np.ndarray]:
+    """PIL-based quantization operating on ndarray. Returns (rgb, alpha).
 
-    rgb = img.convert("RGB")
-    quantized = rgb.quantize(colors=n_colors, method=method, dither=0)
-    result = quantized.convert("RGB")
+    Converts to PIL only for the quantize() call, then back to ndarray.
+    Alpha is binarized before quantization to avoid edge artifacts.
+    """
+    # Binarize alpha to avoid edge artifacts
+    alpha_out = np.where(alpha >= 128, np.uint8(255), np.uint8(0))
 
-    if has_alpha:
-        result = result.convert("RGBA")
-        result.putalpha(alpha)
-    return result
+    # PIL quantize needs a PIL RGB image — convert only for this call
+    rgb_pil = Image.fromarray(rgb)
+    quantized = rgb_pil.quantize(colors=n_colors, method=method, dither=0)
+    result_pil = quantized.convert("RGB")
+    return np.array(result_pil), alpha_out
 
 
 # ─────────────────────────────────────────────────────────────
@@ -462,26 +444,18 @@ def _build_palette_tree(palette_key: tuple[tuple[int, int, int], ...]):
     return cKDTree(palette_ok)
 
 
-def _enforce_palette(
-    img: Image.Image,
+def _enforce_palette_ndarray(
+    rgb: np.ndarray,
     palette_rgb: list[tuple[int, int, int]],
-) -> Image.Image:
+) -> np.ndarray:
     """Snap every pixel to the nearest palette color in OKLAB space.
 
+    Operates on ndarray (H,W,3 uint8), returns ndarray (H,W,3 uint8).
     Migrated from CIELAB to OKLAB — Euclidean distance in OKLAB is
     perceptually uniform, same semantics as CIEDE76 but float32.
     """
     if not palette_rgb:
-        return img
-
-    arr = np.array(img)
-    has_alpha = arr.shape[2] == 4
-    if has_alpha:
-        alpha = arr[:, :, 3]
-        rgb = arr[:, :, :3]
-    else:
-        alpha = None
-        rgb = arr
+        return rgb
 
     h, w, _ = rgb.shape
 
@@ -497,65 +471,50 @@ def _enforce_palette(
     _, nearest_idx = tree.query(pixels_ok)
 
     palette_uint8 = np.array(palette_rgb, dtype=np.uint8)
-    result = palette_uint8[nearest_idx].reshape(h, w, 3)
-
-    if has_alpha:
-        return Image.fromarray(np.dstack([result, alpha]))
-    return Image.fromarray(result)
+    return palette_uint8[nearest_idx].reshape(h, w, 3)
 
 
 # ─────────────────────────────────────────────────────────────
 # STEP 5: DITHERING (OKLAB PALETTE-AWARE)
 # ─────────────────────────────────────────────────────────────
 
-def _apply_dither(
-    img: Image.Image,
+def _apply_dither_ndarray(
+    rgb: np.ndarray,
+    alpha: np.ndarray,
     mode: DitherMode,
     palette_rgb: list[tuple[int, int, int]],
     *,
     has_bg_removal: bool = False,
-) -> Image.Image:
+) -> np.ndarray:
+    """Dither dispatch operating on ndarray. Returns rgb (H,W,3 uint8)."""
     # Dithering with <= 1 color is a no-op
     if len(palette_rgb) <= 1:
-        return img
+        return rgb
     if mode == DitherMode.FLOYD_STEINBERG:
-        return _floyd_steinberg(img, palette_rgb, alpha_aware=has_bg_removal)
+        return _floyd_steinberg_ndarray(rgb, alpha, palette_rgb, alpha_aware=has_bg_removal)
     elif mode in (DitherMode.BAYER_2X2, DitherMode.BAYER_4X4, DitherMode.BAYER_8X8):
         size = {
             DitherMode.BAYER_2X2: 2,
             DitherMode.BAYER_4X4: 4,
             DitherMode.BAYER_8X8: 8,
         }[mode]
-        return _bayer_dither(img, palette_rgb, size, alpha_aware=has_bg_removal)
-    return img
+        return _bayer_dither_ndarray(rgb, alpha, palette_rgb, size, alpha_aware=has_bg_removal)
+    return rgb
 
 
-def _extract_palette_fast(img: Image.Image) -> list[tuple[int, int, int]]:
-    """Extract unique colors from a quantized image (fast, no KMeans)."""
-    arr = np.array(img)
-    if arr.ndim == 3 and arr.shape[2] == 4:
-        rgb = arr[:, :, :3]
-    elif arr.ndim == 3:
-        rgb = arr
-    else:
-        rgb = arr.reshape(-1, 1).repeat(3, axis=1)
+def _extract_palette_fast_ndarray(rgb: np.ndarray) -> list[tuple[int, int, int]]:
+    """Extract unique colors from a quantized ndarray (H,W,3 uint8)."""
     unique = np.unique(rgb.reshape(-1, 3), axis=0)
     return [tuple(int(x) for x in c) for c in unique]
 
 
-def _extract_palette(img: Image.Image, n_colors: int) -> list[tuple[int, int, int]]:
-    """Extract n_colors dominant colors from image.
+def _extract_palette_from_ndarray(rgb: np.ndarray, n_colors: int) -> list[tuple[int, int, int]]:
+    """Extract n_colors dominant colors from ndarray (H,W,3 uint8).
 
-    Optimized: uses fast unique-color extraction when image has
-    ≤256 unique colors (common after pixelation), falls back to
-    KMeans only for high-color-count images.
+    Uses fast unique-color extraction when image has ≤n_colors unique
+    colors (common after pixelation), falls back to KMeans only for
+    high-color-count images.
     """
-    arr = np.array(img)
-    if arr.shape[2] == 4:
-        rgb = arr[:, :, :3]
-    else:
-        rgb = arr
-
     pixels = rgb.reshape(-1, 3)
     unique = np.unique(pixels, axis=0)
 
@@ -580,6 +539,56 @@ def _extract_palette(img: Image.Image, n_colors: int) -> list[tuple[int, int, in
 
 
 # ── Floyd-Steinberg: OKLAB error diffusion ───────────────────
+
+@numba.jit(nopython=True, cache=True, parallel=True)
+def _bayer_snap_oklab(ok_img, pal_ok, pal_rgb, alpha_mask):
+    """Bayer dither palette snap — embarrassingly parallel nearest-neighbor.
+
+    Each pixel independently finds its nearest palette color in OKLAB space.
+    Uses numba parallel=True + prange for multi-core acceleration.
+
+    Args:
+        ok_img: float32 (H, W, 3) image in OKLAB space (with Bayer offset applied).
+        pal_ok: float32 (N, 3) palette in OKLAB space.
+        pal_rgb: uint8 (N, 3) palette in RGB space (output mapping).
+        alpha_mask: bool (H, W) — True for opaque pixels, False for transparent.
+
+    Returns:
+        uint8 (H, W, 3) RGB result image.
+    """
+    h, w, _ = ok_img.shape
+    n_pal = len(pal_ok)
+    result = np.empty((h, w, 3), dtype=numba.uint8)
+
+    for y in numba.prange(h):
+        for x in range(w):
+            if not alpha_mask[y, x]:
+                result[y, x, 0] = 0
+                result[y, x, 1] = 0
+                result[y, x, 2] = 0
+                continue
+
+            pL = ok_img[y, x, 0]
+            pa = ok_img[y, x, 1]
+            pb = ok_img[y, x, 2]
+
+            min_dist = 1e18
+            best = 0
+            for i in range(n_pal):
+                dL = pal_ok[i, 0] - pL
+                da = pal_ok[i, 1] - pa
+                db = pal_ok[i, 2] - pb
+                d = dL * dL + da * da + db * db
+                if d < min_dist:
+                    min_dist = d
+                    best = i
+
+            result[y, x, 0] = pal_rgb[best, 0]
+            result[y, x, 1] = pal_rgb[best, 1]
+            result[y, x, 2] = pal_rgb[best, 2]
+
+    return result
+
 
 @numba.jit(nopython=True, cache=True)
 def _fs_core_oklab(ok_img, pal_ok, pal_rgb, alpha_mask):
@@ -675,25 +684,20 @@ def _fs_core_oklab(ok_img, pal_ok, pal_rgb, alpha_mask):
     return result
 
 
-def _floyd_steinberg(
-    img: Image.Image,
+def _floyd_steinberg_ndarray(
+    rgb: np.ndarray,
+    alpha: np.ndarray,
     palette_rgb: list[tuple[int, int, int]],
     *,
     alpha_aware: bool = False,
-) -> Image.Image:
-    """Floyd-Steinberg error-diffusion dithering (OKLAB, palette-aware, Numba-accelerated).
+) -> np.ndarray:
+    """Floyd-Steinberg error-diffusion dithering on ndarray.
 
-    Migrated from CIELAB to OKLAB — float32 throughout, no skimage dependency.
+    Operates on rgb (H,W,3 uint8) + alpha (H,W uint8).
+    Returns rgb (H,W,3 uint8). Alpha is not modified.
+
+    OKLAB, palette-aware, Numba-accelerated. Float32 throughout.
     """
-    arr = np.array(img)
-    has_alpha = arr.shape[2] == 4
-    if has_alpha:
-        alpha = arr[:, :, 3].copy()
-        rgb = arr[:, :, :3]
-    else:
-        alpha = None
-        rgb = arr
-
     h, w, _ = rgb.shape
 
     # Convert image to OKLAB (float32 — no float64 intermediate)
@@ -705,16 +709,12 @@ def _floyd_steinberg(
     pal_rgb = np.array(palette_rgb, dtype=np.uint8)
 
     # Build alpha mask: True for opaque pixels
-    if alpha_aware and has_alpha:
+    if alpha_aware:
         alpha_mask = alpha >= 128
     else:
         alpha_mask = np.ones((h, w), dtype=np.bool_)
 
-    result = _fs_core_oklab(img_ok, pal_ok, pal_rgb, alpha_mask)
-
-    if has_alpha:
-        return Image.fromarray(np.dstack([result, alpha]))
-    return Image.fromarray(result)
+    return _fs_core_oklab(img_ok, pal_ok, pal_rgb, alpha_mask)
 
 
 # ── Bayer: OKLAB ordered dithering ───────────────────────────
@@ -736,35 +736,26 @@ def _bayer_matrix_unnorm(n: int) -> np.ndarray:
     ])
 
 
-def _bayer_dither(
-    img: Image.Image,
+def _bayer_dither_ndarray(
+    rgb: np.ndarray,
+    alpha: np.ndarray,
     palette_rgb: list[tuple[int, int, int]],
     matrix_size: int,
     *,
     alpha_aware: bool = False,
-) -> Image.Image:
-    """Ordered (Bayer) dithering with OKLAB palette snap.
+) -> np.ndarray:
+    """Ordered (Bayer) dithering on ndarray with OKLAB palette snap.
+
+    Operates on rgb (H,W,3 uint8) + alpha (H,W uint8).
+    Returns rgb (H,W,3 uint8). Alpha is not modified.
 
     Eliminates double-quantization: applies threshold offset in OKLAB L
-    channel then snaps directly to nearest palette color via cKDTree.
-
-    Migrated from CIELAB to OKLAB. Key scaling change: CIELAB L* is [0,100],
-    OKLAB L is [0,1], so the dither offset is scaled by 1/100.
+    channel then snaps directly to nearest palette color via Numba kernel.
     """
-    # M-33: Only convert RGB channels to float32, keep alpha as uint8
-    arr = np.array(img)
-    has_alpha = arr.shape[2] == 4
-    if has_alpha:
-        alpha = arr[:, :, 3].copy()  # uint8, no float32 conversion needed
-        rgb = arr[:, :, :3].astype(np.float32)
-    else:
-        alpha = None
-        rgb = arr.astype(np.float32)
-
     h, w, _ = rgb.shape
 
     # Convert to OKLAB (float32 throughout — no float64 intermediate)
-    img_ok = rgb_to_oklab(rgb / 255.0)
+    img_ok = rgb_to_oklab(rgb.astype(np.float32) / 255.0)
 
     # Bayer threshold in OKLAB L channel (perceptual lightness)
     threshold = _bayer_matrix(matrix_size)
@@ -777,24 +768,24 @@ def _bayer_dither(
     offset = (th_tiled - 0.5) * l_step
 
     # Alpha-aware: zero out offset for transparent pixels before addition
-    if alpha_aware and has_alpha:
+    if alpha_aware:
         alpha_mask = alpha < 128
         offset[alpha_mask] = 0
 
     img_ok[:, :, 0] += offset
 
-    # Snap directly to nearest palette color in OKLAB via cKDTree
+    # Snap to nearest palette color via parallel Numba kernel
     palette_key = tuple(tuple(c) for c in palette_rgb)
-    tree = _build_palette_tree(palette_key)
-    pixels_ok = img_ok.reshape(-1, 3)
-    _, nearest_idx = tree.query(pixels_ok)
+    pal_ok = _palette_to_oklab(palette_key)
+    pal_rgb_arr = np.array(palette_rgb, dtype=np.uint8)
 
-    palette_uint8 = np.array(palette_rgb, dtype=np.uint8)
-    result = palette_uint8[nearest_idx].reshape(h, w, 3)
+    # Build alpha mask for the kernel
+    if alpha_aware:
+        bayer_alpha_mask = alpha >= 128
+    else:
+        bayer_alpha_mask = np.ones((h, w), dtype=np.bool_)
 
-    if has_alpha:
-        return Image.fromarray(np.dstack([result, alpha]))
-    return Image.fromarray(result)
+    return _bayer_snap_oklab(img_ok, pal_ok, pal_rgb_arr, bayer_alpha_mask)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -802,12 +793,14 @@ def _bayer_dither(
 # ─────────────────────────────────────────────────────────────
 
 def warmup_numba() -> None:
-    """Pre-compile Floyd-Steinberg JIT kernel with float32 data."""
-    _fs_core_oklab(
-        np.zeros((2, 2, 3), dtype=np.float32),
-        np.zeros((2, 3), dtype=np.float32),
-        np.zeros((2, 3), dtype=np.uint8),
-        np.ones((2, 2), dtype=np.bool_),
+    """Pre-compile Floyd-Steinberg and Bayer JIT kernels with float32 data."""
+    _dummy_img = np.zeros((2, 2, 3), dtype=np.float32)
+    _dummy_pal_ok = np.zeros((2, 3), dtype=np.float32)
+    _dummy_pal_rgb = np.zeros((2, 3), dtype=np.uint8)
+    _dummy_mask = np.ones((2, 2), dtype=np.bool_)
+    _fs_core_oklab(_dummy_img, _dummy_pal_ok, _dummy_pal_rgb, _dummy_mask)
+    _bayer_snap_oklab(
+        _dummy_img.copy(), _dummy_pal_ok, _dummy_pal_rgb, _dummy_mask,
     )
 
 
@@ -815,10 +808,9 @@ def warmup_numba() -> None:
 # STEP 6: ALPHA CLEANUP
 # ─────────────────────────────────────────────────────────────
 
-def _cleanup_alpha(img: Image.Image, threshold: int = 128) -> Image.Image:
-    """Binarize alpha channel — no semi-transparency."""
-    if img.mode != "RGBA":
-        return img
-    arr = np.array(img)
-    arr[:, :, 3] = np.where(arr[:, :, 3] >= threshold, 255, 0)
-    return Image.fromarray(arr)
+def _cleanup_alpha_ndarray(alpha: np.ndarray, threshold: int = 128) -> np.ndarray:
+    """Binarize alpha channel — no semi-transparency.
+
+    Operates on alpha (H,W uint8), returns alpha (H,W uint8).
+    """
+    return np.where(alpha >= threshold, np.uint8(255), np.uint8(0))

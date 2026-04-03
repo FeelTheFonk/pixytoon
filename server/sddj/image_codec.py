@@ -10,6 +10,16 @@ from base64 import b64decode
 from collections import OrderedDict
 from io import BytesIO
 
+# Prefer xxhash for cache key hashing (2-3x faster than MD5 on short inputs).
+# Falls back to MD5 when xxhash is not installed.
+try:
+    import xxhash
+    def _fast_hash(data: bytes) -> str:
+        return xxhash.xxh64(data).hexdigest()
+except ImportError:
+    def _fast_hash(data: bytes) -> str:
+        return hashlib.md5(data).hexdigest()
+
 import cv2
 import numpy as np
 from PIL import Image
@@ -42,7 +52,7 @@ def _img_cache_key(img) -> str:
     else:
         stride = n // 1024
         sample = arr.flat[::stride][:1024].tobytes()
-    return hashlib.md5(sample).hexdigest()
+    return _fast_hash(sample)
 
 
 _dis_instance = None
@@ -464,6 +474,7 @@ def match_color_lab(
     strength: float = 0.5,
     frame_id: int | None = None,
     work_buf_f32: np.ndarray | None = None,
+    out_buf_u8: np.ndarray | None = None,
 ) -> Image.Image:
     """Match the OKLAB color distribution of *image* to *reference*.
 
@@ -480,6 +491,8 @@ def match_color_lab(
             hashing in animation where the reference changes every frame).
         work_buf_f32: Pre-allocated float32 buffer (H, W, 3) for the OKLAB
             working copy.  When *None* a new array is allocated (backward compat).
+        out_buf_u8: Pre-allocated uint8 buffer (H, W, 3) for the final sRGB
+            output.  When *None* a new array is allocated (backward compat).
     """
     from .oklab import rgb_to_oklab, oklab_to_rgb
 
@@ -487,11 +500,9 @@ def match_color_lab(
         return image
 
     img_arr = np.array(image, dtype=np.uint8)
-    ref_arr = np.array(reference, dtype=np.uint8)
 
     # L10: deduplicated channel normalisation
     img_arr = _ensure_rgb3(img_arr)
-    ref_arr = _ensure_rgb3(ref_arr)
 
     # Convert image to OKLAB (float32 throughout)
     img_ok = rgb_to_oklab(img_arr.astype(np.float32) / 255.0)
@@ -511,6 +522,9 @@ def match_color_lab(
             _REF_OKLAB_CACHE.move_to_end(ref_key)
             ref_means, ref_stds = _REF_OKLAB_CACHE[ref_key]
         else:
+            # Convert reference only on cache miss (avoids np.array + rgb_to_oklab on hits)
+            ref_arr = np.array(reference, dtype=np.uint8)
+            ref_arr = _ensure_rgb3(ref_arr)
             ref_ok = rgb_to_oklab(ref_arr.astype(np.float32) / 255.0)
             ref_flat = ref_ok.reshape(-1, 3)
             ref_means = ref_flat.mean(axis=0)
@@ -537,7 +551,15 @@ def match_color_lab(
 
     # Convert back to sRGB uint8
     matched_float = oklab_to_rgb(img_ok_f)
-    matched = np.clip(matched_float * 255, 0, 255).astype(np.uint8)
+    # M2: reuse pre-allocated uint8 buffer when provided (avoids per-frame heap alloc)
+    if out_buf_u8 is not None and out_buf_u8.shape == img_arr.shape and out_buf_u8.dtype == np.uint8:
+        np.multiply(matched_float, 255, out=work_buf_f32 if work_buf_f32 is not None and work_buf_f32.shape == matched_float.shape else matched_float)
+        src = work_buf_f32 if work_buf_f32 is not None and work_buf_f32.shape == matched_float.shape else matched_float
+        np.clip(src, 0, 255, out=src)
+        np.copyto(out_buf_u8, src.astype(np.uint8))
+        matched = out_buf_u8
+    else:
+        matched = np.clip(matched_float * 255, 0, 255).astype(np.uint8)
 
     if strength < 1.0:
         matched = cv2.addWeighted(

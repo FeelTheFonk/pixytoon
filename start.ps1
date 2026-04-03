@@ -59,7 +59,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Model check: short-circuit on first match (no full recursive enumeration)
-$hasModel = Get-ChildItem -Path $ModelsDir -Recurse -File -ErrorAction SilentlyContinue |
+$hasModel = Get-ChildItem -Path $ModelsDir -Recurse -Depth 2 -File -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -match "\.(safetensors|ckpt|bin)$" } |
     Select-Object -First 1
 if (-not $hasModel) {

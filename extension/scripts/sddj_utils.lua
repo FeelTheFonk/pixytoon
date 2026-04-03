@@ -13,19 +13,24 @@ end
 function PT.make_tmp_path(prefix)
   PT.state.file_counter = PT.state.file_counter + 1
   return app.fs.joinPath(PT.get_tmp_dir(),
-    "sddj_" .. prefix .. "_" .. PT.state.session_id .. "_" .. PT.state.file_counter .. ".png")
+    string.format("sddj_%s_%s_%d.png", prefix, PT.state.session_id, PT.state.file_counter))
 end
 
 -- ─── Image I/O ──────────────────────────────────────────────
 
 function PT.image_to_base64(img)
-  local tmp = PT.make_tmp_path("b64")
+  -- Note: Image.bytes gives raw RGBA pixels, not PNG-encoded data.
+  -- Aseprite has no in-memory PNG encoder, so we must round-trip through
+  -- a temp file. Reuse a single temp path to minimize filesystem overhead.
+  if not PT.state._b64_tmp then
+    PT.state._b64_tmp = PT.make_tmp_path("b64")
+  end
+  local tmp = PT.state._b64_tmp
   if not img:saveAs(tmp) then return nil end
   local f = io.open(tmp, "rb")
   if not f then return nil end
   local data = f:read("*a")
   f:close()
-  os.remove(tmp)
   return PT.base64_encode(data)
 end
 
@@ -44,9 +49,6 @@ function PT.cleanup_session_temp_files(all_sessions)
         count = count + 1
       end
     end
-  end
-  if count > 0 then
-    -- Silent cleanup, no status update needed
   end
 end
 
@@ -116,6 +118,7 @@ PT.SLIDER_LABELS = {
   gen_guidance_start    = { "CN Start (%.0f%%)",  1.0 },
   gen_guidance_end      = { "CN End (%.0f%%)",    1.0 },
   guidance_rescale      = { "Rescale (%.2f)",    100.0 },
+  pag_scale             = { "PAG Scale (%.1f)",  10.0 },
   -- Integer sliders
   steps                 = { "Steps (%d)" },
   clip_skip             = { "CLIP Skip (%d)" },
@@ -164,6 +167,7 @@ PT.PARAM_DEFS = {
   seed_offset       = { 0,  1000     },   -- 0..1000 (integer)
   palette_shift     = { 0.0,   1.0   },   -- 0..1
   frame_cadence     = { 1.0,   8.0   },   -- 1..8
+  lora_weight       = { 0.0,   2.0   },   -- 0..2 (LoRA weight)
   motion_x          = { -5.0,  5.0   },   -- −5..+5 px/frame
   motion_y          = { -5.0,  5.0   },   -- −5..+5 px/frame
   motion_zoom       = { 0.92,  1.08  },   -- zoom factor

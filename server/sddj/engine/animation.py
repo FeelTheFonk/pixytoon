@@ -83,17 +83,38 @@ def _postprocess_and_encode_chain_frame(
     return resp
 
 
+_rife_instance = None
+
+
+def _get_rife():
+    """Lazy singleton for RIFE NCNN interpolator — avoids per-call VRAM allocation."""
+    global _rife_instance
+    if _rife_instance is None:
+        from rife_ncnn_vulkan import Rife
+        _rife_instance = Rife(gpuid=0)
+        log.info("RIFE NCNN interpolator initialized (singleton)")
+    return _rife_instance
+
+
+def destroy_rife():
+    """Release RIFE singleton to free VRAM when needed."""
+    global _rife_instance
+    if _rife_instance is not None:
+        _rife_instance = None
+        log.info("RIFE NCNN interpolator destroyed (VRAM freed)")
+
+
 def _interpolate_frames(frames: list, factor: int) -> list:
     """Interpolate between animation frames using RIFE or linear blend.
 
     Falls back to simple alpha blending if RIFE is not available.
+    Uses a module-level RIFE singleton to avoid per-call VRAM allocation.
     """
     if len(frames) < 2 or factor < 2:
         return frames
     try:
-        # Try RIFE first
-        from rife_ncnn_vulkan import Rife
-        rife = Rife(gpuid=0)
+        # Try RIFE first (lazy singleton)
+        rife = _get_rife()
         interpolated = []
         for i in range(len(frames) - 1):
             interpolated.append(frames[i])
@@ -304,7 +325,7 @@ class AnimationMixin:
                 if req.seed_strategy == SeedStrategy.FIXED:
                     frame_seed = base_seed
                 elif req.seed_strategy == SeedStrategy.INCREMENT:
-                    frame_seed = base_seed + frame_idx
+                    frame_seed = (base_seed + frame_idx) % (2**32)
                 else:  # RANDOM
                     frame_seed = random.randint(0, 2**32 - 1)
 
@@ -324,9 +345,9 @@ class AnimationMixin:
                 # Reset img2img scheduler before each frame to prevent
                 # stale state accumulation (timesteps, _step_index).
                 # This is the root fix for the chain animation infinite loop.
-                # TODO(Performance Phase C): diffusers `__call__` already calls `set_timesteps()`.
-                # This explicitly clears scheduler state arrays, but may be completely redundant.
-                # Must be empirically validated with verify_optimizations.py before removing.
+                # Note: diffusers `__call__` already calls `set_timesteps()`.
+                # This explicit reset clears scheduler state arrays (timesteps, _step_index)
+                # and is the root fix for the chain animation infinite loop bug.
                 if frame_idx > 0:
                     self._img2img_pipe.scheduler = _frame_scheduler
                     _frame_scheduler.set_timesteps(frame_steps)
@@ -496,7 +517,7 @@ class AnimationMixin:
         req: AnimationRequest,
         on_frame: Optional[Callable[[AnimationFrameResponse], None]],
         on_progress: Optional[Callable[[ProgressResponse], None]],
-    ) -> int:
+    ) -> tuple[int, int]:
         """AnimateDiff motion module generation for temporal consistency."""
 
         # Lightning frame cap: FreeNoise is incompatible with distilled models
@@ -513,6 +534,11 @@ class AnimationMixin:
         is_controlnet = req.mode.value.startswith("controlnet_")
         if not is_controlnet and self._controlnet_pipe is not None:
             log.info("Smart transition: unloading ControlNet before AnimateDiff")
+            from ..vram_utils import move_to_cpu
+            move_to_cpu(self._controlnet_pipe)
+            if self._controlnet_img2img_pipe is not None:
+                move_to_cpu(self._controlnet_img2img_pipe)
+                self._controlnet_img2img_pipe = None
             self._controlnet_pipe = None
             self._controlnet_mode = None
 
@@ -534,7 +560,7 @@ class AnimationMixin:
         req: AnimationRequest,
         on_frame: Optional[Callable[[AnimationFrameResponse], None]],
         on_progress: Optional[Callable[[ProgressResponse], None]],
-    ) -> int:
+    ) -> tuple[int, int]:
         """Core AnimateDiff generation — FreeNoise native sliding window.
 
         For sequences longer than context_length, FreeNoise handles temporal
@@ -703,37 +729,47 @@ class AnimationMixin:
             except Exception as e:
                 log.warning("Frame interpolation failed: %s — using original frames", e)
 
-        # Post-process and encode all frames
+        # Post-process and encode all frames.
+        # Wrapped in try/finally to ensure pil_frames list is released on
+        # cancellation — each PIL frame holds ~3MB (1024x1024 RGB), so a
+        # 64-frame batch is ~200MB of CPU memory that would leak on cancel.
         frame_count = 0
         t_post_start = time.perf_counter()
-        for frame_idx, pil_img in enumerate(pil_frames):
-            if frame_idx >= total_frames:
-                break
-            if self._cancel_event.is_set():
-                raise GenerationCancelled("AnimateDiff cancelled during post-processing")
-            t0_frame = time.perf_counter()
-            image = postprocess_apply(pil_img, req.post_process)
-            raw_bytes = encode_image_raw_bytes(image)
-            w, h = image.size
-            elapsed_ms = int((time.perf_counter() - t0) * 1000)
-            frame_time_ms = int((time.perf_counter() - t0_frame) * 1000)
-            log.debug("AnimateDiff frame %d: post-process %dms, total %dms",
-                       frame_idx, frame_time_ms, elapsed_ms)
+        try:
+            for frame_idx, pil_img in enumerate(pil_frames):
+                if frame_idx >= total_frames:
+                    break
+                if self._cancel_event.is_set():
+                    raise GenerationCancelled("AnimateDiff cancelled during post-processing")
+                t0_frame = time.perf_counter()
+                image = postprocess_apply(pil_img, req.post_process)
+                raw_bytes = encode_image_raw_bytes(image)
+                w, h = image.size
+                elapsed_ms = int((time.perf_counter() - t0) * 1000)
+                frame_time_ms = int((time.perf_counter() - t0_frame) * 1000)
+                log.debug("AnimateDiff frame %d: post-process %dms, total %dms",
+                           frame_idx, frame_time_ms, elapsed_ms)
 
-            frame_resp = AnimationFrameResponse(
-                frame_index=frame_idx,
-                total_frames=total_frames,
-                image="",
-                seed=seed,
-                time_ms=elapsed_ms,
-                width=w,
-                height=h,
-                encoding="raw_rgba",
-            )
-            frame_resp._raw_bytes = raw_bytes
-            frame_count += 1
-            if on_frame:
-                on_frame(frame_resp)
+                frame_resp = AnimationFrameResponse(
+                    frame_index=frame_idx,
+                    total_frames=total_frames,
+                    image="",
+                    seed=seed,
+                    time_ms=elapsed_ms,
+                    width=w,
+                    height=h,
+                    encoding="raw_rgba",
+                )
+                frame_resp._raw_bytes = raw_bytes
+                frame_count += 1
+                if on_frame:
+                    on_frame(frame_resp)
+        finally:
+            # Release PIL frame references to free CPU memory immediately,
+            # especially critical on cancel where frames would otherwise
+            # remain referenced until the list goes out of scope.
+            pil_frames.clear()
+            del pil_frames
 
         t_post = time.perf_counter() - t_post_start
         t_setup = t_pre_inf - t0

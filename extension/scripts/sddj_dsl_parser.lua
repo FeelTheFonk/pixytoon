@@ -10,7 +10,8 @@ local M = {}
 
 -- ─── Transition Types ──────────────────────────────────────
 
--- Safety limits
+-- Safety limits — keep in sync with server-side validation limits
+-- (see server/validation.py or equivalent server config)
 local _MAX_DSL_LENGTH = 100000   -- 100 KB max DSL text
 local _MAX_KEYFRAMES  = 500      -- max keyframes in a schedule
 

@@ -13,6 +13,10 @@ def apply_freeu(pipe) -> None:
     """Apply FreeU v2 to any diffusers pipeline if enabled in settings."""
     if not settings.enable_freeu:
         return
+    # Sentinel attribute: _freeu_applied is monkey-patched onto the pipeline
+    # instance to prevent redundant enable_freeu() calls across reuse cycles.
+    # getattr with default is used because diffusers pipelines do not define
+    # this attribute natively — it exists only after our first successful apply.
     if getattr(pipe, "_freeu_applied", False):
         return
     try:

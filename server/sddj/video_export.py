@@ -191,7 +191,7 @@ def export_mp4(
         cmd.extend(["-i", str(audio_path)])
 
     # Force strict constant frame rate output to prevent drift
-    cmd.extend(["-vsync", "1"])
+    cmd.extend(["-fps_mode", "cfr"])
 
     # Video filter chain:
     # 1. colorchannelmixer=aa=1 — force alpha to opaque (transparent frames → black)

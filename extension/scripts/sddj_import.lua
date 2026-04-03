@@ -31,7 +31,10 @@ local function _decode_to_image(resp, decoded_bytes)
     img.bytes = raw
     return img, raw
   else
-    -- Legacy PNG path: temp file → Image{fromFile}
+    -- Legacy PNG path: temp file → Image{fromFile}.
+    -- This path should never be hit in production: the server always sends
+    -- raw_rgba encoding via binary WS frames. If this executes, it indicates
+    -- a server regression to base64/PNG transport — investigate immediately.
     local tmp = PT.make_tmp_path("dec")
     local f = io.open(tmp, "wb")
     if not f then return nil, raw end

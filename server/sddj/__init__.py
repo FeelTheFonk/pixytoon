@@ -2,6 +2,7 @@
 
 import os as _os
 import warnings as _warnings
+from pathlib import Path as _Path
 
 # Force offline mode at the earliest possible point: never fetch from
 # HuggingFace Hub at runtime.  Models must be pre-cached via
@@ -10,6 +11,13 @@ _os.environ.setdefault("HF_HUB_OFFLINE", "1")
 _os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 _os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 _os.environ.setdefault("DO_NOT_TRACK", "1")
+
+# ── Persist compile caches & CUDA allocator config ───────────
+# Set before torch is imported so Triton/Inductor pick up the paths.
+_SERVER_ROOT = _Path(__file__).resolve().parent.parent
+_os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", str(_SERVER_ROOT / ".cache" / "inductor"))
+_os.environ.setdefault("TRITON_CACHE_DIR", str(_SERVER_ROOT / ".cache" / "triton"))
+_os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 # ── Suppress known harmless library warnings ──────────────────
 # Centralized here (earliest import point) for a clean console from boot.
@@ -40,6 +48,9 @@ _warnings.filterwarnings("ignore", category=DeprecationWarning, module="audiorea
 _warnings.filterwarnings("ignore", category=DeprecationWarning, module="standard_aifc")
 _warnings.filterwarnings("ignore", category=DeprecationWarning, module="standard_sunau")
 
-from importlib.metadata import version as _pkg_version
-__version__ = _pkg_version("sddj-server")
+try:
+    from importlib.metadata import version as _pkg_version
+    __version__ = _pkg_version("sddj-server")
+except Exception:
+    __version__ = "dev"
 

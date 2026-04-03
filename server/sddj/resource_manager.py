@@ -46,6 +46,8 @@ class ResourceManager:
     def resolve(self, name: str) -> Path:
         _validate_name(name, self._kind)
         d = self._directory
+        # O(|_extensions|) iteration — typically 3 extensions (.safetensors, .bin, .pt),
+        # so linear scan is acceptable and simpler than building a lookup structure.
         for ext in self._extensions:
             candidate = d / f"{name}{ext}"
             if candidate.is_file():

@@ -371,6 +371,20 @@ function PT.apply_metadata(meta)
   PT.update_status("Metadata loaded (seed=" .. tostring(meta.seed or "?") .. ")")
 end
 
+-- ─── Shared: inject lock subject/custom state into meta table ──
+
+local function _inject_lock_state(meta)
+  if not PT.dlg then return end
+  meta.lock_subject = PT.dlg.data.lock_subject or false
+  local subj = PT.dlg.data.fixed_subject or ""
+  if subj ~= "" then meta.fixed_subject = subj end
+  meta.subject_position = PT.dlg.data.subject_position or "prefix"
+  meta.lock_custom = PT.dlg.data.lock_custom or false
+  local cust = PT.dlg.data.fixed_custom or ""
+  if cust ~= "" then meta.fixed_custom = cust end
+  meta.custom_position = PT.dlg.data.custom_position or "suffix"
+end
+
 -- ─── Build Metadata from Request + Response ────────────────────
 
 function PT.build_generation_meta(resp)
@@ -399,16 +413,7 @@ function PT.build_generation_meta(resp)
     meta.output_size = tostring(req.width or 512) .. "x" .. tostring(req.height or 512)
   end
   -- Lock Subject/Custom state for reproducibility
-  if PT.dlg then
-    meta.lock_subject = PT.dlg.data.lock_subject or false
-    local subj = PT.dlg.data.fixed_subject or ""
-    if subj ~= "" then meta.fixed_subject = subj end
-    meta.subject_position = PT.dlg.data.subject_position or "prefix"
-    meta.lock_custom = PT.dlg.data.lock_custom or false
-    local cust = PT.dlg.data.fixed_custom or ""
-    if cust ~= "" then meta.fixed_custom = cust end
-    meta.custom_position = PT.dlg.data.custom_position or "suffix"
-  end
+  _inject_lock_state(meta)
   return meta
 end
 
@@ -453,16 +458,7 @@ function PT.build_animation_meta(resp)
     end
   end
   -- Lock Subject/Custom state for reproducibility
-  if PT.dlg then
-    meta.lock_subject = PT.dlg.data.lock_subject or false
-    local subj = PT.dlg.data.fixed_subject or ""
-    if subj ~= "" then meta.fixed_subject = subj end
-    meta.subject_position = PT.dlg.data.subject_position or "prefix"
-    meta.lock_custom = PT.dlg.data.lock_custom or false
-    local cust = PT.dlg.data.fixed_custom or ""
-    if cust ~= "" then meta.fixed_custom = cust end
-    meta.custom_position = PT.dlg.data.custom_position or "suffix"
-  end
+  _inject_lock_state(meta)
   return meta
 end
 

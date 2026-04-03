@@ -14,14 +14,21 @@ from .config import settings
 
 __all__ = ["remove_bg", "unload"]
 
-_onnx_available = True
-try:
-    import onnxruntime  # noqa: F401
-except ImportError:
-    _onnx_available = False
-
 _session = None
 _session_lock = threading.Lock()
+_onnx_checked: bool | None = None
+
+
+def _is_onnx_available() -> bool:
+    """Lazy check for onnxruntime — deferred so the import cost is only paid when needed."""
+    global _onnx_checked
+    if _onnx_checked is None:
+        try:
+            import onnxruntime  # noqa: F401
+            _onnx_checked = True
+        except ImportError:
+            _onnx_checked = False
+    return _onnx_checked
 
 
 def _get_session():
@@ -50,7 +57,7 @@ def _get_session():
 
 
 def remove_bg(img: Image.Image) -> Image.Image:
-    if not _onnx_available:
+    if not _is_onnx_available():
         raise RuntimeError("Background removal unavailable: onnxruntime not installed")
     from rembg import remove
     session = _get_session()
@@ -62,8 +69,8 @@ def unload():
     global _session
     with _session_lock:
         _session = None
-    if not settings.rembg_on_cpu:
-        import torch
-        if torch.cuda.is_available():
-            from .vram_utils import vram_cleanup
-            vram_cleanup()
+        if not settings.rembg_on_cpu:
+            import torch
+            if torch.cuda.is_available():
+                from .vram_utils import vram_cleanup
+                vram_cleanup()

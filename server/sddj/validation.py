@@ -28,9 +28,6 @@ def validate_path_in_sandbox(resolved: Path, sandbox: Path) -> None:
     path_resolved = resolved.resolve()
     if not path_resolved.is_relative_to(sandbox_resolved):
         raise ValueError(f"Path escapes sandbox: {path_resolved}")
-    # Reject symlinks pointing outside (resolve follows them, but the
-    # original path being a symlink could be used to confuse audits)
-    if resolved.is_symlink():
-        target = resolved.resolve()
-        if not target.is_relative_to(sandbox_resolved):
-            raise ValueError(f"Symlink target escapes sandbox: {target}")
+    # Note: symlink targets are already checked by resolve() above —
+    # path_resolved follows symlinks, so any symlink pointing outside
+    # the sandbox is already caught by the is_relative_to check.

@@ -59,7 +59,7 @@ local GLOBAL_SOURCES = {
 local MOD_TARGETS = {
   "denoise_strength", "cfg_scale", "noise_amplitude",
   "controlnet_scale", "seed_offset", "palette_shift",
-  "frame_cadence",
+  "frame_cadence", "lora_weight",
   -- Motion / camera (smooth Deforum-like)
   "motion_x", "motion_y", "motion_zoom", "motion_rotation",
   "motion_tilt_x", "motion_tilt_y",
@@ -74,6 +74,7 @@ local MOD_TARGET_FMT = {
   seed_offset      = "%.0f",
   palette_shift    = "%.2f",
   frame_cadence    = "%.1f",
+  lora_weight      = "%.2f",
   motion_x         = "%.1f",
   motion_y         = "%.1f",
   motion_zoom      = "%.3f",
@@ -204,6 +205,9 @@ function PT.sync_ui_conditional_states()
   pcall(dlg.modify, dlg, { id = "gen_guidance_start", visible = is_non_qr_cn })
   pcall(dlg.modify, dlg, { id = "gen_guidance_end", visible = is_non_qr_cn })
   pcall(dlg.modify, dlg, { id = "guidance_rescale", visible = is_non_qr_cn })
+
+  -- PAG scale visibility (only when PAG checkbox is enabled)
+  pcall(dlg.modify, dlg, { id = "pag_scale", visible = (d.pag_enabled == true) })
 
   -- IP-Adapter: mode + scale + hint only visible when checkbox is enabled
   local ip_en = (d.ip_adapter_enabled == true)
@@ -645,6 +649,23 @@ local function build_tab_generate()
     option = "DPM++ SDE Karras",
   }
 
+  -- ── PAG (Perturbed Attention Guidance) ──
+  dlg:check{
+    id = "pag_enabled",
+    text = "PAG (Perturbed Attention Guidance)",
+    selected = false,
+    onchange = function()
+      pcall(dlg.modify, dlg, { id = "pag_scale", visible = (dlg.data.pag_enabled == true) })
+    end,
+  }
+  dlg:slider{
+    id = "pag_scale",
+    label = "PAG Scale (3.0)",
+    min = 0, max = 100, value = 30,
+    visible = false,
+    onchange = onchange_sync("pag_scale"),
+  }
+
   dlg:slider{
     id = "clip_skip",
     label = "CLIP Skip (2)",
@@ -909,8 +930,8 @@ local function build_tab_animation()
   }
   dlg:slider{
     id = "anim_guidance_end",
-    label = "Guide End (0.80)",
-    min = 0, max = 100, value = 80,
+    label = "Guide End (1.00)",
+    min = 0, max = 100, value = 100,
     onchange = onchange_sync("anim_guidance_end"),
   }
 
@@ -1118,8 +1139,8 @@ local function build_tab_audio()
   }
   dlg:slider{
     id = "audio_denoise",
-    label = "Strength (0.50)",
-    min = 20, max = 100, value = 50,
+    label = "Strength (0.30)",
+    min = 20, max = 100, value = 30,
     onchange = onchange_sync("audio_denoise"),
   }
 

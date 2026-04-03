@@ -18,6 +18,7 @@ def create_helper(pipe):
     """
     if not settings.enable_deepcache:
         return None
+    helper = None
     try:
         from DeepCache import DeepCacheSDHelper
         helper = DeepCacheSDHelper(pipe=pipe)
@@ -30,7 +31,7 @@ def create_helper(pipe):
         return helper
     except Exception as e:
         log.warning("DeepCache unavailable: %s", e)
-        if 'helper' in locals():
+        if helper is not None:
             try:
                 helper.disable()
             except Exception:

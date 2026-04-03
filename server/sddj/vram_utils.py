@@ -21,6 +21,7 @@ log = logging.getLogger("sddj.vram")
 _last_gc: float = 0.0
 _gc_lock = threading.Lock()
 _GC_COOLDOWN: float = 2.0  # Minimum seconds between gc.collect() to avoid 50-200ms stalls
+_gc_skip_count: int = 0  # Diagnostic counter: number of throttled (skipped) GC calls
 _MB = 1024 * 1024  # Bytes per megabyte
 
 
@@ -36,7 +37,7 @@ def vram_cleanup(force: bool = False) -> None:
 
     Pass force=True for genuine cleanup scenarios (model unload, OOM recovery).
     """
-    global _last_gc
+    global _last_gc, _gc_skip_count
     now = time.monotonic()
     with _gc_lock:
         if force or (now - _last_gc) > _GC_COOLDOWN:
@@ -44,6 +45,13 @@ def vram_cleanup(force: bool = False) -> None:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             _last_gc = time.monotonic()
+        else:
+            _gc_skip_count += 1
+
+
+def get_gc_skip_count() -> int:
+    """Return the number of GC calls skipped due to cooldown throttling (diagnostic)."""
+    return _gc_skip_count
 
 
 def get_vram_info() -> tuple[float, float, float]:

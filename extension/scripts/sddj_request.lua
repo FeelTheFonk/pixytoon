@@ -378,6 +378,11 @@ function PT.build_audio_reactive_request()
   PT.attach_neg_ti(req)
   PT.attach_scheduler(req)
   PT.attach_ip_adapter(req)
+  -- PAG (Perturbed Attention Guidance)
+  if d.pag_enabled then
+    local ps = clamp((d.pag_scale or 30) / 10.0, 0, 10)
+    if ps > 0 then req.pag_scale = ps end
+  end
   PT.last_request = PT.shallow_copy_request(req)
   return req
 end
@@ -405,6 +410,11 @@ function PT.build_generate_request()
   PT.attach_neg_ti(req)
   PT.attach_scheduler(req)
   PT.attach_ip_adapter(req)
+  -- PAG (Perturbed Attention Guidance)
+  if PT.dlg.data.pag_enabled then
+    local ps = clamp((PT.dlg.data.pag_scale or 30) / 10.0, 0, 10)
+    if ps > 0 then req.pag_scale = ps end
+  end
   -- Guidance rescale (CFG overshoot correction)
   local gr = clamp((PT.dlg.data.guidance_rescale or 0) / 100.0, 0, 1)
   if gr > 0 then req.guidance_rescale = gr end
@@ -474,10 +484,15 @@ function PT.build_animation_request()
   PT.attach_neg_ti(req)
   PT.attach_scheduler(req)
   PT.attach_ip_adapter(req)
+  -- PAG (Perturbed Attention Guidance)
+  if d.pag_enabled then
+    local ps = clamp((d.pag_scale or 30) / 10.0, 0, 10)
+    if ps > 0 then req.pag_scale = ps end
+  end
   -- Attach guidance start/end for ControlNet animation modes
   if d.mode and d.mode:find("controlnet_") then
     req.control_guidance_start = clamp((d.anim_guidance_start or 0) / 100.0, 0, 1)
-    req.control_guidance_end   = clamp((d.anim_guidance_end or 80) / 100.0, 0, 1)
+    req.control_guidance_end   = clamp((d.anim_guidance_end or 100) / 100.0, 0, 1)
   end
   PT.last_request = PT.shallow_copy_request(req)
   return req

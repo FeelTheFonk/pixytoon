@@ -58,6 +58,10 @@ test_output/
 .mypy_cache/
 .ruff_cache/
 
+# Compile caches (Triton / TorchInductor)
+.cache/
+server/.cache/
+
 # Local env overrides
 .env.local
 .env.*.local

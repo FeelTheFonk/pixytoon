@@ -127,8 +127,8 @@ class PromptSchedulePresetsManager:
                 f"Invalid preset name: {name!r} "
                 "(only alphanumeric, underscore, hyphen)"
             )
-        if ".." in name or "/" in name or "\\" in name:
-            raise ValueError(f"Path traversal rejected: {name!r}")
+        # Note: path traversal chars (.., /, \) are already impossible given
+        # _NAME_RE only allows [a-zA-Z0-9_-]. No additional check needed.
 
     def list_presets(self) -> list[str]:
         """Return sorted list of all preset names (builtins + user)."""

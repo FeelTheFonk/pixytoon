@@ -8,6 +8,7 @@ frame alternation.
 from __future__ import annotations
 
 import logging
+import threading
 from collections import OrderedDict
 
 import torch
@@ -44,7 +45,10 @@ class _EmbeddingCache:
 # from the engine thread under _generate_lock (via run_in_executor). Only one
 # executor task runs at a time due to the asyncio.Lock serialization in
 # server.py — this lock, not the GIL, provides the actual safety guarantee.
+# Defense in depth: _embed_cache_lock protects cache get/put even though the
+# contract guarantees serialized access. Cost: ~25ns per uncontended acquire.
 _embed_cache = _EmbeddingCache()
+_embed_cache_lock = threading.Lock()
 
 _NORM_EPSILON = 1e-8
 _COLLINEAR_THRESHOLD = 0.9995
@@ -124,6 +128,62 @@ def slerp(
     return result.to(orig_dtype)
 
 
+def slerp_batch(
+    embed_a: torch.Tensor,
+    embed_b: torch.Tensor,
+    t_values: torch.Tensor,
+) -> torch.Tensor:
+    """Batch SLERP: compute all interpolation steps in one GPU kernel.
+
+    Instead of calling slerp() N times with scalar t (N separate GPU kernel
+    launches), this computes all N interpolations in a single batched operation.
+
+    Args:
+        embed_a: First embedding tensor [seq_len, dim] or [batch, seq_len, dim]
+        embed_b: Second embedding tensor (same shape as embed_a)
+        t_values: 1-D tensor of interpolation weights, shape (N,)
+
+    Returns:
+        Interpolated embeddings, shape (N, seq_len, dim).
+    """
+    N = t_values.shape[0]
+
+    # Ensure 3-D: (seq_len, dim) -> (1, seq_len, dim)
+    if embed_a.dim() == 2:
+        embed_a = embed_a.unsqueeze(0)
+    if embed_b.dim() == 2:
+        embed_b = embed_b.unsqueeze(0)
+
+    # t_values shape: (N,) -> (N, 1, 1) for broadcasting with (1, seq_len, dim)
+    t = t_values.view(N, 1, 1)
+
+    a = embed_a.expand(N, -1, -1).float()   # (N, seq_len, dim)
+    b = embed_b.expand(N, -1, -1).float()
+
+    norm_a = torch.linalg.norm(a, dim=-1, keepdim=True)
+    norm_b = torch.linalg.norm(b, dim=-1, keepdim=True)
+
+    unit_a = a / norm_a.clamp(min=_NORM_EPSILON)
+    unit_b = b / norm_b.clamp(min=_NORM_EPSILON)
+
+    cos_omega = (unit_a * unit_b).sum(dim=-1, keepdim=True).clamp(-1, 1)
+    omega = torch.acos(cos_omega)
+    sin_omega = torch.sin(omega).clamp(min=_NORM_EPSILON)
+
+    coeff_a = torch.sin((1 - t) * omega) / sin_omega
+    coeff_b = torch.sin(t * omega) / sin_omega
+
+    avg_norm = norm_a * (1 - t) + norm_b * t
+    result = (coeff_a * unit_a + coeff_b * unit_b) * avg_norm
+
+    # Collinear fallback: use LERP where embeddings are nearly parallel
+    is_collinear = cos_omega.abs() > _COLLINEAR_THRESHOLD
+    lerp_result = a * (1 - t) + b * t
+    result = torch.where(is_collinear, lerp_result, result)
+
+    return result.to(embed_a.dtype)
+
+
 def lerp(
     embed_a: torch.Tensor,
     embed_b: torch.Tensor,
@@ -190,7 +250,8 @@ def blend_prompt_embeds(
 
 def clear_embedding_cache():
     """Call when pipeline/model changes to invalidate cached embeddings."""
-    _embed_cache.clear()
+    with _embed_cache_lock:
+        _embed_cache.clear()
 
 
 def _encode_prompt(
@@ -205,7 +266,8 @@ def _encode_prompt(
     Uses LRU cache to eliminate redundant tokenization+encoding across frames.
     """
     cache_key = (prompt, negative_prompt or "", clip_skip, _model_generation)
-    cached = _embed_cache.get(cache_key)
+    with _embed_cache_lock:
+        cached = _embed_cache.get(cache_key)
     if cached is not None:
         return cached
 
@@ -223,7 +285,8 @@ def _encode_prompt(
             embeds = (result[0], result[1])  # prompt_embeds, negative_embeds
         else:
             embeds = (result[0], result[0])  # fallback
-        _embed_cache.put(cache_key, embeds)
+        with _embed_cache_lock:
+            _embed_cache.put(cache_key, embeds)
         return embeds
 
     # Manual encoding fallback
@@ -239,7 +302,7 @@ def _encode_prompt(
         return_tensors="pt",
     ).input_ids.to(text_encoder.device)
 
-    with torch.no_grad():
+    with torch.inference_mode():
         if clip_skip > 0 and hasattr(text_encoder.config, "num_hidden_layers"):
             outputs = text_encoder(pos_tokens, output_hidden_states=True)
             layer_idx = -(clip_skip + 1)
@@ -257,7 +320,7 @@ def _encode_prompt(
         return_tensors="pt",
     ).input_ids.to(text_encoder.device)
 
-    with torch.no_grad():
+    with torch.inference_mode():
         if clip_skip > 0 and hasattr(text_encoder.config, "num_hidden_layers"):
             outputs = text_encoder(neg_tokens, output_hidden_states=True)
             layer_idx = -(clip_skip + 1)
@@ -267,5 +330,6 @@ def _encode_prompt(
             neg_embeds = text_encoder(neg_tokens)[0]
 
     result = (pos_embeds, neg_embeds)
-    _embed_cache.put(cache_key, result)
+    with _embed_cache_lock:
+        _embed_cache.put(cache_key, result)
     return result

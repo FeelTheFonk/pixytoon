@@ -10,7 +10,6 @@ from typing import Optional
 import torch
 from diffusers import (
     ControlNetModel,
-    DDIMScheduler,
     DPMSolverMultistepScheduler,
     StableDiffusionControlNetPipeline,
     StableDiffusionControlNetImg2ImgPipeline,
@@ -371,13 +370,31 @@ def apply_torch_compile(pipe: StableDiffusionPipeline) -> None:
         pipe.unet = torch.compile(
             pipe.unet,
             mode=mode,
-            fullgraph=False,
+            fullgraph=not settings.enable_deepcache,
             dynamic=use_dynamic,
         )
         log.info("torch.compile enabled for UNet (mode=%s, dynamic=%s)",
                  mode, use_dynamic)
     except Exception as e:
         log.warning("torch.compile failed: %s", e)
+
+    # Compile text_encoder — eliminates interpreter overhead on tokenization path.
+    # fullgraph=True: CLIP text encoder has static control flow.
+    if hasattr(pipe, 'text_encoder') and pipe.text_encoder is not None:
+        try:
+            pipe.text_encoder = torch.compile(pipe.text_encoder, mode=mode, fullgraph=True)
+            log.info("torch.compile enabled for text_encoder (mode=%s)", mode)
+        except Exception as e:
+            log.warning("text_encoder compile failed: %s — continuing uncompiled", e)
+
+    # Compile vae.encode — used in img2img latent encoding path.
+    # fullgraph=True: VAE encoder has static control flow.
+    if hasattr(pipe, 'vae') and pipe.vae is not None:
+        try:
+            pipe.vae.encode = torch.compile(pipe.vae.encode, mode=mode, fullgraph=True)
+            log.info("torch.compile enabled for VAE encode (mode=%s)", mode)
+        except Exception as e:
+            log.warning("VAE encode compile failed: %s — continuing uncompiled", e)
 
 
 def apply_vae_compile(pipe: StableDiffusionPipeline) -> None:
@@ -408,21 +425,29 @@ def create_img2img_pipeline(
     CRITICAL: scheduler must be a separate instance — txt2img and img2img
     both call set_timesteps() which mutates internal state. Sharing one
     scheduler causes chain animation to deadlock on the 3rd frame.
+
+    FIX (v0.9.93): Always assign a fresh scheduler to the returned pipeline,
+    including the double-check cache-hit path.  Previously, the double-check
+    path at line 450 returned the cached pipeline without a fresh scheduler,
+    meaning it could carry stale timestep state from a previous generation.
     """
     # M-37: Stable cache key based on checkpoint path, not id() which can alias after GC
     pipe_key = str(settings.default_checkpoint)
     with _pipeline_lock:
         if pipe_key in _img2img_cache:
             cached = _img2img_cache[pipe_key]
+            # New scheduler instance — never reuse stale timestep state
             cached.scheduler = type(pipe.scheduler).from_config(pipe.scheduler.config)
             return cached
 
+    # Fresh scheduler — not shared with the base txt2img pipeline
+    fresh_sched = type(pipe.scheduler).from_config(pipe.scheduler.config)
     img2img = StableDiffusionImg2ImgPipeline(
         vae=pipe.vae,
         text_encoder=pipe.text_encoder,
         tokenizer=pipe.tokenizer,
         unet=pipe.unet,
-        scheduler=type(pipe.scheduler).from_config(pipe.scheduler.config),
+        scheduler=fresh_sched,
         safety_checker=None,
         feature_extractor=None,
     )
@@ -430,7 +455,10 @@ def create_img2img_pipeline(
     with _pipeline_lock:
         # Double-check: another thread may have created it concurrently
         if pipe_key in _img2img_cache:
-            return _img2img_cache[pipe_key]
+            cached = _img2img_cache[pipe_key]
+            # Still need a fresh scheduler for the returned pipeline
+            cached.scheduler = type(pipe.scheduler).from_config(pipe.scheduler.config)
+            return cached
         _img2img_cache[pipe_key] = img2img
     return img2img
 

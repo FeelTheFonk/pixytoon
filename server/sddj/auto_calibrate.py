@@ -6,6 +6,9 @@ import numpy as np
 
 from .audio_analyzer import AudioAnalysis
 
+# Pre-allocated zero array — avoids fresh np.zeros(1) allocation per feature lookup
+_ZERO = np.zeros(1)
+
 
 def recommend_preset(analysis: AudioAnalysis) -> str:
     """Analyze audio features and return the best-fitting preset name.
@@ -14,30 +17,30 @@ def recommend_preset(analysis: AudioAnalysis) -> str:
     spectral centroid, low-band dominance, spectral contrast/flatness,
     chroma energy, and brilliance to pick the most expressive preset.
     """
-    rms = analysis.features.get("global_rms", np.zeros(1))
-    onset = analysis.features.get("global_onset", np.zeros(1))
-    centroid = analysis.features.get("global_centroid", np.zeros(1))
-    low = analysis.features.get("global_low", np.zeros(1))
-    beat = analysis.features.get("global_beat", np.zeros(1))
-    flatness = analysis.features.get("global_spectral_flatness", np.zeros(1))
-    contrast = analysis.features.get("global_spectral_contrast", np.zeros(1))
-    brilliance = analysis.features.get("global_brilliance", np.zeros(1))
-    flux = analysis.features.get("global_spectral_flux", np.zeros(1))
-    chroma = analysis.features.get("global_chroma_energy", np.zeros(1))
+    rms = analysis.features.get("global_rms", _ZERO)
+    onset = analysis.features.get("global_onset", _ZERO)
+    centroid = analysis.features.get("global_centroid", _ZERO)
+    low = analysis.features.get("global_low", _ZERO)
+    beat = analysis.features.get("global_beat", _ZERO)
+    flatness = analysis.features.get("global_spectral_flatness", _ZERO)
+    contrast = analysis.features.get("global_spectral_contrast", _ZERO)
+    brilliance = analysis.features.get("global_brilliance", _ZERO)
+    flux = analysis.features.get("global_spectral_flux", _ZERO)
+    chroma = analysis.features.get("global_chroma_energy", _ZERO)
 
-    avg_rms = float(np.mean(rms))
-    avg_onset = float(np.mean(onset))
-    avg_centroid = float(np.mean(centroid))
+    avg_rms = float(np.mean(rms)) if len(rms) > 0 else 0.0
+    avg_onset = float(np.mean(onset)) if len(onset) > 0 else 0.0
+    avg_centroid = float(np.mean(centroid)) if len(centroid) > 0 else 0.0
     peak_rms = float(np.max(rms)) if len(rms) > 0 else 0.0
-    rms_variance = float(np.var(rms))
+    rms_variance = float(np.var(rms)) if len(rms) > 0 else 0.0
     beat_density = float(np.sum(beat > 0.5)) / max(1, len(beat))
-    low_dominance = float(np.mean(low))
-    avg_flatness = float(np.mean(flatness))
-    avg_contrast = float(np.mean(contrast))
-    avg_brilliance = float(np.mean(brilliance))
-    avg_flux = float(np.mean(flux))
-    avg_chroma = float(np.mean(chroma))
-    contrast_var = float(np.var(contrast))
+    low_dominance = float(np.mean(low)) if len(low) > 0 else 0.0
+    avg_flatness = float(np.mean(flatness)) if len(flatness) > 0 else 0.0
+    avg_contrast = float(np.mean(contrast)) if len(contrast) > 0 else 0.0
+    avg_brilliance = float(np.mean(brilliance)) if len(brilliance) > 0 else 0.0
+    avg_flux = float(np.mean(flux)) if len(flux) > 0 else 0.0
+    avg_chroma = float(np.mean(chroma)) if len(chroma) > 0 else 0.0
+    contrast_var = float(np.var(contrast)) if len(contrast) > 0 else 0.0
     bpm = analysis.bpm
 
     # Very quiet / minimal dynamics -> ambient

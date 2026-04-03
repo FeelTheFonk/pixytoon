@@ -113,6 +113,12 @@ class SeedStrategy(str, Enum):
     RANDOM = "random"
 
 
+class IPAdapterMode(str, Enum):
+    FULL = "full"
+    STYLE = "style"
+    COMPOSITION = "composition"
+
+
 # ─────────────────────────────────────────────────────────────
 # REQUEST MODELS
 # ─────────────────────────────────────────────────────────────
@@ -293,7 +299,7 @@ class BaseGenerationParams(BaseModel):
     # ── IP-Adapter reference image ──
     ip_adapter_image: Optional[str] = None  # base64 reference image
     ip_adapter_scale: float = Field(0.0, ge=0.0, le=2.0)  # 0 = disabled
-    ip_adapter_mode: Optional[str] = None  # "full", "style", "composition"
+    ip_adapter_mode: Optional[IPAdapterMode] = None  # full, style, composition
 
 
 class GenerateRequest(BaseGenerationParams):
@@ -363,7 +369,7 @@ class Request(BaseModel):
     # IP-Adapter fields
     ip_adapter_image: Optional[str] = Field(None, max_length=50_000_000)
     ip_adapter_scale: Optional[float] = None
-    ip_adapter_mode: Optional[str] = None
+    ip_adapter_mode: Optional[IPAdapterMode] = None
     # Animation fields
     method: Optional[AnimationMethod] = None
     interpolation_factor: Optional[int] = None

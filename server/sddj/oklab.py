@@ -15,6 +15,7 @@ must be in [0, 1] range (not [0, 255]).
 from __future__ import annotations
 
 import numpy as np
+import numba
 
 # ── Forward transform matrices (sRGB linear → LMS → OKLAB) ──────
 
@@ -36,36 +37,41 @@ _M2_INV = np.linalg.inv(_M2.astype(np.float64)).astype(np.float32)
 _M1_INV = np.linalg.inv(_M1.astype(np.float64)).astype(np.float32)
 
 
-def _srgb_to_linear(srgb: np.ndarray) -> np.ndarray:
-    """sRGB gamma → linear RGB, vectorized float32.
+@numba.vectorize(['float32(float32)'], nopython=True, cache=True)
+def _srgb_to_linear(x):
+    """sRGB gamma → linear RGB, Numba ufunc (single-pass, no mask allocation).
 
     Applies the standard sRGB EOTF:
-      - linear = srgb / 12.92              where srgb <= 0.04045
-      - linear = ((srgb + 0.055) / 1.055) ^ 2.4   otherwise
+      - linear = x / 12.92              where x <= 0.04045
+      - linear = ((x + 0.055) / 1.055) ^ 2.4   otherwise
     """
-    out = np.empty_like(srgb, dtype=np.float32)
-    mask = srgb <= 0.04045
-    out[mask] = srgb[mask] / 12.92
-    inv_mask = ~mask
-    out[inv_mask] = np.power((srgb[inv_mask] + 0.055) / 1.055, 2.4, dtype=np.float32)
-    return out
+    if x <= 0.04045:
+        return x / 12.92
+    else:
+        return ((x + 0.055) / 1.055) ** 2.4
 
 
-def _linear_to_srgb(linear: np.ndarray) -> np.ndarray:
-    """Linear RGB → sRGB gamma, vectorized float32.
+@numba.vectorize(['float32(float32)'], nopython=True, cache=True)
+def _linear_to_srgb(x):
+    """Linear RGB → sRGB gamma, Numba ufunc (single-pass, no mask allocation).
 
-    Applies the standard sRGB OETF:
-      - srgb = linear * 12.92              where linear <= 0.0031308
-      - srgb = 1.055 * linear^(1/2.4) - 0.055   otherwise
+    Applies the standard sRGB OETF with fused clamp:
+      - srgb = x * 12.92              where x <= 0.0031308
+      - srgb = 1.055 * x^(1/2.4) - 0.055   otherwise
+    Output is clamped to [0, 1] (fused into the ufunc, no separate np.clip).
     """
-    out = np.empty_like(linear, dtype=np.float32)
-    mask = linear <= 0.0031308
-    out[mask] = linear[mask] * 12.92
-    inv_mask = ~mask
-    out[inv_mask] = 1.055 * np.power(
-        np.maximum(linear[inv_mask], 0.0), 1.0 / 2.4, dtype=np.float32
-    ) - 0.055
-    return out
+    if x <= 0.0031308:
+        return x * 12.92
+    else:
+        v = x if x > 0.0 else 0.0
+        r = 1.055 * (v ** (1.0 / 2.4)) - 0.055
+        # Fused clip: avoids separate np.clip allocation
+        if r < 0.0:
+            return 0.0
+        elif r > 1.0:
+            return 1.0
+        else:
+            return r
 
 
 def rgb_to_oklab(rgb: np.ndarray) -> np.ndarray:
@@ -94,7 +100,7 @@ def rgb_to_oklab(rgb: np.ndarray) -> np.ndarray:
     # LMS_ → OKLAB
     oklab = lms_ @ _M2.T
 
-    return oklab.reshape(shape).astype(np.float32)
+    return oklab.reshape(shape)
 
 
 def oklab_to_rgb(oklab: np.ndarray) -> np.ndarray:
@@ -120,7 +126,7 @@ def oklab_to_rgb(oklab: np.ndarray) -> np.ndarray:
     # LMS → linear RGB
     linear = lms @ _M1_INV.T
 
-    # Linear → sRGB gamma
-    srgb = _linear_to_srgb(np.clip(linear, 0.0, None))
+    # Linear → sRGB gamma (ufunc handles negative inputs and output clamp internally)
+    srgb = _linear_to_srgb(linear)
 
-    return np.clip(srgb, 0.0, 1.0).reshape(shape).astype(np.float32)
+    return srgb.reshape(shape)

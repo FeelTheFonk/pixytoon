@@ -34,7 +34,8 @@ class Settings(BaseSettings):
 
     # ── Hyper-SD (replaces LCM-LoRA — better color fidelity) ─
     hyper_sd_repo: str = "ByteDance/Hyper-SD"
-    hyper_sd_lora_file: str = "Hyper-SD15-8steps-CFG-lora.safetensors"
+    hyper_sd_steps: int = Field(8, ge=1, le=12)
+    hyper_sd_lora_file: str = ""  # Auto-derived from hyper_sd_steps if empty
     hyper_sd_fuse_scale: float = Field(0.8, ge=0.0, le=2.0)
 
     # ── DeepCache ────────────────────────────────────────────
@@ -105,6 +106,9 @@ class Settings(BaseSettings):
     qr_default_steps: int = Field(20, ge=4, le=50)
 
     # ── Timeouts ─────────────────────────────────────────────
+    # Server timeout (600s) fires 60s before Lua client timeout (660s) — intentional.
+    # This ensures the server returns a clean TIMEOUT error response instead of the
+    # client experiencing a raw WebSocket disconnect on timeout.
     generation_timeout: float = Field(600.0, gt=0.0)  # 10 minutes max per generation
 
     # ── IP-Adapter ───────────────────────────────────────────
@@ -206,6 +210,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode='after')
     def _warn_missing_dirs(self):
+        # Derive hyper_sd_lora_file from hyper_sd_steps when not explicitly set
+        if not self.hyper_sd_lora_file:
+            derived = f"Hyper-SD15-{self.hyper_sd_steps}steps-CFG-lora.safetensors"
+            object.__setattr__(self, 'hyper_sd_lora_file', derived)
         for name in ("models_dir", "checkpoints_dir", "loras_dir", "embeddings_dir", "palettes_dir", "presets_dir", "prompt_schedules_dir", "prompts_data_dir"):
             d = getattr(self, name)
             if not d.is_dir():
@@ -215,11 +223,14 @@ class Settings(BaseSettings):
         if not ckpt.is_absolute():
             ckpt = _SERVER_ROOT / ckpt
         if not ckpt.exists():
-            log.warning("CRITICAL: default_checkpoint not found: %s", ckpt)
+            log.critical("default_checkpoint not found: %s", ckpt)
         # Cross-validation: mutually exclusive / incompatible settings
         if self.enable_cpu_offload and self.enable_deepcache:
             log.warning("cpu_offload + deepcache are mutually exclusive — disabling DeepCache")
             object.__setattr__(self, 'enable_deepcache', False)
+        if self.enable_cpu_offload and self.enable_torch_compile:
+            log.warning("cpu_offload is incompatible with torch_compile — disabling torch_compile")
+            object.__setattr__(self, 'enable_torch_compile', False)
         if self.compile_dynamic and self.enable_deepcache:
             log.warning("compile_dynamic=True is incompatible with DeepCache — forcing compile_dynamic=False")
             object.__setattr__(self, 'compile_dynamic', False)
