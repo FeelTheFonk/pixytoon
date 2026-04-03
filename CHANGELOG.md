@@ -1,4 +1,16 @@
 # Changelog
+## [0.9.94] — 2026-04-03
+### CUDA 13.0 upgrade, SageAttention mandatory, startup crash fixes
+
+#### Fixed
+- **FATAL CRASH: NameError on startup** (`server.py:727`): `_handle_generate_audio_reactive` referenced directly in `_ACTION_DISPATCH` dict but defined after it — Python evaluates the name immediately, not at call time. Wrapped in lambda to defer resolution. Same latent bug fixed for `_handle_shutdown` (L.729, defined L.889).
+- **Missing `prompt_schedules/` directory** (`config.py`): `prompt_schedules_dir` path validated at startup but directory never created by setup. Added to scaffold.
+
+#### Changed
+- **PyTorch CUDA 12.8 → 13.0** (`pyproject.toml`): `extra-index-url` switched from `cu128` to `cu130`. Resolves `torch 2.11.0+cu130` (was `2.10.0+cu128`). Enables SageAttention 2.2.0 wheel compatibility.
+- **SageAttention now required** (`setup.ps1`): Step 4 changed from optional (warn + SDP fallback) to mandatory (fail on missing wheel). Ensures `sageattn2` kernel is always available for attention acceleration.
+- **Test assertion fix** (`test_prompt_generator.py`): `test_zero_uses_standard_selection` falsely rejected entries with natural commas (lighting, subject data). Assertion relaxed to validate non-empty string per category.
+
 ## [0.9.93] — 2026-04-03
 ### Full-Stack Pinnacle Audit: 120+ Findings Implemented — Zero Omission Performance & Correctness Overhaul
 

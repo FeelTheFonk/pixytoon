@@ -69,8 +69,8 @@ if (-not (Test-Path $VenvPython)) {
 }
 Ok "Virtual environment valid"
 
-# --- 4. SageAttention (optional, pre-built wheel) ---
-Step 4 9 "SageAttention (optional)"
+# --- 4. SageAttention (pre-built wheel, required for attention acceleration) ---
+Step 4 9 "SageAttention"
 try {
     # Detect Python ABI tag (e.g. cp311)
     $pyTag = (& $VenvPython -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')" 2>$null).Trim()
@@ -141,7 +141,7 @@ print(f'{cu} {base}')
     if ($LASTEXITCODE -ne 0) { throw "Wheel install failed — run the command above manually for details" }
     Ok "SageAttention $(($wheel.Name -split '-')[1]) ($cuTag, torch $torchVer)"
 } catch {
-    Warn "SageAttention skipped — SDP fallback ($($_.Exception.Message))"
+    Fail "SageAttention required — $($_.Exception.Message)"
 }
 
 # --- 5. Download models ---

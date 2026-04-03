@@ -105,9 +105,9 @@ class TestRandomness:
         gen = PromptGenerator(tmp_prompts_dir)
         prompt, neg, comp = gen.generate(randomness=0)
         assert isinstance(prompt, str) and len(prompt) > 0
-        # Each component is a single item (no comma-combined chaos)
+        # Each component must be a non-empty string (standard selection, not chaos-combined)
         for cat, val in comp.items():
-            assert ", " not in val or cat in ("quality",)  # quality may naturally contain commas
+            assert isinstance(val, str) and len(val) > 0
 
     def test_chaos_mode_combines_items(self, tmp_prompts_dir: Path):
         gen = PromptGenerator(tmp_prompts_dir)

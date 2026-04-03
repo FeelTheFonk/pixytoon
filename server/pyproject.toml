@@ -1,6 +1,6 @@
 [project]
 name = "sddj-server"
-version = "0.9.93"
+version = "0.9.94"
 description = "Local SOTA generation and animation server for Aseprite via Stable Diffusion"
 requires-python = ">=3.11,<3.14"
 license = "MIT"
@@ -67,9 +67,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["sddj"]
 
-# ── uv: force PyTorch CUDA 12.8 builds ──────────────────────
+# ── uv: force PyTorch CUDA 12.8+ builds ─────────────────────
 [tool.uv]
-extra-index-url = ["https://download.pytorch.org/whl/cu128"]
+extra-index-url = ["https://download.pytorch.org/whl/cu130"]
 
 # ── pytest ───────────────────────────────────────────────────
 [tool.pytest.ini_options]
