@@ -1,79 +1,53 @@
 ## Development Setup
 
-SDDj uses `uv` for lightning-fast Python dependency management and builds.
-
-1. **Clone the repository**
-   ```powershell
-   git clone https://github.com/FeelTheFonk/sddj.git
-   cd sddj
-   ```
-2. **Install dependencies**
-   ```powershell
-   cd server
-   uv sync --all-extras
-   ```
-3. **Run the server in dev mode**
-   ```powershell
-   uv run python run.py
-   ```
+```powershell
+git clone https://github.com/FeelTheFonk/sddj.git
+cd sddj/server
+uv sync --all-extras   # all deps including demucs, sageattention, etc.
+uv run python run.py   # dev server on ws://localhost:9999
+```
 
 ## Repository Structure
 
-SDDj is split into two halves that communicate over WebSockets:
+| Directory | Stack | Role |
+|-----------|-------|------|
+| `server/` | Python (PyTorch, Diffusers, Librosa) | Generation engine, WebSocket API |
+| `extension/` | Lua (Aseprite scripting API) | UI, image capture, canvas injection |
+| `docs/` | Markdown | User guide, API reference, DSL spec, sources |
+| `scripts/` | PowerShell/Python | Model download, extension build, integration tests |
 
-* `server/` — Python backend (FastAPI, PyTorch, Diffusers, Librosa). Does the heavy lifting.
-* `extension/` — Lua frontend (Aseprite scripting API). Handles the UI, image extraction, and canvas injection.
-* `docs/` — Documentation suite (user guide, audio reference, API reference, DSL spec, recipes, sources).
-* `scripts/` — Utility scripts (model download, extension build, integration tests).
-* `bin/` — Bundled binaries (Aseprite launcher).
+Architecture: [docs/REFERENCE.md](docs/REFERENCE.md#architecture)
 
-Detailed architecture diagrams are available in **[docs/REFERENCE.md](docs/REFERENCE.md#architecture)**.
+## Code Style
 
-## Python Code Style
-
-We use [Ruff](https://astral.sh/ruff) for linting and formatting. 
-
-* **Line length**: 100 characters.
-* **Typing**: Strict type hints required for all new code. Use `from __future__ import annotations`.
-* **Docstrings**: Google style docstrings for classes and public functions.
-* **Imports**: Grouped and sorted by Ruff.
-
-Run Ruff before committing:
+### Python
+- **Ruff** for lint + format. Line length: 100. Strict type hints (`from __future__ import annotations`).
+- Google-style docstrings for classes and public functions.
 ```powershell
-uv run ruff check .
-uv run ruff format .
+uv run ruff check . && uv run ruff format .
 ```
 
-## Lua Code Style
-
-The Aseprite extension is written in standard Lua 5.3.
-
-* **Modularity**: Code is split across `sddj_*.lua` files (dialog, state, network, utils, DSL editor/parser, settings, capture). Do not put everything in `sddj.lua`.
-* **State Management**: UI state is centralized in `sddj_state.lua` to ensure the dialog can be closed and reopened safely.
-* **Error Handling**: Use `pcall` when interacting with Aseprite's API if there's a risk of the user having closed the sprite/layer mid-generation.
+### Lua (Aseprite Extension)
+- Code split across `sddj_*.lua` modules — do not merge into `sddj.lua`.
+- UI state centralized in `sddj_state.lua`. Use `pcall` for Aseprite API calls that may fail mid-generation.
 
 ## Testing
 
-New features or bug fixes in the Python server must include `pytest` tests.
-
 ```powershell
-cd server
-uv run pytest -v
+cd server && uv run pytest -v
 ```
 
-* **Core Logic**: Test prompt generation, metadata parsing, file routing, and DSP (audio) math heavily.
-* **Integration**: `scripts/test_generate.py` runs end-to-end diffusion pipeline tests. We mock network calls but run the actual PyTorch operations.
+New features/fixes require `pytest` tests. `scripts/test_generate.py` runs end-to-end pipeline tests.
 
 ## Pull Request Process
 
-1. **Branch**: Create a feature branch (`feat/your-feature` or `fix/your-bug`).
-2. **Code**: Write your code. Keep commits logical.
-3. **Docs**: If you add a user-facing feature, update the relevant `docs/*.md` files. **This project prides itself on SOTA documentation.**
-4. **Test**: Ensure `pytest` passes and `ruff` reports zero warnings.
-5. **PR**: Submit a Pull Request describing the problem solved and the approach taken.
+1. Branch: `feat/your-feature` or `fix/your-bug`
+2. Code + tests + docs (if user-facing)
+3. `pytest` passes, `ruff` zero warnings
+4. PR with problem description + approach
 
 ## Architecture Philosophy
 
-- **Offline by default**: No runtime downloads. `download_models.py` fetches everything upfront.
-- **SOTA Performance**: Always favor `torch.compile`, VAE slicing, DeepCache, and distilled models over slower native equivalents if quality is preserved.
-- **Resilience**: The server must never crash Aseprite. WebSockets must auto-reconnect. Generations must timeout if abandoned.
+- **Offline by default** — no runtime downloads, `download_models.py` fetches everything upfront
+- **SOTA Performance** — torch.compile, DeepCache, distilled models over slower alternatives
+- **Resilience** — server never crashes Aseprite, WebSockets auto-reconnect, generations timeout

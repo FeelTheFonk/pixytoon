@@ -1084,7 +1084,7 @@ async def _handle_randomize_schedule(websocket: WebSocket, req: Request) -> None
     profile = req.schedule_profile or "dynamic"
     total_frames = max(1, req.total_frames or 100)
     fps_val = max(1.0, req.fps or 24.0)
-    rand_level = req.randomness
+    rand_level = req.randomness or 0
     locked = req.locked_fields or {}
     base = req.prompt or ""
 

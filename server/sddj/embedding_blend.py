@@ -18,7 +18,7 @@ log = logging.getLogger("sddj.embedding_blend")
 class _EmbeddingCache:
     """LRU cache for CLIP prompt embeddings. Eliminates redundant tokenization+encoding."""
 
-    def __init__(self, maxsize: int = 256):
+    def __init__(self, maxsize: int = 1024):
         self._cache: OrderedDict[tuple, tuple[torch.Tensor, torch.Tensor]] = OrderedDict()
         self._maxsize = maxsize
 
@@ -61,8 +61,10 @@ def slerp(
 ) -> torch.Tensor:
     """Spherical linear interpolation between two embedding tensors.
 
-    More geometrically correct than LERP for unit-sphere-normalized embeddings
-    (CLIP text embeddings lie approximately on a hypersphere).
+    Per-token SLERP: normalizes and interpolates along the embedding dimension
+    (last axis) independently for each token position. This preserves the
+    sequential structure of CLIP embeddings [batch, seq_len, dim] instead of
+    collapsing the entire tensor into a single vector.
 
     Args:
         embed_a: First embedding tensor [batch, seq_len, dim]
@@ -78,41 +80,44 @@ def slerp(
     if t >= 1.0:
         return embed_b
 
-    # Flatten for dot product computation, then restore shape
-    orig_shape = embed_a.shape
-    flat_a = embed_a.contiguous().view(-1).float()
-    flat_b = embed_b.contiguous().view(-1).float()
+    orig_dtype = embed_a.dtype
+    a = embed_a.float()
+    b = embed_b.float()
 
-    # Normalize
-    norm_a = torch.linalg.norm(flat_a)
-    norm_b = torch.linalg.norm(flat_b)
-    if norm_a < _NORM_EPSILON or norm_b < _NORM_EPSILON:
-        # Degenerate: fall back to LERP
+    # Per-token normalization along embedding dim (last axis)
+    norm_a = torch.linalg.norm(a, dim=-1, keepdim=True)
+    norm_b = torch.linalg.norm(b, dim=-1, keepdim=True)
+
+    # Degenerate check: if any token has near-zero norm, fall back to LERP
+    if (norm_a < _NORM_EPSILON).any() or (norm_b < _NORM_EPSILON).any():
         return lerp(embed_a, embed_b, t)
 
-    unit_a = flat_a / norm_a
-    unit_b = flat_b / norm_b
+    unit_a = a / norm_a
+    unit_b = b / norm_b
 
-    # Compute angle — pure tensor ops, no CUDA→CPU sync
-    cos_omega = torch.clamp(torch.dot(unit_a, unit_b), -1.0, 1.0)
+    # Per-token cosine similarity (dot product along last dim)
+    cos_omega = torch.sum(unit_a * unit_b, dim=-1, keepdim=True).clamp(-1.0, 1.0)
 
-    # If embeddings are nearly identical, use LERP to avoid division by zero
-    if torch.abs(cos_omega) > _COLLINEAR_THRESHOLD:
-        return lerp(embed_a, embed_b, t)
+    # Where tokens are nearly collinear, use LERP; elsewhere use SLERP
+    is_collinear = torch.abs(cos_omega) > _COLLINEAR_THRESHOLD
 
     omega = torch.acos(cos_omega)
     sin_omega = torch.sin(omega)
+    # Avoid division by zero for collinear tokens
+    safe_sin = torch.where(is_collinear, torch.ones_like(sin_omega), sin_omega)
 
-    # SLERP formula
-    coeff_a = torch.sin((1.0 - t) * omega) / sin_omega
-    coeff_b = torch.sin(t * omega) / sin_omega
+    coeff_a = torch.sin((1.0 - t) * omega) / safe_sin
+    coeff_b = torch.sin(t * omega) / safe_sin
 
-    # Interpolate with magnitude preservation
+    # Per-token magnitude preservation
     avg_norm = norm_a * (1.0 - t) + norm_b * t
-    result_flat = coeff_a * unit_a + coeff_b * unit_b
-    result_flat = result_flat * avg_norm
+    slerp_result = (coeff_a * unit_a + coeff_b * unit_b) * avg_norm
 
-    return result_flat.view(orig_shape).to(embed_a.dtype)
+    # Blend: LERP for collinear tokens, SLERP for the rest
+    lerp_result = a * (1.0 - t) + b * t
+    result = torch.where(is_collinear, lerp_result, slerp_result)
+
+    return result.to(orig_dtype)
 
 
 def lerp(

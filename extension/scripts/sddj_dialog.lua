@@ -65,6 +65,23 @@ local MOD_TARGETS = {
   "motion_tilt_x", "motion_tilt_y",
 }
 
+-- Format strings for mod slot label display (ranges from PT.PARAM_DEFS)
+local MOD_TARGET_FMT = {
+  denoise_strength = "%.2f",
+  cfg_scale        = "%.1f",
+  noise_amplitude  = "%.2f",
+  controlnet_scale = "%.2f",
+  seed_offset      = "%.0f",
+  palette_shift    = "%.2f",
+  frame_cadence    = "%.1f",
+  motion_x         = "%.1f",
+  motion_y         = "%.1f",
+  motion_zoom      = "%.3f",
+  motion_rotation  = "%.1f",
+  motion_tilt_x    = "%.1f",
+  motion_tilt_y    = "%.1f",
+}
+
 local EXPR_FIELDS = {
   { "expr_denoise",       "denoise" },
   { "expr_cfg",           "cfg_scale" },
@@ -112,15 +129,26 @@ function PT.sync_ui_conditional_states()
   local dlg = PT.dlg
   local d = dlg.data
 
-  -- Mode label hint
+  -- Mode label hint with live sprite/layer validation
   local m = d.mode
   if m then
+    local spr = app.sprite
+    local has_sprite = (spr ~= nil)
+    local has_layer = has_sprite and (app.cel ~= nil and app.cel.image ~= nil)
     if m == "inpaint" then
-      pcall(dlg.modify, dlg, { id = "mode", label = "Mode (needs mask)" })
+      if not has_sprite then
+        pcall(dlg.modify, dlg, { id = "mode", label = "Mode [!no sprite]" })
+      else
+        pcall(dlg.modify, dlg, { id = "mode", label = "Mode (needs mask)" })
+      end
     elseif m == "controlnet_qrcode" then
       pcall(dlg.modify, dlg, { id = "mode", label = "Mode (QR)" })
     elseif m == "img2img" or m:find("controlnet_") then
-      pcall(dlg.modify, dlg, { id = "mode", label = "Mode (needs layer)" })
+      if not has_layer then
+        pcall(dlg.modify, dlg, { id = "mode", label = "Mode [!no layer]" })
+      else
+        pcall(dlg.modify, dlg, { id = "mode", label = "Mode (source ready)" })
+      end
     else
       pcall(dlg.modify, dlg, { id = "mode", label = "Mode" })
     end
@@ -168,10 +196,24 @@ function PT.sync_ui_conditional_states()
     end
   end
 
+  -- ControlNet mode detection (shared)
+  local is_cn_mode = d.mode and (d.mode:find("controlnet_") ~= nil)
+  local is_non_qr_cn = is_cn_mode and d.mode ~= "controlnet_qrcode"
+
+  -- Generate tab: ControlNet guidance + guidance_rescale (visible in CN modes, not QR)
+  pcall(dlg.modify, dlg, { id = "gen_guidance_start", visible = is_non_qr_cn })
+  pcall(dlg.modify, dlg, { id = "gen_guidance_end", visible = is_non_qr_cn })
+  pcall(dlg.modify, dlg, { id = "guidance_rescale", visible = is_non_qr_cn })
+
+  -- IP-Adapter: mode + scale + hint only visible when checkbox is enabled
+  local ip_en = (d.ip_adapter_enabled == true)
+  pcall(dlg.modify, dlg, { id = "ip_adapter_mode", visible = ip_en })
+  pcall(dlg.modify, dlg, { id = "ip_adapter_scale", visible = ip_en })
+  pcall(dlg.modify, dlg, { id = "ip_adapter_hint", visible = ip_en })
+
   -- Animation guidance sliders visible only in ControlNet modes
-  local anim_cn = d.mode and (d.mode:find("controlnet_") ~= nil)
-  pcall(dlg.modify, dlg, { id = "anim_guidance_start", visible = anim_cn })
-  pcall(dlg.modify, dlg, { id = "anim_guidance_end", visible = anim_cn })
+  pcall(dlg.modify, dlg, { id = "anim_guidance_start", visible = is_cn_mode })
+  pcall(dlg.modify, dlg, { id = "anim_guidance_end", visible = is_cn_mode })
 
   -- Modulation slots (full visibility toggle including slider widgets)
   local count = d.mod_slot_count or 2
@@ -190,6 +232,9 @@ function PT.sync_ui_conditional_states()
     pcall(dlg.modify, dlg, { id = "audio_max_frames",
       label = d.audio_max_frames == 0 and "Max Frames (0=all)" or ("Max Frames (" .. d.audio_max_frames .. ")") })
   end
+
+  -- Modulation slot min/max real-value labels
+  if PT.sync_all_mod_labels then PT.sync_all_mod_labels() end
 
   end)
   PT._ui_transaction_depth = PT._ui_transaction_depth - 1
@@ -426,6 +471,11 @@ local function build_tab_generate()
     min = 0, max = 200, value = 60,
     onchange = onchange_sync("ip_adapter_scale"),
   }
+  dlg:label{
+    id = "ip_adapter_hint",
+    text = "First use loads IP-Adapter (~2GB VRAM)",
+    visible = false,
+  }
 
   dlg:entry{
     id = "prompt",
@@ -600,6 +650,29 @@ local function build_tab_generate()
     label = "CLIP Skip (2)",
     min = 1, max = 12, value = 2,
     onchange = onchange_sync("clip_skip"),
+  }
+
+  -- ── Advanced ControlNet Guidance (visible only in controlnet_* modes) ──
+  dlg:slider{
+    id = "gen_guidance_start",
+    label = "CN Start (0%)",
+    min = 0, max = 100, value = 0,
+    visible = false,
+    onchange = onchange_sync("gen_guidance_start"),
+  }
+  dlg:slider{
+    id = "gen_guidance_end",
+    label = "CN End (100%)",
+    min = 0, max = 100, value = 100,
+    visible = false,
+    onchange = onchange_sync("gen_guidance_end"),
+  }
+  dlg:slider{
+    id = "guidance_rescale",
+    label = "Rescale (0.00)",
+    min = 0, max = 100, value = 0,
+    visible = false,
+    onchange = onchange_sync("guidance_rescale"),
   }
 end
 
@@ -1147,6 +1220,32 @@ local function build_tab_audio()
     text = "Increase slot count to add more audio mappings",
   }
 
+  -- Sync mod slot min/max labels to show real-value range based on target
+  local function sync_mod_slot_labels(slot)
+    local d = dlg.data
+    local p = "mod" .. slot .. "_"
+    local target = d[p .. "target"]
+    local def = target and PT.PARAM_DEFS[target]
+    local fmt = target and MOD_TARGET_FMT[target]
+    if def and fmt then
+      local lo, hi = def[1], def[2]
+      local min_pct = (d[p .. "min"] or 0) / 100.0
+      local max_pct = (d[p .. "max"] or 100) / 100.0
+      local min_val = lo + (hi - lo) * min_pct
+      local max_val = lo + (hi - lo) * max_pct
+      pcall(dlg.modify, dlg, { id = p .. "min", label = "Min (" .. string.format(fmt, min_val) .. ")" })
+      pcall(dlg.modify, dlg, { id = p .. "max", label = "Max (" .. string.format(fmt, max_val) .. ")" })
+    else
+      pcall(dlg.modify, dlg, { id = p .. "min", label = "Min (%)" })
+      pcall(dlg.modify, dlg, { id = p .. "max", label = "Max (%)" })
+    end
+  end
+
+  -- Sync all mod slot labels (called from sync_ui_conditional_states)
+  function PT.sync_all_mod_labels()
+    for i = 1, 6 do sync_mod_slot_labels(i) end
+  end
+
   -- Auto-switch to (custom) when any mod slot field is changed by the user
   local function mod_slot_changed()
     if PT.audio and PT.audio._hydrating_preset then return end
@@ -1154,6 +1253,8 @@ local function build_tab_audio()
     if cur and cur ~= "(custom)" then
       dlg:modify{ id = "audio_mod_preset", option = "(custom)" }
     end
+    -- Update real-value labels for all visible slots
+    for i = 1, 6 do sync_mod_slot_labels(i) end
   end
 
   for i, def in ipairs(SLOT_DEFAULTS) do

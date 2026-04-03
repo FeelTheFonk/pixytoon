@@ -25,7 +25,7 @@ log = logging.getLogger("sddj.prompt_generator")
 # ─────────────────────────────────────────────────────────────
 
 CLIP_TOKEN_BUDGET = 65  # soft cap (of 75 usable CLIP tokens)
-TOKEN_MULTIPLIER = 1.3  # word → CLIP token estimate
+TOKEN_MULTIPLIER = 1.5  # word → CLIP token estimate (raised for technical pixel art vocabulary)
 
 # Categories dropped first when over budget (lowest priority last)
 DROP_ORDER = [

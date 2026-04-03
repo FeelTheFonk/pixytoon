@@ -747,7 +747,8 @@ class ModulationEngine:
                 expr_variables["t"] = float(frame_idx)
                 expr_variables["s"] = frame_idx / analysis.fps
                 for feat_name, feat_arr in analysis.features.items():
-                    expr_variables[feat_name] = float(feat_arr[frame_idx])
+                    idx = min(frame_idx, len(feat_arr) - 1) if len(feat_arr) > 0 else 0
+                    expr_variables[feat_name] = float(feat_arr[idx]) if len(feat_arr) > 0 else 0.0
 
                 for target, expr in expressions.items():
                     if target not in TARGET_RANGES:

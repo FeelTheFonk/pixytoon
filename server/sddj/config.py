@@ -95,8 +95,8 @@ class Settings(BaseSettings):
     enable_freeu: bool = True
     freeu_s1: float = Field(0.9, ge=0.0, le=2.0)
     freeu_s2: float = Field(0.2, ge=0.0, le=2.0)
-    freeu_b1: float = Field(1.5, ge=0.0, le=3.0)
-    freeu_b2: float = Field(1.6, ge=0.0, le=3.0)
+    freeu_b1: float = Field(1.2, ge=0.0, le=3.0)  # Reduced from 1.5 for pixel art (less HF noise in skip connections)
+    freeu_b2: float = Field(1.4, ge=0.0, le=3.0)  # Reduced from 1.6 for flat-color pixel art aesthetics
 
     # ── ControlNet QR Code Monster ───────────────────────────
     qr_controlnet_conditioning_scale: float = Field(1.5, ge=0.0, le=3.0)

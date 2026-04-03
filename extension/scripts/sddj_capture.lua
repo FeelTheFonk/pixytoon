@@ -14,8 +14,7 @@ function PT.capture_active_layer()
   end
   local large_source = (spr.width > 2048 or spr.height > 2048)
   if large_source then
-    -- Large source: warn user about resize
-    PT.update_status("Source image resized to fit 2048x2048 max")
+    PT.update_status("Large source — server will resize to fit 2048x2048")
   end
   local cel = app.cel
   if cel == nil or cel.image == nil then return nil end

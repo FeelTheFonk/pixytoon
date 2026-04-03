@@ -917,21 +917,25 @@ class DiffusionEngine(AnimationMixin, AudioReactiveMixin):
         else:
             call_kwargs["image"] = control
 
-        # QR-specific: inject conditioning params + step override
+        # ControlNet conditioning params (all CN modes)
+        cgs = getattr(req, 'control_guidance_start', 0.0)
+        cge = getattr(req, 'control_guidance_end', 1.0)
+        if cgs > 0.0:
+            call_kwargs["control_guidance_start"] = cgs
+        if cge < 1.0:
+            call_kwargs["control_guidance_end"] = cge
+        # QR-specific: conditioning scale + step override
         if req.mode == GenerationMode.CONTROLNET_QRCODE:
             cn_scale = getattr(
                 req, 'controlnet_conditioning_scale',
                 settings.qr_controlnet_conditioning_scale,
             )
             call_kwargs["controlnet_conditioning_scale"] = cn_scale
-            call_kwargs["control_guidance_start"] = getattr(
-                req, 'control_guidance_start',
-                settings.qr_control_guidance_start,
-            )
-            call_kwargs["control_guidance_end"] = getattr(
-                req, 'control_guidance_end',
-                settings.qr_control_guidance_end,
-            )
+            # QR defaults from config (override generic guidance if not set)
+            if cgs <= 0.0:
+                call_kwargs["control_guidance_start"] = settings.qr_control_guidance_start
+            if cge >= 1.0:
+                call_kwargs["control_guidance_end"] = settings.qr_control_guidance_end
             # Override steps if too low for ControlNet quality
             if req.steps <= 8:
                 call_kwargs["num_inference_steps"] = settings.qr_default_steps

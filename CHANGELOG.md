@@ -1,4 +1,40 @@
 # Changelog
+## [0.9.90] — 2026-04-03
+### Pre-Release Audit: Critical Fixes, UI Polish & Documentation Refonte
+
+#### Critical Bug Fixes
+- **Undefined variable crash** (`sddj_request.lua`): `build_generate_request()` referenced undeclared `d` — replaced with `PT.dlg.data.xxx` throughout.
+- **OOB IndexError** (`modulation_engine.py`): `feat_arr[frame_idx]` crashed when frame index exceeded feature array length. Fixed with bounds clamping + empty array guard.
+- **Type violation in params dict** (`modulation_engine.py`): Expression warning strings injected into `dict[str, float]` broke downstream `sum()`. Removed injection entirely.
+- **Lua closure scoping** (`sddj_handler.lua`): `_frame_dirty` / `_refresh_timer` declared at line 1122, invisible to closures defined at line 212. Moved to module top.
+
+#### Backend Fixes
+- **ControlNet guidance for all modes** (`core.py`, `animation.py`, `protocol.py`): `control_guidance_start/end` now applies to all ControlNet modes (was QR-only). Added to `AnimationRequest`, removed from `_EXCLUDE_ANIMATION`.
+- **SLERP per-token normalization** (`embedding_blend.py`): Rewritten to normalize per-token (dim=-1) instead of per-batch. Cache increased to 1024.
+- **Negative prompt blend** (`prompt_schedule.py`): Fixed edge case where empty outgoing negative prevented SLERP interpolation.
+- **Randomness None guard** (`server.py`): `req.randomness or 0` prevents TypeError on optional field.
+- **FreeU pixel art tuning** (`config.py`): Defaults changed to b1=1.2, b2=1.4 (from 1.1/1.2) for sharper pixel art edges.
+- **Dead code removal** (`helpers.py`): Removed unreachable `isinstance(kf_dicts, dict)` guard.
+- **Stale docstring** (`audio_analyzer.py`): "256 mel bands" corrected to 128.
+
+#### UI Improvements (Aseprite Extension)
+- **Guidance rescale slider** (`sddj_dialog.lua`): New 0-100 slider for CFG oversaturation control.
+- **CN guidance start/end sliders** (`sddj_dialog.lua`): ControlNet guidance window for non-QR modes.
+- **Mod slot real-value labels** (`sddj_dialog.lua`): Labels show actual param range from `PARAM_DEFS` (single source of truth).
+- **Mode validation labels** (`sddj_dialog.lua`): Shows `[!no sprite]` or `[!no layer]` when prerequisites missing.
+- **IP-Adapter VRAM hint** (`sddj_dialog.lua`): "First use loads IP-Adapter (~2GB VRAM)".
+- **PARAM_DEFS alignment** (`sddj_utils.lua`): `denoise_strength` 0.20–0.95, `cfg_scale` 1.0–30.0 (matches server `TARGET_RANGES`).
+- **Source image feedback** (`sddj_capture.lua`): Clearer message when sprite exceeds 2048×2048.
+- **Settings persistence** (`sddj_settings.lua`): 3 new fields persisted.
+
+#### Documentation Refonte (–47% total lines)
+- **GUIDE.md**: Merged AUDIO.md + RECIPES.md content. 1131→446 lines. Zero duplication.
+- **REFERENCE.md**: API-only rewrite. 657→414 lines. Architecture diagram, WebSocket schemas, env vars.
+- **SOURCES.md**: 1-sentence summaries per entry. 174→106 lines. Added SageAttention2, IP-Adapter, RIFE, PAG, OKLAB.
+- **README.md**: Pitch-first rewrite. 71→37 lines.
+- **CONTRIBUTING.md**: Compact tables. 79→53 lines.
+- **Deleted**: `docs/AUDIO.md`, `docs/RECIPES.md` (content merged into GUIDE).
+
 ## [0.9.89] — 2026-04
 ### RC Perfection Audit — Full UI/Backend Alignment & Quality Features
 

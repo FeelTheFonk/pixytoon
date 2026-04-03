@@ -405,6 +405,15 @@ function PT.build_generate_request()
   PT.attach_neg_ti(req)
   PT.attach_scheduler(req)
   PT.attach_ip_adapter(req)
+  -- Guidance rescale (CFG overshoot correction)
+  local gr = clamp((PT.dlg.data.guidance_rescale or 0) / 100.0, 0, 1)
+  if gr > 0 then req.guidance_rescale = gr end
+  -- ControlNet guidance window (non-QR modes only)
+  local mode = PT.dlg.data.mode
+  if mode and mode:find("controlnet_") and mode ~= "controlnet_qrcode" then
+    req.control_guidance_start = clamp((PT.dlg.data.gen_guidance_start or 0) / 100.0, 0, 1)
+    req.control_guidance_end   = clamp((PT.dlg.data.gen_guidance_end or 100) / 100.0, 0, 1)
+  end
   PT.last_request = PT.shallow_copy_request(req)
   return req
 end

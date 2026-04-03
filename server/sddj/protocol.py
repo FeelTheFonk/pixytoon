@@ -227,7 +227,7 @@ _EXCLUDE_ANIMATION = frozenset({
     "modulation_slots", "expressions", "modulation_preset",
     "preset_name", "preset_data", "palette_save_name", "palette_save_colors",
     "max_frames", "output_dir", "scale_factor", "quality",
-    "controlnet_conditioning_scale", "control_guidance_start", "control_guidance_end",
+    "controlnet_conditioning_scale",
     "prompt_schedule_name", "prompt_schedule_data",
 })
 
@@ -248,7 +248,9 @@ _DEFAULT_NEGATIVE = (
     "low quality, worst quality, bad quality, jpeg artifacts, watermark, text, logo, "
     "deformed, disfigured, bad anatomy, bad proportions, extra limbs, missing limbs, "
     "extra fingers, fused fingers, poorly drawn hands, poorly drawn face, ugly, "
-    "realistic, photo, high resolution, complex shading"
+    "realistic, photo, high resolution, complex shading, "
+    "noise, grain, color banding, smooth color transitions, sub-pixel rendering, "
+    "misaligned pixel grid, half-pixel offset, dithering artifacts"
 )
 
 
@@ -313,8 +315,8 @@ class AnimationRequest(BaseGenerationParams):
     action: Action = Action.GENERATE_ANIMATION
     method: AnimationMethod = AnimationMethod.CHAIN
     # Animation-specific
-    # Lua client clamps to 1..1000, server cap at 256 per config.max_animation_frames
-    frame_count: int = Field(8, ge=2, le=256)
+    # Lua client clamps to 1..1000, server enforces config.max_animation_frames
+    frame_count: int = Field(8, ge=2, le=10000)
     frame_duration_ms: int = Field(100, ge=30, le=2000)
     seed_strategy: SeedStrategy = SeedStrategy.INCREMENT
     tag_name: Optional[str] = Field(None, max_length=64)
@@ -323,6 +325,9 @@ class AnimationRequest(BaseGenerationParams):
     freeinit_iterations: int = Field(2, ge=1, le=3)
     # ── Frame interpolation (RIFE or blend fallback) ──
     interpolation_factor: Optional[int] = Field(None, ge=2, le=4)  # None = disabled
+    # ── ControlNet guidance window (chain animation) ──
+    control_guidance_start: float = Field(0.0, ge=0.0, le=1.0)
+    control_guidance_end: float = Field(1.0, ge=0.0, le=1.0)
     # ── Prompt scheduling ──
     prompt_schedule: Optional[PromptScheduleSpec] = None
 

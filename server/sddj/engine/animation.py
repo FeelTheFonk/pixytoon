@@ -71,7 +71,10 @@ def _interpolate_frames(frames: list, factor: int) -> list:
         interpolated.append(frames[-1])
         return interpolated
     except ImportError:
-        log.warning("RIFE not available — using simple blend interpolation")
+        log.warning(
+            "RIFE not available — using simple alpha blend (poor quality). "
+            "Install rife-ncnn-vulkan-python for proper frame interpolation."
+        )
         # Simple alpha blend fallback
         interpolated = []
         for i in range(len(frames) - 1):
@@ -358,6 +361,12 @@ class AnimationMixin:
                             callback_on_step_end=step_callback,
                             output_type="pil",
                         )
+                        cgs = getattr(req, 'control_guidance_start', 0.0)
+                        cge = getattr(req, 'control_guidance_end', 1.0)
+                        if cgs > 0.0:
+                            cn_f0_kwargs["control_guidance_start"] = cgs
+                        if cge < 1.0:
+                            cn_f0_kwargs["control_guidance_end"] = cge
                         inject_prompt_kwargs(cn_f0_kwargs, blend_embeds, frame_prompt, frame_neg)
                         image = self._controlnet_pipe(**cn_f0_kwargs).images[0]
                     else:

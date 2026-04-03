@@ -380,7 +380,11 @@ def apply_vae_compile(pipe: StableDiffusionPipeline) -> None:
     try:
         pipe.vae.decode = torch.compile(pipe.vae.decode, mode=mode, fullgraph=True)
         log.info("torch.compile enabled for VAE decode (mode=%s)", mode)
-    except Exception:
+    except Exception as e_full:
+        log.warning(
+            "VAE compile fullgraph=True failed (%s) — this is unexpected for standard SD1.5 VAE. "
+            "Falling back to fullgraph=False. Investigate if using a custom VAE.", e_full,
+        )
         try:
             pipe.vae.decode = torch.compile(pipe.vae.decode, mode=mode, fullgraph=False)
             log.info("torch.compile enabled for VAE decode (mode=%s, fullgraph=False fallback)", mode)

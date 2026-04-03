@@ -6,6 +6,10 @@ return function(PT)
 
 local handlers = {}
 
+-- Forward-declare refresh timer state so all closures see the module local
+local _frame_dirty = false
+local _refresh_timer = nil
+
 -- ─── Helper: Reset Animation State ────────────────────────
 local function reset_anim_state()
   PT.anim.layer = nil
@@ -1117,9 +1121,6 @@ end
 -- Instead, a ~30fps timer repaints the canvas independently.
 -- This yields to the event loop between repaints, so each frame
 -- appears on canvas in real-time with zero overhead per import.
-
-local _frame_dirty = false
-local _refresh_timer = nil
 
 function PT.mark_frame_dirty()
   _frame_dirty = true

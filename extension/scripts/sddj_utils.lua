@@ -113,6 +113,9 @@ PT.SLIDER_LABELS = {
   qr_cfg                = { "CFG (%.1f)",        10.0 },
   anim_guidance_start   = { "Guide Start (%.2f)", 100.0 },
   anim_guidance_end     = { "Guide End (%.2f)",  100.0 },
+  gen_guidance_start    = { "CN Start (%.0f%%)",  1.0 },
+  gen_guidance_end      = { "CN End (%.0f%%)",    1.0 },
+  guidance_rescale      = { "Rescale (%.2f)",    100.0 },
   -- Integer sliders
   steps                 = { "Steps (%d)" },
   clip_skip             = { "CLIP Skip (%d)" },
@@ -153,8 +156,9 @@ end
 -- where pct = slider_value / 100.0  (0→1 range)
 
 PT.PARAM_DEFS = {
-  denoise_strength  = { 0.0,   1.0   },   -- 0..1
-  cfg_scale         = { 0.0,  30.0   },   -- 0..30
+  -- Aligned with server modulation_engine.py TARGET_RANGES (server clamps to these)
+  denoise_strength  = { 0.20,  0.95  },   -- server clamps to [0.20, 0.95]
+  cfg_scale         = { 1.0,  30.0   },   -- server clamps to [1.0, 30.0]
   noise_amplitude   = { 0.0,   1.0   },   -- 0..1
   controlnet_scale  = { 0.0,   2.0   },   -- 0..2
   seed_offset       = { 0,  1000     },   -- 0..1000 (integer)

@@ -4,7 +4,7 @@ Pinnacle-quality DSP pipeline:
   - 44100 Hz sample rate (full audible spectrum up to 22.05 kHz)
   - 256 hop length (~172 Hz feature rate)
   - 4096 n_fft (93 ms analysis window — identical to 2048@22050)
-  - 256 mel bands for precise frequency segmentation
+  - 128 mel bands for precise frequency segmentation (configurable via SDDJ_AUDIO_N_MELS)
   - ITU-R BS.1770 K-weighting pre-filter for perceptual loudness
   - 9-band frequency segmentation with backward-compatible aliases
   - SuperFlux onset detection (vibrato suppression)

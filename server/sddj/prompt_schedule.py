@@ -340,7 +340,7 @@ class PromptSchedule:
             prompt_b=prompt_active,
             blend_weight=blend_weight,
             negative_prompt=effective_neg,
-            negative_prompt_b=neg_active if neg_outgoing else "",
+            negative_prompt_b=neg_active if (neg_outgoing and neg_active != neg_outgoing) else "",
             weight=weight,
             denoise_strength=denoise,
             cfg_scale=cfg,

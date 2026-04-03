@@ -1,12 +1,6 @@
-# Technical Reference
-
-Architecture, WebSocket API, and environment variables.
-
----
+# SDDj Technical Reference
 
 ## Architecture
-
-### System Design
 
 ```mermaid
 graph TD
@@ -35,68 +29,12 @@ graph TD
     end
 ```
 
-### Extension Layer (Lua)
+**Extension Layer**: Lua modules handle dialog construction (Aseprite Dialog API), settings persistence, layer/frame extraction to Base64 PNG, and pixel injection into the active Cel.
 
-Light-duty UI responsibilities: dialog construction (Aseprite Dialog API), settings persistence, layer/frame extraction to Base64 PNG, and pixel injection into the active Cel.
+**Server Layer**: `asyncio`/FastAPI WebSocket router + PyTorch inference. Blocking diffusion calls offloaded to `asyncio.to_thread`; system-wide GPU lock serializes VRAM access.
 
-| Module | Role |
-|--------|------|
-| `sddj.lua` | Extension entry point — registers Aseprite script command |
-| `sddj_dialog.lua` | 4-tab UI construction (Generate, Post-Process, Animation, Audio) |
-| `sddj_state.lua` | Centralized memory state + `settings.json` sync |
-| `sddj_ws.lua` | Non-blocking WebSocket client (Aseprite internal WS) |
-| `sddj_handler.lua` | Server response routing (generate, animation, audio) |
-| `sddj_request.lua` | Request payload construction |
-| `sddj_import.lua` | Image decode + Aseprite canvas injection |
-| `sddj_output.lua` | Frame output (layer/sequence/file) |
-| `sddj_capture.lua` | Canvas/layer/selection capture to Base64 PNG |
-| `sddj_utils.lua` | Shared utility functions |
-| `sddj_settings.lua` | Settings persistence and migration |
-| `sddj_base64.lua` | Pure Lua Base64 encoding/decoding |
-| `sddj_dsl_editor.lua` | Prompt Schedule DSL editor UI panel |
-| `sddj_dsl_parser.lua` | Client-side DSL parser (syntax validation + preview) |
-| `json.lua` | JSON encoding/decoding library |
-
-### Server Layer (Python)
-
-`asyncio`/FastAPI WebSocket layer + PyTorch inference. Blocking diffusion calls are offloaded to `asyncio.to_thread` with a system-wide GPU lock serializing VRAM access.
-
-**Diffusion pipeline optimizations:**
-
-| Optimization | Mechanism |
-|-------------|-----------|
-| UNet compilation | `torch.compile` (Triton codegen) |
-| Feature caching | DeepCache — reuses high-frequency UNet features across steps |
-| Frequency enhancement | FreeU v2 — manipulates skip connections for structural fidelity |
-| Distillation | Hyper-SD / AnimateDiff-Lightning LoRAs (20 → 4–8 steps) |
-| Attention | PyTorch ≥ 2.0 SDP → auto-dispatches FlashAttention2 or math fallback |
-
-**Attention note**: PyTorch ≥ 2.1 includes FA2 natively via SDP. No separate `flash-attn` package needed. xformers is superseded.
-
-### Audio DSP Pipeline
-
-```mermaid
-graph LR
-    A[WAV/MP3] -->|Demucs| B[Stem Separation]
-    B -->|Librosa STFT| C[Mel Spectrogram]
-    C -->|Banding| D[9-Band Energy]
-    C -->|SuperFlux| E[Transient Onsets]
-    
-    D --> F[Modulation Matrix]
-    E --> F
-    
-    F -->|EMA Smoothing| G[Parameter Delta]
-    G -->|Scale & Clamp| H[Diffusion Params]
-```
-
-**DSP configuration**: 44.1 kHz / 256 hop (~172 fps feature rate), 4096 n_fft, 256 mel bands, ITU-R BS.1770 K-weighting.
-
-### Concurrency Model
-
-1. **Cancellation**: global `asyncio.Event` (`stop_event`) → `callback_on_step_end` raises interrupt → GPU freed instantly
-2. **Watchdog**: ping/pong heartbeat; if client disconnects (Aseprite crash), `stop_event` signals and state resets within seconds
-
-### File Structure
+**Concurrency**: Global `asyncio.Event` (`stop_event`) enables instant cancellation via `callback_on_step_end`. Ping/pong watchdog detects client disconnects and resets state.
+## File Structure
 
 ```
 server/
@@ -112,6 +50,7 @@ server/
 │   │   ├── helpers.py           — Shared helpers (motion, noise, temporal coherence)
 │   │   └── compile_utils.py     — torch.compile wrapper + cache management
 │   ├── pipeline_factory.py      — Dynamic model routing, scheduler swaps, LoRA hotswap
+│   ├── scheduler_factory.py     — Scheduler registry and instantiation
 │   ├── animatediff_manager.py   — AnimateDiff model loading, motion adapter, Lightning config
 │   ├── audio_analyzer.py        — DSP feature extraction (librosa + K-weighting)
 │   ├── audio_cache.py           — Analysis result caching with TTL + config-aware keys
@@ -125,6 +64,7 @@ server/
 │   ├── expression_presets.py    — Mathematical expression presets for modulation
 │   ├── postprocess.py           — 6-stage pixel art rendering pipeline
 │   ├── image_codec.py           — Image encode/decode, motion warp, color matching
+│   ├── oklab.py                 — OKLAB ↔ sRGB conversion (Numba-accelerated)
 │   ├── lora_fuser.py            — LoRA loading, fusing, hotswap logic
 │   ├── lora_manager.py          — LoRA directory scanning
 │   ├── ti_manager.py            — Textual Inversion embedding loader
@@ -139,293 +79,149 @@ server/
 │   ├── resource_manager.py      — GPU cleanup + garbage collection
 │   └── validation.py            — Shared input validators
 ├── prompt_schedules/            — User-saved prompt schedule presets (JSON)
-├── tests/                       — pytest test suite (27 test modules)
+├── tests/                       — pytest test suite (28 test modules)
 models/                          — Local weight storage (no runtime downloads)
 scripts/                         — Utility scripts (download_models, build_extension, integration tests)
 extension/
-└── scripts/                     — 15 Lua modules (see Extension Layer table)
+└── scripts/                     — 15 Lua modules: sddj.lua (entry), sddj_dialog.lua (UI),
+                                   sddj_state.lua, sddj_ws.lua, sddj_handler.lua,
+                                   sddj_request.lua, sddj_import.lua, sddj_output.lua,
+                                   sddj_capture.lua, sddj_utils.lua, sddj_settings.lua,
+                                   sddj_base64.lua, sddj_dsl_editor.lua, sddj_dsl_parser.lua,
+                                   json.lua
 ```
+## WebSocket Protocol
 
----
-
-## WebSocket API
-
-### Connection
-
-Connect to `ws://{SDDJ_HOST}:{SDDJ_PORT}/ws` (default: `ws://127.0.0.1:9876/ws`).
-All messages are JSON. Maximum 5 concurrent connections.
+Connect to `ws://{SDDJ_HOST}:{SDDJ_PORT}/ws` (default `ws://127.0.0.1:9876/ws`). All messages JSON. Max 5 concurrent connections. HTTP: `GET /health` returns readiness + VRAM + loaded models.
 
 ### Actions
 
 | Action | Description |
 |--------|-------------|
-| `ping` | Health check → `pong` |
-| `cancel` | Cancel in-progress generation (ACK + GPU cleanup) |
+| `ping` | Health check (returns `pong`) |
+| `cancel` | Cancel in-progress generation |
 | `generate` | Single-frame generation |
 | `generate_animation` | Multi-frame animation |
 | `generate_prompt` | Random prompt from templates |
 | `analyze_audio` | Audio feature extraction |
 | `generate_audio_reactive` | Audio-reactive animation |
-| `export_mp4` | Frames + audio → MP4 (requires ffmpeg) |
-| `cleanup` | Free GPU VRAM + garbage collection |
+| `export_mp4` | Frames + audio to MP4 |
+| `cleanup` | Free GPU VRAM + GC |
 | `shutdown` | Graceful server shutdown |
-| `list_loras` / `list_palettes` / `list_controlnets` / `list_embeddings` | List available resources |
-| `list_presets` / `get_preset` / `save_preset` / `delete_preset` | Preset management |
-| `save_palette` / `delete_palette` | Palette management |
-| `check_stems` | Demucs availability |
+| `validate_dsl` | Validate DSL text |
+| `randomize_schedule` | Generate random prompt schedule |
+| `list_loras` / `list_palettes` / `list_controlnets` / `list_embeddings` | Resource listing |
+| `list_presets` / `get_preset` / `save_preset` / `delete_preset` | Preset CRUD |
+| `save_palette` / `delete_palette` | Palette CRUD |
 | `list_modulation_presets` / `get_modulation_preset` | Modulation preset lookup |
 | `list_expression_presets` / `get_expression_preset` | Expression preset lookup |
 | `list_choreography_presets` / `get_choreography_preset` | Camera choreography lookup |
-| `list_prompt_schedules` / `get_prompt_schedule` | Prompt schedule preset lookup |
-| `save_prompt_schedule` / `delete_prompt_schedule` | Prompt schedule preset management |
-| `validate_dsl` | Validate DSL text → `validate_dsl_result` |
-| `randomize_schedule` | Generate random prompt schedule → `randomized_schedule` |
+| `list_prompt_schedules` / `get_prompt_schedule` / `save_prompt_schedule` / `delete_prompt_schedule` | Prompt schedule CRUD |
+| `check_stems` | Demucs availability |
+### GenerateRequest
 
-### Generate Request
+| Field | Type | Default | Range/Values |
+|-------|------|---------|--------------|
+| `action` | string | — | `generate` |
+| `prompt` | string | `""` | — |
+| `negative_prompt` | string | (built-in) | — |
+| `mode` | enum | `txt2img` | `txt2img`, `img2img`, `inpaint`, `controlnet_openpose`, `controlnet_canny`, `controlnet_scribble`, `controlnet_lineart`, `controlnet_qrcode` |
+| `width` | int | `512` | 64--2048 (x8) |
+| `height` | int | `512` | 64--2048 (x8) |
+| `seed` | int | `-1` | -1 = random |
+| `steps` | int | `8` | 1--100 |
+| `cfg_scale` | float | `5.0` | 0.0--30.0 |
+| `denoise_strength` | float | `1.0` | 0.0--1.0 |
+| `clip_skip` | int | `2` | 1--12 |
+| `guidance_rescale` | float | `0.0` | 0.0--1.0 |
+| `pag_scale` | float | `0.0` | 0.0--10.0 (0=disabled) |
+| `scheduler` | string? | `null` | Server default |
+| `lora` | `{name, weight}` | `null` | weight: -2.0--2.0 |
+| `lora2` | `{name, weight}` | `null` | Second LoRA slot |
+| `negative_ti` | `[{name, weight}]` | `null` | TI embeddings |
+| `source_image` | b64 PNG | `null` | Required for img2img/inpaint |
+| `mask_image` | b64 PNG | `null` | Required for inpaint (white=repaint) |
+| `control_image` | b64 PNG | `null` | Required for controlnet_* modes |
+| `ip_adapter_image` | b64 PNG | `null` | Reference image |
+| `ip_adapter_scale` | float | `0.0` | 0.0--2.0 (0=disabled) |
+| `ip_adapter_mode` | string? | `null` | `full`, `style`, `composition` |
+| `controlnet_conditioning_scale` | float | `1.5` | 0.0--3.0 |
+| `control_guidance_start` | float | `0.0` | 0.0--1.0 |
+| `control_guidance_end` | float | `1.0` | 0.0--1.0 |
+| `post_process` | object | (defaults) | See PostProcessSpec below |
+| `prompt_schedule` | object? | `null` | See PromptScheduleSpec below |
+**PostProcessSpec**:
 
-```json
-{
-  "action": "generate",
-  "prompt": "pixel art character",
-  "negative_prompt": "blurry, photorealistic",
-  "mode": "txt2img | img2img | inpaint | controlnet_*",
-  "width": 512,
-  "height": 512,
-  "seed": -1,
-  "steps": 8,
-  "cfg_scale": 5.0,
-  "denoise_strength": 1.0,
-  "clip_skip": 2,
-  "lora": { "name": "pixelart_redmond", "weight": 1.0 },
-  "negative_ti": [{ "name": "EasyNegative", "weight": 1.0 }],
-  "post_process": {
-    "pixelate": { "enabled": true, "target_size": 128, "method": "box" },
-    "quantize_method": "octree_lab",
-    "quantize_colors": 32,
-    "dither": "floyd_steinberg",
-    "palette": { "mode": "auto" },
-    "remove_bg": false
-  }
-}
-```
+| Field | Type | Default | Range/Values |
+|-------|------|---------|--------------|
+| `pixelate.enabled` | bool | `false` | — |
+| `pixelate.target_size` | int | `128` | 8--512 |
+| `pixelate.method` | enum | `nearest` | `nearest`, `box`, `pixeloe` |
+| `quantize_enabled` | bool | `false` | — |
+| `quantize_method` | enum | `kmeans` | `kmeans`, `octree`, `median_cut`, `octree_lab` |
+| `quantize_colors` | int | `32` | 2--256 |
+| `dither` | enum | `none` | `none`, `floyd_steinberg`, `bayer_2x2`, `bayer_4x4`, `bayer_8x8` |
+| `palette.mode` | enum | `auto` | `auto`, `custom`, `preset` |
+| `remove_bg` | bool | `false` | — |
+| `upscale_enabled` | bool | `false` | — |
+| `upscale_factor` | int | `4` | 2--4 |
+### AnimationRequest
+Inherits all GenerateRequest fields (except `denoise_strength` default is `0.30`), plus:
 
-#### Prompt Schedule (Optional)
+| Field | Type | Default | Range/Values |
+|-------|------|---------|--------------|
+| `action` | string | — | `generate_animation` |
+| `method` | enum | `chain` | `chain`, `animatediff`, `animatediff_audio` |
+| `frame_count` | int | `8` | 2--10000 |
+| `frame_duration_ms` | int | `100` | 30--2000 |
+| `seed_strategy` | enum | `increment` | `fixed`, `increment`, `random` |
+| `tag_name` | string? | `null` | Max 64 chars |
+| `enable_freeinit` | bool | `false` | AnimateDiff only |
+| `freeinit_iterations` | int | `2` | 1--3 |
+| `interpolation_factor` | int? | `null` | 2--4 (null=disabled) |
+### AudioReactiveRequest
+Inherits all GenerateRequest fields (denoise default `0.30`), plus:
 
-Add `prompt_schedule` to any generate, animation, or audio-reactive request for frame-based prompt evolution:
+| Field | Type | Default | Range/Values |
+|-------|------|---------|--------------|
+| `action` | string | — | `generate_audio_reactive` |
+| `audio_path` | string | `""` | Filesystem path |
+| `fps` | float | `24.0` | 1.0--120.0 |
+| `enable_stems` | bool | `false` | Demucs separation |
+| `max_frames` | int? | `null` | 1--10800 |
+| `method` | enum | `chain` | `chain`, `animatediff_audio` |
+| `modulation_slots` | array | `[]` | See slot spec below |
+| `expressions` | `{target: expr}` | `null` | Math expressions |
+| `modulation_preset` | string? | `null` | Named preset |
+| `randomness` | int | `0` | 0--20 |
 
-```json
-{
-  "prompt_schedule": {
-    "keyframes": [
-      { "frame": 0, "prompt": "pixel art forest, morning light", "negative_prompt": "blurry", "transition": "hard_cut" },
-      { "frame": 5, "prompt": "pixel art ocean, sunset", "transition": "blend", "transition_frames": 3 }
-    ],
-    "default_prompt": "pixel art landscape"
-  }
-}
-```
+**Modulation slot spec**: `{source, target, min_val, max_val, attack(1-30), release(1-60), enabled, invert}`
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `keyframes[].frame` | int ≥ 0 | 0 | Frame index where this prompt activates |
-| `keyframes[].prompt` | string | `""` | Positive prompt for this keyframe |
-| `keyframes[].negative_prompt` | string | `""` | Per-keyframe negative (overrides global) |
-| `keyframes[].weight` | float 0.0–5.0 | 1.0 | Keyframe blend weight (start) |
-| `keyframes[].weight_end` | float 0.0–5.0 | null | Weight ramp endpoint (null = constant) |
-| `keyframes[].transition` | string | `hard_cut` | Transition type (see table below) |
-| `keyframes[].transition_frames` | int 0–120 | 0 | Transition window length |
-| `keyframes[].denoise_strength` | float 0.0–1.0 | null | Per-keyframe denoise override (null = inherit base) |
-| `keyframes[].cfg_scale` | float 1.0–30.0 | null | Per-keyframe CFG override (null = inherit base) |
-| `keyframes[].steps` | int 1–150 | null | Per-keyframe steps override (null = inherit base) |
-| `default_prompt` | string | `""` | Fallback for frames before first keyframe |
-| `auto_fill` | boolean | false | Auto-fill empty keyframe prompts via PromptGenerator |
+**Priority**: `expressions` > `modulation_preset` > `modulation_slots`.
+### QRCodeRequest
+No separate schema. Use `GenerateRequest` with `mode: "controlnet_qrcode"` and `control_image` (b64 PNG). Override `controlnet_conditioning_scale`, `control_guidance_start/end` as needed.
+### PromptScheduleSpec
+Attach `prompt_schedule` to any generate/animation/audio-reactive request.
 
-**Transition types:**
-
-| Transition | Description |
-|------------|-------------|
-| `hard_cut` | Instant prompt switch at keyframe boundary |
-| `blend` | Alternates outgoing/incoming on even/odd frames (img2img visual crossfade) |
-| `linear_blend` | Linear interpolation between embedding weights over the transition window |
-| `ease_in` | Slow start, accelerating transition |
-| `ease_out` | Fast start, decelerating transition |
-| `ease_in_out` | Smooth sigmoid-style transition (slow→fast→slow) |
-| `cubic` | Cubic Bézier interpolation for natural motion |
-| `slerp` | Spherical linear interpolation between prompt embeddings |
-
-**Precedence**: `prompt_schedule` > static `prompt`.
-
-For **inpaint**, add `source_image` (base64 PNG) and `mask_image` (base64 PNG, white=repaint).
-
-### Generate Prompt Request
-
-```json
-{
-  "action": "generate_prompt",
-  "locked_fields": { "subject": "a pixel cat" },
-  "randomness": 10,
-  "subject_type": "animal",
-  "prompt_mode": "standard",
-  "exclude_terms": ["dark"]
-}
-```
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `locked_fields` | object | `{}` | Categories to keep fixed |
-| `prompt_template` | string | null | Custom template with `{category}` placeholders |
-| `randomness` | int 0–20 | 0 | Diversity: 0=standard, 5=subtle, 10=moderate, 15=wild, 20=chaos |
-| `subject_type` | string | null | Hint: humanoid/animal/landscape/object/concept |
-| `prompt_mode` | string | null | standard/art_focus/character/chaos |
-| `exclude_terms` | string[] | null | Terms to exclude |
-
-### Animation Request
-
-```json
-{
-  "action": "generate_animation",
-  "method": "chain | animatediff | animatediff_audio",
-  "prompt": "pixel art walk cycle",
-  "mode": "txt2img",
-  "width": 512, "height": 512,
-  "seed": -1, "steps": 8, "cfg_scale": 5.0,
-  "denoise_strength": 0.30,
-  "frame_count": 8,
-  "frame_duration_ms": 100,
-  "seed_strategy": "increment",
-  "tag_name": "walk",
-  "enable_freeinit": false,
-  "freeinit_iterations": 2,
-  "post_process": { "..." }
-}
-```
-
-| Field | Values | Default |
-|-------|--------|---------|
-| `method` | `chain`, `animatediff`, `animatediff_audio` | `chain` |
-| `frame_count` | 2–256 | 8 |
-| `frame_duration_ms` | 30–2000 | 100 |
-| `seed_strategy` | `fixed`, `increment`, `random` | `increment` |
-| `enable_freeinit` | boolean | false |
-| `freeinit_iterations` | 1–3 | 2 |
-
-> [!NOTE]
-> `animatediff` and `animatediff_audio` are functionally identical aliases in the backend.
-
-### Audio-Reactive Request
-
-```json
-{
-  "action": "analyze_audio",
-  "audio_path": "C:/path/to/audio.wav",
-  "fps": 24.0,
-  "enable_stems": false
-}
-```
-
-```json
-{
-  "action": "generate_audio_reactive",
-  "audio_path": "C:/path/to/audio.wav",
-  "fps": 24.0,
-  "enable_stems": false,
-  "max_frames": null,
-  "method": "chain",
-  "enable_freeinit": false,
-  "modulation_slots": [
-    {
-      "source": "global_rms",
-      "target": "denoise_strength",
-      "min_val": 0.2, "max_val": 0.7,
-      "attack": 2, "release": 8,
-      "enabled": true, "invert": false
-    }
-  ],
-  "expressions": null,
-  "modulation_preset": null,
-  "randomness": 0,
-  "prompt": "fantasy landscape",
-  "mode": "txt2img",
-  "width": 512, "height": 512,
-  "steps": 8, "cfg_scale": 5.0,
-  "denoise_strength": 0.30,
-  "post_process": { "..." }
-}
-```
-
-> [!NOTE]
-> Audio timing is driven by `fps`. `frame_duration_ms` is ignored for audio-reactive requests.
-
-> [!NOTE]
-> **Modulation priority** (highest overrides lowest): `expressions` > `modulation_preset` > `modulation_slots`.
-
-For the complete list of modulation **sources** and **targets**, see [Audio — Modulation Matrix](AUDIO.md#modulation-matrix).
-
-### DSL Validation
-
-```json
-{
-  "action": "validate_dsl",
-  "dsl_text": "[0]\n1girl, smiling\n\n[50%]\nblend: 6\n1girl, crying",
-  "total_frames": 120
-}
-```
-
-**Response** (`validate_dsl_result`):
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `valid` | boolean | Whether the DSL parsed without errors |
-| `keyframe_count` | int | Number of keyframes parsed |
-| `error_count` | int | Number of errors |
-| `warning_count` | int | Number of warnings |
-| `errors` | array | `[{line, code, message}]` |
-| `warnings` | array | `[{line, code, message}]` |
-| `has_auto` | boolean | Whether auto-fill placeholders were detected |
-
-### Prompt Schedule Preset Management
-
-```json
-{ "action": "list_prompt_schedules" }
-{ "action": "get_prompt_schedule", "prompt_schedule_name": "evolving_3act" }
-{ "action": "save_prompt_schedule", "prompt_schedule_name": "my_sched", "prompt_schedule_data": { "keyframes": [...] } }
-{ "action": "delete_prompt_schedule", "prompt_schedule_name": "my_sched" }
-```
-
-Built-in presets (structural, no hardcoded prompts): `evolving_3act`, `style_morph_4`, `beat_alternating`, `slow_drift`, `rapid_cuts_6`. User presets saved as JSON (max 50).
-
-### Palette Management
-
-```json
-{ "action": "save_palette", "palette_save_name": "my_palette", "palette_save_colors": ["#FF0000", "#00FF00"] }
-{ "action": "delete_palette", "palette_save_name": "my_palette" }
-```
-
-### Export MP4 Request
-
-```json
-{
-  "action": "export_mp4",
-  "output_dir": "C:/path/to/frames/",
-  "audio_path": "C:/path/to/audio.wav",
-  "fps": 24.0,
-  "scale_factor": 4,
-  "quality": "high"
-}
-```
-
-| Field | Values | Default |
-|-------|--------|---------|
-| `output_dir` | Path to frame_*.png directory | required |
-| `audio_path` | Path to audio file | null |
-| `fps` | 1.0–120.0 | 24.0 |
-| `scale_factor` | 1–8 | 4 |
-| `quality` | `web`, `high`, `archive`, `raw` | `high` |
-
+| Field | Type | Default | Range |
+|-------|------|---------|-------|
+| `keyframes[].frame` | int | `0` | >= 0 |
+| `keyframes[].prompt` | string | `""` | — |
+| `keyframes[].negative_prompt` | string | `""` | Override |
+| `keyframes[].weight` | float | `1.0` | 0.1--5.0 |
+| `keyframes[].weight_end` | float? | `null` | 0.1--5.0 |
+| `keyframes[].transition` | enum | `hard_cut` | `hard_cut`, `blend`, `linear_blend`, `ease_in`, `ease_out`, `ease_in_out`, `cubic`, `slerp` |
+| `keyframes[].transition_frames` | int | `0` | 0--120 |
+| `keyframes[].denoise_strength` | float? | `null` | 0.0--1.0 |
+| `keyframes[].cfg_scale` | float? | `null` | 1.0--30.0 |
+| `keyframes[].steps` | int? | `null` | 1--150 |
+| `default_prompt` | string | `""` | Fallback |
+| `auto_fill` | bool | `false` | Auto-fill via PromptGenerator |
 ### Response Types
 
 | Type | Key Fields |
 |------|------------|
+| `pong` | — |
 | `progress` | `step`, `total`, `frame_index`, `total_frames` |
 | `result` | `image` (b64 PNG), `seed`, `time_ms`, `width`, `height` |
 | `animation_frame` | `frame_index`, `total_frames`, `image`, `seed`, `time_ms`, `encoding` |
@@ -435,27 +231,23 @@ Built-in presets (structural, no hardcoded prompts): `evolving_3act`, `style_mor
 | `audio_reactive_complete` | `total_frames`, `total_time_ms` |
 | `error` | `code`, `message` |
 | `list` | `list_type`, `items` |
-| `pong` | — |
 | `prompt_result` | `prompt`, `negative_prompt`, `components` |
 | `preset` / `preset_saved` / `preset_deleted` | `name`, `data` |
 | `palette_saved` / `palette_deleted` | `name` |
 | `cleanup_done` | `message`, `freed_mb` |
 | `stems_available` | `available`, `message` |
-| `modulation_presets` | `presets` (names list) |
-| `modulation_preset_detail` | `name`, `slots` (with `invert`) |
-| `expression_presets_list` | `presets` (category → [{name, targets, description}]) |
+| `modulation_presets` | `presets` |
+| `modulation_preset_detail` | `name`, `slots` |
+| `expression_presets_list` | `presets` (category-keyed) |
 | `expression_preset_detail` | `name`, `targets`, `description`, `category` |
-| `choreography_presets_list` | `presets` ([{name, description, slot_count, expression_targets}]) |
+| `choreography_presets_list` | `presets` |
 | `choreography_preset_detail` | `name`, `description`, `slots`, `expressions` |
 | `validate_dsl_result` | `valid`, `keyframe_count`, `error_count`, `warning_count`, `errors`, `warnings`, `has_auto` |
-| `prompt_schedule_list` | `schedules` (names list) |
-| `prompt_schedule_detail` | `name`, `schedule_data` |
-| `prompt_schedule_saved` | `name` |
-| `prompt_schedule_deleted` | `name` |
+| `prompt_schedule_list` / `prompt_schedule_detail` / `prompt_schedule_saved` / `prompt_schedule_deleted` | `name`, `schedule_data` |
+| `randomized_schedule` | schedule data |
 | `export_mp4_complete` | `path`, `size_mb`, `duration_s` |
 | `export_mp4_error` | `message` |
 | `shutdown_ack` | `message` |
-
 ### Error Codes
 
 | Code | Meaning |
@@ -467,44 +259,23 @@ Built-in presets (structural, no hardcoded prompts): `evolving_3act`, `style_mor
 | `INVALID_REQUEST` | Malformed parameters |
 | `MAX_CONNECTIONS` | Connection limit (5) reached |
 | `UNKNOWN_ACTION` | Unrecognized action |
-| `GPU_BUSY` | GPU occupied by another operation |
+| `GPU_BUSY` | GPU occupied |
+### Binary Frame Protocol
+Animation frames may be sent as WebSocket binary messages instead of JSON+Base64. Wire format:
 
-### Input Validation
+```
+[4 bytes LE uint32: metadata_length][metadata_length bytes: JSON][remaining bytes: raw RGBA pixels]
+```
 
-| Field | Constraint |
-|-------|-----------|
-| `width` / `height` | 64–2048 (rounded to ×8) |
-| `steps` | 1–100 |
-| `cfg_scale` | 0.0–30.0 |
-| `clip_skip` | 1–12 |
-| `denoise_strength` | 0.0–1.0 |
-| `lora.weight` | -2.0–2.0 |
-| `target_size` | 8–512 |
-| `colors` | 2–256 |
-
-### HTTP Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/health` | Server readiness + VRAM info + loaded models |
-
----
-
-## Configuration
-
-All environment variables are prefixed with `SDDJ_`. **Priority**: system env > `server/.env` > defaults.
-
-### Network
+Metadata JSON contains `frame_index`, `total_frames`, `seed`, `time_ms`, `width`, `height`. Raw payload is `width * height * 4` bytes (RGBA).
+## Environment Variables
+All prefixed `SDDJ_`. Priority: system env > `server/.env` > defaults.
+### Model & Paths
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SDDJ_HOST` | `127.0.0.1` | Bind address |
 | `SDDJ_PORT` | `9876` | Server port |
-
-### Paths
-
-| Variable | Default | Description |
-|----------|---------|-------------|
 | `SDDJ_MODELS_DIR` | `server/models` | Root models directory |
 | `SDDJ_CHECKPOINTS_DIR` | `server/models/checkpoints` | SD checkpoint cache |
 | `SDDJ_LORAS_DIR` | `server/models/loras` | LoRA files |
@@ -513,18 +284,12 @@ All environment variables are prefixed with `SDDJ_`. **Priority**: system env > 
 | `SDDJ_PRESETS_DIR` | `server/presets` | Generation presets |
 | `SDDJ_PROMPT_SCHEDULES_DIR` | `server/prompt_schedules` | Prompt schedule presets |
 | `SDDJ_PROMPTS_DATA_DIR` | `server/data/prompts` | Auto-prompt data |
-
-### Model
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SDDJ_DEFAULT_CHECKPOINT` | `models/checkpoints/liberteRedmond_v10.safetensors` | SD1.5 checkpoint (HF repo ID, local dir, or .safetensors path) |
+| `SDDJ_DEFAULT_CHECKPOINT` | `models/checkpoints/liberteRedmond_v10.safetensors` | SD1.5 checkpoint |
 | `SDDJ_HYPER_SD_REPO` | `ByteDance/Hyper-SD` | Hyper-SD repo |
 | `SDDJ_HYPER_SD_LORA_FILE` | `Hyper-SD15-8steps-CFG-lora.safetensors` | Hyper-SD LoRA file |
 | `SDDJ_HYPER_SD_FUSE_SCALE` | `0.8` | Hyper-SD fusion scale |
 | `SDDJ_DEFAULT_STYLE_LORA` | `auto` | Default style LoRA (`auto`=first found, `""`=none) |
 | `SDDJ_DEFAULT_STYLE_LORA_WEIGHT` | `1.0` | Default LoRA fuse weight |
-
 ### Generation Defaults
 
 | Variable | Default | Description |
@@ -534,37 +299,43 @@ All environment variables are prefixed with `SDDJ_`. **Priority**: system env > 
 | `SDDJ_DEFAULT_WIDTH` | `512` | Output width |
 | `SDDJ_DEFAULT_HEIGHT` | `512` | Output height |
 | `SDDJ_DEFAULT_CLIP_SKIP` | `2` | CLIP skip layers |
-
 ### Performance
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SDDJ_ENABLE_TORCH_COMPILE` | `True` | UNet compilation (requires Triton + MSVC) |
-| `SDDJ_COMPILE_MODE` | `default` | `default` / `max-autotune` / `reduce-overhead` |
-| `SDDJ_COMPILE_DYNAMIC` | `False` | Dynamic shapes. `True` only when DeepCache disabled (incompatible) |
-| `SDDJ_ENABLE_TF32` | `True` | Ampere+ ~15–30% free speedup |
+| `SDDJ_COMPILE_MODE` | `max-autotune` | `default` / `max-autotune` / `max-autotune-no-cudagraphs` / `reduce-overhead` |
+| `SDDJ_AUTO_COMPILE_MODE` | `True` | Auto-select compile mode by GPU SM count |
+| `SDDJ_COMPILE_DYNAMIC` | `False` | Dynamic shapes (incompatible with DeepCache) |
+| `SDDJ_ENABLE_TF32` | `True` | Ampere+ ~15--30% free speedup |
 | `SDDJ_ENABLE_DEEPCACHE` | `True` | DeepCache acceleration |
-| `SDDJ_ENABLE_FREEU` | `True` | FreeU v2 quality boost |
-| `SDDJ_ENABLE_ATTENTION_SLICING` | `True` | Attention slicing (reduces VRAM peak by splitting attention computation) |
-| `SDDJ_ENABLE_VAE_TILING` | `True` | VAE tiling for large images |
-| `SDDJ_ENABLE_WARMUP` | `True` | Warmup generation at startup |
-| `SDDJ_ENABLE_LORA_HOTSWAP` | `True` | Avoids torch.compile recompilation on LoRA switch |
-| `SDDJ_MAX_LORA_RANK` | `128` | Must be ≥ rank of all LoRA adapters used |
-| `SDDJ_ENABLE_CPU_OFFLOAD` | `False` | Model offloading. Mutually exclusive with DeepCache + torch.compile |
-| `SDDJ_VRAM_MIN_FREE_MB` | `512` | VRAM budget guard for lazy-loads (MB) |
 | `SDDJ_DEEPCACHE_INTERVAL` | `3` | DeepCache skip interval |
 | `SDDJ_DEEPCACHE_BRANCH` | `0` | DeepCache branch ID |
+| `SDDJ_ENABLE_FREEU` | `True` | FreeU v2 quality boost |
 | `SDDJ_FREEU_S1` / `S2` | `0.9` / `0.2` | FreeU v2 skip scales |
-| `SDDJ_FREEU_B1` / `B2` | `1.5` / `1.6` | FreeU v2 backbone scales |
-| `SDDJ_REMBG_MODEL` | `u2net` | Background removal model |
+| `SDDJ_FREEU_B1` / `B2` | `1.2` / `1.4` | FreeU v2 backbone scales |
+| `SDDJ_ENABLE_ATTENTION_SLICING` | `True` | Split attention to reduce VRAM peak |
+| `SDDJ_ENABLE_VAE_TILING` | `True` | VAE tiling for large images |
+| `SDDJ_ENABLE_WARMUP` | `True` | Warmup generation at startup |
+| `SDDJ_ENABLE_LORA_HOTSWAP` | `True` | Avoid recompilation on LoRA switch |
+| `SDDJ_MAX_LORA_RANK` | `128` | Must be >= rank of all LoRA adapters |
+| `SDDJ_ENABLE_CPU_OFFLOAD` | `False` | Model offloading (exclusive with DeepCache + compile) |
+| `SDDJ_VRAM_MIN_FREE_MB` | `512` | VRAM budget guard (MB) |
+| `SDDJ_ENABLE_UNET_QUANTIZATION` | `False` | torchao UNet quantization |
+| `SDDJ_UNET_QUANTIZATION_DTYPE` | `auto` | `auto` / `int8dq` / `fp8dq` / `int8wo` / `fp8wo` |
+| `SDDJ_ATTENTION_BACKEND` | `auto` | `auto` / `sdp` / `sage` / `xformers` |
+| `SDDJ_ENABLE_TOME` | `False` | Token merging |
+| `SDDJ_TOME_RATIO` | `0.3` | Token merge ratio (0.0--0.75) |
+| `SDDJ_ENABLE_TAESD_PREVIEW` | `False` | TAESD fast preview decoding |
+| `SDDJ_ENABLE_FRAME_COMPRESSION` | `False` | LZ4 binary frame compression |
+| `SDDJ_ENABLE_PAG` | `False` | Perturbed Attention Guidance |
+| `SDDJ_DEFAULT_PAG_SCALE` | `3.0` | PAG scale when enabled |
+| `SDDJ_ENABLE_IP_ADAPTER` | `False` | IP-Adapter lazy-loading (+1--2GB VRAM) |
+| `SDDJ_ENABLE_UPSCALER` | `False` | Real-ESRGAN upscaler lazy-loading |
+| `SDDJ_ENABLE_FRAME_INTERPOLATION` | `False` | RIFE frame interpolation |
+| `SDDJ_REMBG_MODEL` | `birefnet-general` | Background removal model |
 | `SDDJ_REMBG_ON_CPU` | `True` | Run rembg on CPU |
-
-### Timeouts
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SDDJ_GENERATION_TIMEOUT` | `600.0` | Max seconds per generation |
-
+| `SDDJ_QUEUE_WAIT_TIMEOUT` | `120.0` | Max GPU lock wait (seconds) |
 ### Animation
 
 | Variable | Default | Description |
@@ -573,68 +344,52 @@ All environment variables are prefixed with `SDDJ_`. **Priority**: system env > 
 | `SDDJ_ANIMATEDIFF_MODEL` | `ByteDance/AnimateDiff-Lightning` | Motion adapter |
 | `SDDJ_ENABLE_FREEINIT` | `False` | FreeInit for AnimateDiff |
 | `SDDJ_FREEINIT_ITERATIONS` | `2` | FreeInit iteration count |
-
-### FreeNoise (Long Sequences)
-
-Sliding window + noise rescheduling for temporal coherence on non-Lightning models.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SDDJ_ANIMATEDIFF_CONTEXT_LENGTH` | `16` | FreeNoise window size (8–32 frames) |
-| `SDDJ_ANIMATEDIFF_CONTEXT_STRIDE` | `4` | Window stride (1–16, lower = more overlap = better coherence, slower) |
-| `SDDJ_ANIMATEDIFF_SPLIT_INFERENCE` | `True` | Auto-enable SplitInference for long sequences |
-| `SDDJ_ANIMATEDIFF_SPATIAL_SPLIT_SIZE` | `256` | Spatial split tile size (64–512) |
-| `SDDJ_ANIMATEDIFF_TEMPORAL_SPLIT_SIZE` | `16` | Temporal split chunk size (4–32) |
-| `SDDJ_ANIMATEDIFF_MAX_FRAMES_LIGHTNING` | `32` | Hard cap for Lightning models (FreeNoise incompatible) |
-
-### AnimateDiff-Lightning
-
-Active when model is `ByteDance/AnimateDiff-Lightning`.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SDDJ_ANIMATEDIFF_LIGHTNING_STEPS` | `4` | Steps (1–8, aligned to distillation target) |
-| `SDDJ_ANIMATEDIFF_LIGHTNING_CFG` | `2.0` | CFG (1.0–5.0, preserves negative prompt) |
-| `SDDJ_ANIMATEDIFF_MOTION_LORA_STRENGTH` | `0.75` | Motion LoRA strength (0.0–1.0) |
+| `SDDJ_ANIMATEDIFF_LIGHTNING_STEPS` | `4` | Lightning steps (1--8) |
+| `SDDJ_ANIMATEDIFF_LIGHTNING_CFG` | `2.0` | Lightning CFG (1.0--5.0) |
+| `SDDJ_ANIMATEDIFF_MOTION_LORA_STRENGTH` | `0.75` | Motion LoRA strength (0.0--1.0) |
 | `SDDJ_ANIMATEDIFF_LIGHTNING_FREEU` | `True` | FreeU for Lightning pipelines |
-
-### ControlNet QR Code
+| `SDDJ_ANIMATEDIFF_CONTEXT_LENGTH` | `16` | FreeNoise window size (8--32) |
+| `SDDJ_ANIMATEDIFF_CONTEXT_STRIDE` | `4` | FreeNoise stride (1--16) |
+| `SDDJ_ANIMATEDIFF_SPLIT_INFERENCE` | `True` | Auto SplitInference for long sequences |
+| `SDDJ_ANIMATEDIFF_SPATIAL_SPLIT_SIZE` | `256` | Spatial split tile (64--512) |
+| `SDDJ_ANIMATEDIFF_TEMPORAL_SPLIT_SIZE` | `16` | Temporal split chunk (4--32) |
+| `SDDJ_ANIMATEDIFF_MAX_FRAMES_LIGHTNING` | `32` | Hard cap for Lightning models |
+| `SDDJ_QR_CONTROLNET_CONDITIONING_SCALE` | `1.5` | QR ControlNet strength (0.0--3.0) |
+| `SDDJ_QR_CONTROL_GUIDANCE_START` | `0.0` | QR guidance start (0.0--1.0) |
+| `SDDJ_QR_CONTROL_GUIDANCE_END` | `0.8` | QR guidance end (0.0--1.0) |
+| `SDDJ_QR_DEFAULT_STEPS` | `20` | QR mode default steps (4--50) |
+| `SDDJ_EQUIVDM_NOISE` | `True` | EquiVDM temporally coherent noise |
+| `SDDJ_EQUIVDM_RESIDUAL` | `0.08` | EquiVDM noise residual blend |
+| `SDDJ_DISTILLED_STEP_SCALE_CAP` | `2` | Max step multiplier for distilled models |
+| `SDDJ_COLOR_COHERENCE_STRENGTH` | `0.5` | LAB color matching (0=off, 0.3--0.7 rec) |
+| `SDDJ_AUTO_NOISE_COUPLING` | `True` | Auto noise-denoise coupling |
+| `SDDJ_OPTICAL_FLOW_BLEND` | `0.0` | Temporal blending (0=off, 0.1--0.3 rec) |
+### Audio DSP
+DSP defaults: 44.1 kHz / 256 hop (~172 fps feature rate), 4096 n_fft, 128 mel bands, ITU-R BS.1770 K-weighting.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SDDJ_QR_CONTROLNET_CONDITIONING_SCALE` | `1.5` | QR ControlNet conditioning strength (0.0–3.0) |
-| `SDDJ_QR_CONTROL_GUIDANCE_START` | `0.0` | Guidance start fraction (0.0–1.0) |
-| `SDDJ_QR_CONTROL_GUIDANCE_END` | `0.8` | Guidance end fraction (0.0–1.0) |
-| `SDDJ_QR_DEFAULT_STEPS` | `20` | Default steps for QR mode (4–50) |
-
-### Audio
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SDDJ_AUDIO_CACHE_DIR` | temp dir | Cache directory for analysis |
-| `SDDJ_AUDIO_MAX_FILE_SIZE_MB` | `500` | Max audio file size |
-| `SDDJ_AUDIO_MAX_FRAMES` | `10800` | Max frames per audio animation |
+| `SDDJ_AUDIO_SAMPLE_RATE` | `44100` | Analysis sample rate (22050--96000) |
+| `SDDJ_AUDIO_HOP_LENGTH` | `256` | STFT hop (64--1024) |
+| `SDDJ_AUDIO_N_FFT` | `4096` | FFT window (512--8192) |
+| `SDDJ_AUDIO_N_MELS` | `128` | Mel bands (64--512) |
+| `SDDJ_AUDIO_PERCEPTUAL_WEIGHTING` | `True` | ITU-R BS.1770 K-weighting |
+| `SDDJ_AUDIO_SMOOTHING_MODE` | `ema` | `ema` / `savgol` |
+| `SDDJ_AUDIO_BEAT_BACKEND` | `auto` | `auto` / `librosa` / `madmom` / `beatnet` / `allinone` |
+| `SDDJ_AUDIO_SUPERFLUX_LAG` | `2` | SuperFlux onset lag (1--5) |
+| `SDDJ_AUDIO_SUPERFLUX_MAX_SIZE` | `3` | SuperFlux max filter (1--7) |
 | `SDDJ_AUDIO_DEFAULT_ATTACK` | `2` | Default EMA attack frames |
 | `SDDJ_AUDIO_DEFAULT_RELEASE` | `8` | Default EMA release frames |
+| `SDDJ_AUDIO_MAX_FILE_SIZE_MB` | `500` | Max audio file size |
+| `SDDJ_AUDIO_MAX_FRAMES` | `10800` | Max frames per audio animation |
+| `SDDJ_AUDIO_CACHE_DIR` | (temp dir) | Cache directory for analysis |
+| `SDDJ_AUDIO_CACHE_TTL_HOURS` | `24` | Cache expiry (1--168h) |
 | `SDDJ_STEM_MODEL` | `htdemucs` | Demucs model |
+| `SDDJ_STEM_BACKEND` | `demucs` | `demucs` / `roformer` |
 | `SDDJ_STEM_DEVICE` | `cpu` | Stem separation device |
-| `SDDJ_AUDIO_SAMPLE_RATE` | `44100` | Analysis sample rate (22050–96000) |
-| `SDDJ_AUDIO_HOP_LENGTH` | `256` | STFT hop (64–1024). Lower = more precision |
-| `SDDJ_AUDIO_N_FFT` | `4096` | FFT window (512–8192) |
-| `SDDJ_AUDIO_N_MELS` | `256` | Mel bands (64–512) |
-| `SDDJ_AUDIO_PERCEPTUAL_WEIGHTING` | `True` | ITU-R BS.1770 K-weighting |
-| `SDDJ_AUDIO_SMOOTHING_MODE` | `ema` | `ema` or `savgol` |
-| `SDDJ_AUDIO_BEAT_BACKEND` | `auto` | `auto` / `librosa` / `madmom` |
-| `SDDJ_AUDIO_SUPERFLUX_LAG` | `2` | SuperFlux onset lag (1–5) |
-| `SDDJ_AUDIO_SUPERFLUX_MAX_SIZE` | `3` | SuperFlux max filter (1–7) |
-| `SDDJ_AUDIO_CACHE_TTL_HOURS` | `24` | Cache expiry (1–168h) |
-| `SDDJ_FFMPEG_PATH` | auto-detect | Path to ffmpeg binary |
-
-### Temporal Coherence
+| `SDDJ_FFMPEG_PATH` | (auto-detect) | Path to ffmpeg binary |
+### Timeouts
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SDDJ_DISTILLED_STEP_SCALE_CAP` | `2` | Max step multiplier for distilled models |
-| `SDDJ_COLOR_COHERENCE_STRENGTH` | `0.5` | LAB color matching (0=off, 0.3–0.7 recommended) |
-| `SDDJ_AUTO_NOISE_COUPLING` | `True` | Auto noise-denoise coupling (Deforum pattern) |
-| `SDDJ_OPTICAL_FLOW_BLEND` | `0.0` | Temporal blending (0=off, 0.1–0.3 recommended, +10–20ms/frame) |
+| `SDDJ_GENERATION_TIMEOUT` | `600.0` | Max seconds per generation |

@@ -43,9 +43,6 @@ def build_prompt_schedule(req) -> "PromptSchedule | None":
         else:
             kf_dicts = []
         if kf_dicts:
-            # Lua json.lua may encode arrays as objects with numeric keys
-            if isinstance(kf_dicts, dict):
-                kf_dicts = list(kf_dicts.values())
             default = ""
             if hasattr(schedule_spec, "default_prompt"):
                 default = schedule_spec.default_prompt
