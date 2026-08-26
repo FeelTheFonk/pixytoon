@@ -1,3 +1,5 @@
+
+
 # SDDj v0.9.98
 
 Stable Diffusion pixel art generation and animation directly inside Aseprite, 100% offline.
@@ -20,6 +22,7 @@ Stable Diffusion pixel art generation and animation directly inside Aseprite, 10
 
 - **GPU**: NVIDIA, 4 GB VRAM minimum (8 GB+ for AnimateDiff / ControlNet)
 - **CUDA**: 12.x
+- **Python**: 3.11–3.13
 - **Aseprite**: 1.3+
 - **Windows**: 10 / 11
 
